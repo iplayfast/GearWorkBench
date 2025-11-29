@@ -60,7 +60,6 @@ class SpurGearCreateObject():
         if not App.ActiveDocument:
             App.newDocument()
         doc = App.ActiveDocument
-        body = doc.addObject('PartDesign::Body', 'spur_gear')
         gear_obj = doc.addObject("Part::FeaturePython", "SpurGearParameters")
         spur_gear = SpurGear(gear_obj)
         doc.recompute()

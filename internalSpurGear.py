@@ -30,7 +30,7 @@ from PySide import QtCore
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, 'icons')
 global mainIcon
-mainIcon = os.path.join(smWB_icons_path, 'internalGear.svg')
+mainIcon = os.path.join(smWB_icons_path, 'internalSpurGear.svg')
 
 # Debug: print icon path
 App.Console.PrintMessage(f"Internal Gear icon path: {mainIcon}\n")
@@ -45,14 +45,14 @@ def QT_TRANSLATE_NOOP(scope, text):
     return text
 
 
-class InternalGearCreateObject():
+class InternalSpurGearCreateObject():
     """Command to create a new internal gear object."""
 
     def GetResources(self):
         return {
             'Pixmap': mainIcon,
-            'MenuText': "&Create Internal Gear",
-            'ToolTip': "Create parametric involute internal (ring) gear"
+            'MenuText': "&Create Internal Spur Gear",
+            'ToolTip': "Create parametric involute internal (ring) spur gear"
         }
 
     def __init__(self):
@@ -63,9 +63,8 @@ class InternalGearCreateObject():
         if not App.ActiveDocument:
             App.newDocument()
         doc = App.ActiveDocument
-        body = doc.addObject('PartDesign::Body', 'internal_gear')
-        gear_obj = doc.addObject("Part::FeaturePython", "InternalGearParameters")
-        internal_gear = InternalGear(gear_obj)
+        gear_obj = doc.addObject("Part::FeaturePython", "InternalSpurGearParameters")
+        internal_gear = InternalSpurGear(gear_obj)
         doc.recompute()
         FreeCADGui.SendMsgToActiveView("ViewFit")
         FreeCADGui.ActiveDocument.ActiveView.viewIsometric()
@@ -84,7 +83,7 @@ class InternalGearCreateObject():
         pass
 
 
-class InternalGear():
+class InternalSpurGear():
     """FeaturePython object for parametric internal gear."""
 
     def __init__(self, obj):
@@ -129,36 +128,36 @@ class InternalGear():
 
         # Core gear parameters
         obj.addProperty(
-            "App::PropertyLength", "Module", "InternalGear",
+            "App::PropertyLength", "Module", "InternalSpurGear",
             QT_TRANSLATE_NOOP("App::Property", "Gear module (tooth size)")
         ).Module = H["module"]
 
         obj.addProperty(
-            "App::PropertyInteger", "NumberOfTeeth", "InternalGear",
+            "App::PropertyInteger", "NumberOfTeeth", "InternalSpurGear",
             QT_TRANSLATE_NOOP("App::Property", "Number of teeth")
         ).NumberOfTeeth = H["num_teeth"]
 
         obj.addProperty(
-            "App::PropertyAngle", "PressureAngle", "InternalGear",
+            "App::PropertyAngle", "PressureAngle", "InternalSpurGear",
             QT_TRANSLATE_NOOP("App::Property", "Pressure angle (normally 20°)")
         ).PressureAngle = H["pressure_angle"]
 
         obj.addProperty(
-            "App::PropertyFloat", "ProfileShift", "InternalGear",
+            "App::PropertyFloat", "ProfileShift", "InternalSpurGear",
             QT_TRANSLATE_NOOP("App::Property", "Profile shift coefficient (-1 to +1)")
         ).ProfileShift = H["profile_shift"]
 
         obj.addProperty(
-            "App::PropertyLength", "Height", "InternalGear",
+            "App::PropertyLength", "Height", "InternalSpurGear",
             QT_TRANSLATE_NOOP("App::Property", "Gear thickness/height")
         ).Height = H["height"]
 
         obj.addProperty(
-            "App::PropertyLength", "RimThickness", "InternalGear",
+            "App::PropertyLength", "RimThickness", "InternalSpurGear",
             QT_TRANSLATE_NOOP("App::Property", "Thickness of outer rim beyond tooth roots")
         ).RimThickness = H["rim_thickness"]
 
-        self.Type = 'InternalGear'
+        self.Type = 'InternalSpurGear'
         self.Object = obj
         self.doc = App.ActiveDocument
         obj.Proxy = self
@@ -239,7 +238,7 @@ class InternalGear():
             try:
                 parameters = self.GetParameters()
                 gearMath.validateInternalParameters(parameters)
-                gearMath.generateInternalGearPart(App.ActiveDocument, parameters)
+                gearMath.generateInternalSpurGearPart(App.ActiveDocument, parameters)
                 self.Dirty = False
                 App.ActiveDocument.recompute()
                 App.Console.PrintMessage("Internal gear generated successfully\n")
@@ -270,8 +269,8 @@ class InternalGear():
         t.singleShot(50, self.recompute)
 
 
-class ViewProviderInternalGear:
-    """View provider for InternalGear object."""
+class ViewProviderInternalSpurGear:
+    """View provider for InternalSpurGear object."""
 
     def __init__(self, obj, iconfile=None):
         """Initialize view provider.
@@ -403,9 +402,9 @@ class ViewProviderInternalGear:
 
 # Register command with FreeCAD
 try:
-    FreeCADGui.addCommand('InternalGearCreateObject', InternalGearCreateObject())
-    App.Console.PrintMessage("InternalGearCreateObject command registered successfully\n")
+    FreeCADGui.addCommand('InternalSpurGearCreateObject', InternalSpurGearCreateObject())
+    App.Console.PrintMessage("InternalSpurGearCreateObject command registered successfully\n")
 except Exception as e:
-    App.Console.PrintError(f"Failed to register InternalGearCreateObject: {e}\n")
+    App.Console.PrintError(f"Failed to register InternalSpurGearCreateObject: {e}\n")
     import traceback
     App.Console.PrintError(traceback.format_exc())
