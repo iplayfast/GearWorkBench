@@ -1,0 +1,9 @@
+.site-header {
+	justify-content: flex-start;
+	flex-wrap: nowrap;
+	gap: 40px;
+}
+
+.site-navigation {
+	flex: 1 1 auto;
+}

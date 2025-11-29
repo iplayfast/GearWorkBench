@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
+<package format="1" xmlns="https://wiki.freecad.org/Package_Metadata">
+  <name>GearWorkbench</name>
+  <description>A comprehensive workbench for designing parametric gears for 3D printing. Supports spur, helical, rack, bevel, and cycloidal gears with various bore types including circular, square, hexagonal, and DIN keyway.</description>
+  <version>0.1.0</version>
+  <date>2025-11-14</date>
+  <maintainer email="cwbruner+github@gmail.com">Chris Bruner</maintainer>
+  <license file="LICENSE">LGPL-2.1</license>
+  <url type="repository" branch="master">https://github.com/iplayfast/GearWorkbench</url>
+  <icon>icons/gearWorkbench.svg</icon>
+
+  <content>
+    <workbench>
+      <name>GearWorkbench</name>
+      <description>Parametric Gear Designer - All Gear Types</description>
+      <classname>GearWorkbenchWB</classname>
+      <subdirectory>./</subdirectory>
+      <icon>icons/gearWorkbench.svg</icon>
+      <tag>mechanical</tag>
+      <tag>gears</tag>
+      <tag>parametric</tag>
+      <tag>3d-printing</tag>
+      <tag>involute</tag>
+      <tag>cycloidal</tag>
+      <version>0.1.0</version>
+    </workbench>
+  </content>
+
+</package>
