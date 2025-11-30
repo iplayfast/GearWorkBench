@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   xmlns="http://www.w3.org/2000/svg"
+   width="64"
+   height="64"
+   viewBox="0 0 64 64"
+   version="1.1">
+  <defs>
+    <style type="text/css">
+      .gear-body { fill:#4a90e2; stroke:#2c5aa0; stroke-width:2; }
+      .gear-hole { fill:#ffffff; }
+    </style>
+  </defs>
+
+  <!-- Cycloid gear body - distinctive rounded teeth -->
+  <g transform="translate(32,32)">
+    <g class="gear-body">
+      <!-- Inner ring -->
+      <circle cx="0" cy="0" r="16" />
+
+      <!-- Cycloid teeth - rounded circular-arc shapes (8 teeth) -->
+      <!-- Tooth 1 (top) -->
+      <path d="M 0,-16 Q 3,-22 0,-24 Q -3,-22 0,-16 Z" />
+
+      <!-- Tooth 2 (top-right) -->
+      <path d="M 11.3,-11.3 Q 15.6,-15.6 16.97,-16.97 Q 15.6,-18.3 11.3,-11.3 Z" transform="rotate(45)" />
+
+      <!-- Tooth 3 (right) -->
+      <path d="M 0,-16 Q 3,-22 0,-24 Q -3,-22 0,-16 Z" transform="rotate(90)" />
+
+      <!-- Tooth 4 (bottom-right) -->
+      <path d="M 0,-16 Q 3,-22 0,-24 Q -3,-22 0,-16 Z" transform="rotate(135)" />
+
+      <!-- Tooth 5 (bottom) -->
+      <path d="M 0,-16 Q 3,-22 0,-24 Q -3,-22 0,-16 Z" transform="rotate(180)" />
+
+      <!-- Tooth 6 (bottom-left) -->
+      <path d="M 0,-16 Q 3,-22 0,-24 Q -3,-22 0,-16 Z" transform="rotate(225)" />
+
+      <!-- Tooth 7 (left) -->
+      <path d="M 0,-16 Q 3,-22 0,-24 Q -3,-22 0,-16 Z" transform="rotate(270)" />
+
+      <!-- Tooth 8 (top-left) -->
+      <path d="M 0,-16 Q 3,-22 0,-24 Q -3,-22 0,-16 Z" transform="rotate(315)" />
+    </g>
+
+    <!-- Center hole -->
+    <circle cx="0" cy="0" r="6" class="gear-hole" />
+  </g>
+</svg>

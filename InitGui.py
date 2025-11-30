@@ -25,6 +25,9 @@ import os
 import gearMath
 import spurGear  # Import at module level to ensure command registration
 import internalSpurGear  # Import internal gear module
+import rackGear  # Import rack gear module
+import cycloidGear  # Import cycloid gear module
+import cycloidRack  # Import cycloid rack module
 
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, 'icons')
@@ -45,7 +48,12 @@ class GearWorkbenchWB(Workbench):
             self.__class__.Icon = main_Gear_Icon
 
             # List of gear creation commands
-            gear_items = ["SpurGearCreateObject", "InternalSpurGearCreateObject"]
+            gear_items = ["SpurGearCreateObject",
+                           "InternalSpurGearCreateObject",
+                           "RackGearCreateObject",
+                           "CycloidGearCreateObject",
+                           "CycloidRackCreateObject"
+                           ]
 
             # Verify command is available
             import FreeCADGui

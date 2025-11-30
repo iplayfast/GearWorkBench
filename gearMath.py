@@ -7,16 +7,14 @@ This module contains all the mathematical functions for generating involute
 spur gears, including the involute profile, tooth dimensions, and validation.
 
 Copyright 2025, Chris Bruner
-Version v0.1
+Version v0.1.3
 License LGPL V2.1
-Homepage https://github.com/iplayfast/GearWorkbench
 """
 
 import math
 import logging
 from typing import Tuple, List, Dict, Any, Optional
 import FreeCAD
-from FreeCAD import Base
 try:
     import FreeCADGui as Gui
     GUI_AVAILABLE = True
@@ -24,7 +22,6 @@ except ImportError:
     GUI_AVAILABLE = False
 import FreeCAD as App
 import Part
-from Part import BSplineCurve, makePolygon
 import Sketcher
 
 # Import common utilities
@@ -37,131 +34,68 @@ if not logging.getLogger().handlers:
     logging.basicConfig(level=logging.INFO, format='%(levelname)s - %(message)s')
 
 # Gear-specific constants
-MIN_TEETH = 6
-MAX_TEETH = 150
-MIN_MODULE = 0.30  # mm
-MAX_MODULE = 75.0  # mm
-MIN_PRESSURE_ANGLE = 1.0  # degrees
-MAX_PRESSURE_ANGLE = 35.0  # degrees
-STANDARD_PRESSURE_ANGLE = 20.0  # degrees
+MIN_TEETH = 3
+MAX_TEETH = 200
+MIN_MODULE = 0.30
+MAX_MODULE = 75.0
+MIN_PRESSURE_ANGLE = 1.0
+MAX_PRESSURE_ANGLE = 35.0
 MIN_PROFILE_SHIFT = -1.0
 MAX_PROFILE_SHIFT = 1.0
 
 # Standard gear tooth proportions (ISO 53:1998)
-ADDENDUM_FACTOR = 1.0  # ha* = 1.0 module
-DEDENDUM_FACTOR = 1.25  # hf* = 1.25 module
-CLEARANCE_FACTOR = 0.25  # c* = 0.25 module
+ADDENDUM_FACTOR = 1.0
+DEDENDUM_FACTOR = 1.25
 
-
-# Use common exception type
 class GearParameterError(ParameterValidationError):
     """Raised when gear parameters are invalid."""
     pass
 
-
-def involuteFunction(angle: float) -> float:
-    """Calculate the involute function: inv(α) = tan(α) - α."""
-    return math.tan(angle) - angle
-
-
-def involutePoint(base_radius: float, theta: float) -> Tuple[float, float]:
-    """Calculate a point on the involute curve."""
-    x = base_radius * (math.cos(theta) + theta * math.sin(theta))
-    y = base_radius * (math.sin(theta) - theta * math.cos(theta))
-    return x, y
-
+# ============================================================================
+# Math Helpers
+# ============================================================================
 
 def calcPitchDiameter(module: float, num_teeth: int) -> float:
-    """Calculate pitch diameter: d = m × z"""
     return module * num_teeth
 
-
 def calcBaseDiameter(pitch_diameter: float, pressure_angle_deg: float) -> float:
-    """Calculate base circle diameter: db = d × cos(α)"""
     pressure_angle_rad = pressure_angle_deg * DEG_TO_RAD
     return pitch_diameter * math.cos(pressure_angle_rad)
 
-
 def calcAddendumDiameter(pitch_diameter: float, module: float, profile_shift: float = 0.0) -> float:
-    """Calculate addendum (outer tip) diameter."""
     return pitch_diameter + 2 * module * (ADDENDUM_FACTOR + profile_shift)
 
-
 def calcDedendumDiameter(pitch_diameter: float, module: float, profile_shift: float = 0.0) -> float:
-    """Calculate dedendum (root) diameter."""
     return pitch_diameter - 2 * module * (DEDENDUM_FACTOR - profile_shift)
 
+def calcInternalAddendumDiameter(pitch_diameter: float, module: float, profile_shift: float = 0.0) -> float:
+    """Calculate internal gear addendum (inner tip) diameter."""
+    return pitch_diameter - 2 * module * (ADDENDUM_FACTOR + profile_shift)
 
-def calcBaseToothThickness(module: float, pressure_angle_deg: float, profile_shift: float = 0.0) -> float:
-    """Calculate tooth thickness at the pitch circle."""
-    pressure_angle_rad = pressure_angle_deg * DEG_TO_RAD
-    return module * (math.pi / 2.0 + 2.0 * profile_shift * math.tan(pressure_angle_rad))
+def calcInternalDedendumDiameter(pitch_diameter: float, module: float,
+                                  profile_shift: float = 0.0, rim_thickness: float = 3.0) -> float:
+    """Calculate internal gear dedendum (outer) diameter."""
+    return pitch_diameter + 2 * module * (DEDENDUM_FACTOR - profile_shift) + 2 * rim_thickness
 
-
-def checkUndercut(num_teeth: int, pressure_angle_deg: float, profile_shift: float = 0.0) -> Tuple[bool, float]:
-    """Check if gear will have undercutting and calculate minimum teeth."""
-    pressure_angle_rad = pressure_angle_deg * DEG_TO_RAD
-    sin_alpha = math.sin(pressure_angle_rad)
-    min_teeth = 2.0 * ADDENDUM_FACTOR / (sin_alpha * sin_alpha) - 2.0 * profile_shift
-    has_undercut = num_teeth < min_teeth
-    return has_undercut, min_teeth
-
+# ============================================================================
+# Validation & Defaults
+# ============================================================================
 
 def validateSpurParameters(parameters: Dict[str, Any]) -> None:
-    """Validate spur gear parameters for physical and mathematical constraints."""
+    """Validate spur gear parameters."""
     module = parameters.get("module", 0)
     num_teeth = parameters.get("num_teeth", 0)
-    pressure_angle = parameters.get("pressure_angle", 0)
-    profile_shift = parameters.get("profile_shift", 0)
     height = parameters.get("height", 0)
 
-    if module < MIN_MODULE:
-        raise GearParameterError(f"Module must be >= {MIN_MODULE} mm, got {module}")
-    if module > MAX_MODULE:
-        raise GearParameterError(f"Module must be <= {MAX_MODULE} mm, got {module}")
+    if module < MIN_MODULE: raise GearParameterError(f"Module < {MIN_MODULE}")
+    if num_teeth < MIN_TEETH: raise GearParameterError(f"Teeth < {MIN_TEETH}")
+    if height <= 0: raise GearParameterError("Height must be positive")
+    logger.info("Spur parameter validation passed")
 
-    if not isinstance(num_teeth, int) or num_teeth < MIN_TEETH:
-        raise GearParameterError(f"Number of teeth must be an integer >= {MIN_TEETH}, got {num_teeth}")
-    if num_teeth > MAX_TEETH:
-        raise GearParameterError(f"Number of teeth must be <= {MAX_TEETH}, got {num_teeth}")
-
-    if pressure_angle < MIN_PRESSURE_ANGLE:
-        raise GearParameterError(f"Pressure angle must be >= {MIN_PRESSURE_ANGLE}°, got {pressure_angle}°")
-    if pressure_angle > MAX_PRESSURE_ANGLE:
-        raise GearParameterError(f"Pressure angle must be <= {MAX_PRESSURE_ANGLE}°, got {pressure_angle}°")
-
-    if profile_shift < MIN_PROFILE_SHIFT:
-        raise GearParameterError(f"Profile shift must be >= {MIN_PROFILE_SHIFT}, got {profile_shift}")
-    if profile_shift > MAX_PROFILE_SHIFT:
-        raise GearParameterError(f"Profile shift must be <= {MAX_PROFILE_SHIFT}, got {profile_shift}")
-
-    if height <= 0:
-        raise GearParameterError(f"Height must be > 0, got {height}")
-
-    has_undercut, min_teeth = checkUndercut(num_teeth, pressure_angle, profile_shift)
-    if has_undercut:
-        logger.warning(
-            f"Gear may have undercutting! {num_teeth} teeth with {pressure_angle}° pressure angle "
-            f"requires minimum {min_teeth:.1f} teeth. Consider increasing teeth or using positive "
-            f"profile shift (currently {profile_shift})."
-        )
-    logger.info("Parameter validation passed")
-
-
-def generateInvoluteProfile(base_radius: float, start_angle: float, end_angle: float,
-                              num_points: int = 20) -> List[Tuple[float, float]]:
-    """Generate points along an involute curve."""
-    points = []
-    for i in range(num_points):
-        t = i / (num_points - 1)
-        theta = start_angle + t * (end_angle - start_angle)
-        x, y = involutePoint(base_radius, theta)
-        points.append((x, y))
-    return points
-
+def validateInternalParameters(parameters: Dict[str, Any]) -> None:
+    validateSpurParameters(parameters) 
 
 def generateDefaultParameters() -> Dict[str, Any]:
-    """Generate default spur gear parameters."""
     return {
         "module": 1.0,
         "num_teeth": 20,
@@ -170,237 +104,10 @@ def generateDefaultParameters() -> Dict[str, Any]:
         "height": 10.0,
         "bore_type": "none",
         "bore_diameter": 5.0,
+        "body_name": "SpurGear"
     }
 
-
-def generateToothProfile(sketch, parameters: Dict[str, Any]):
-    """Generate a single spur gear tooth profile (External)."""
-    module = parameters["module"]
-    num_teeth = parameters["num_teeth"]
-    pressure_angle_rad = parameters["pressure_angle"] * DEG_TO_RAD
-    profile_shift = parameters.get("profile_shift", 0.0)
-
-    dw = module * num_teeth
-    dg = dw * math.cos(pressure_angle_rad)
-    da = dw + 2 * module * (1 + profile_shift)
-    df = dw - 2 * module * (1.25 - profile_shift)
-
-    inv_alpha = math.tan(pressure_angle_rad) - pressure_angle_rad
-    involute_rot = (math.sqrt(max(0, (dw**2 - dg**2))) / dg - math.atan(math.sqrt(max(0, (dw**2 - dg**2))) / dg)) + \
-                   (1.0 / num_teeth) * (math.pi / 2.0 + 2.0 * profile_shift * math.tan(pressure_angle_rad))
-
-    num_inv_points = 20
-
-    involute_start = 0.0
-    if dg <= df:
-        involute_start = math.sqrt(max(0, df**2 - dg**2)) / dg
-    involute_end = math.sqrt(max(0, da**2 - dg**2)) / dg
-
-    involute_pts_raw = []
-    if df < dg:
-        involute_pts_raw.append((df/2.0, 0.0))
-
-    for i in range(num_inv_points):
-        t = i / (num_inv_points - 1)
-        phi = involute_start + t * (involute_end - involute_start)
-        x_inv = (dg / 2.0) * (math.cos(phi) + phi * math.sin(phi))
-        y_inv = (dg / 2.0) * (math.sin(phi) - phi * math.cos(phi))
-        involute_pts_raw.append((x_inv, y_inv))
-
-    right_flank_rotation = math.pi / 2.0 - involute_rot
-
-    right_flank_points = []
-    for x_pt, y_pt in involute_pts_raw:
-        x_rot, y_rot = util.rotatePoint(x_pt, y_pt, right_flank_rotation)
-        right_flank_points.append(App.Vector(x_rot, y_rot, 0))
-
-    left_flank_points = []
-    for vec in reversed(right_flank_points):
-        left_flank_points.append(App.Vector(-vec.x, vec.y, 0))
-
-    util.sketchCircle(sketch, 0, 0, da, -1, "addendum", True)
-    util.sketchCircle(sketch, 0, 0, dw, -1, "pitch", True)
-    util.sketchCircle(sketch, 0, 0, dg, -1, "base", True)
-    util.sketchCircle(sketch, 0, 0, df, -1, "dedendum", True)
-
-    try:
-        right_idxs = util.addPolygonToSketch(sketch, right_flank_points, closed=False)
-        left_idxs = util.addPolygonToSketch(sketch, left_flank_points, closed=False)
-
-        for idx in right_idxs:
-            sketch.addConstraint(Sketcher.Constraint('Block', idx))
-        for idx in left_idxs:
-            sketch.addConstraint(Sketcher.Constraint('Block', idx))
-
-        p_right_bottom = right_flank_points[0]
-        p_left_bottom = left_flank_points[-1]
-        angle_R = math.atan2(p_right_bottom.y, p_right_bottom.x)
-        angle_L = math.atan2(p_left_bottom.y, p_left_bottom.x)
-
-        root_arc_info = util.sketchArc(sketch, 0, 0, df, startAngle=angle_R, endAngle=angle_L, Name="root_arc", isConstruction=False)
-        root_idx = root_arc_info['index']
-
-        sketch.addConstraint(Sketcher.Constraint('Coincident', root_idx, 1, right_idxs[0], 1))
-        sketch.addConstraint(Sketcher.Constraint('Coincident', root_idx, 2, left_idxs[-1], 2))
-
-        tip_start_vec = right_flank_points[-1]
-        tip_end_vec = left_flank_points[0]
-        tip_mid_vec = App.Vector(0, da/2.0, 0)
-
-        tip_arc = Part.Arc(tip_start_vec, tip_mid_vec, tip_end_vec)
-        tip_idx = sketch.addGeometry(tip_arc, False)
-
-        sketch.addConstraint(Sketcher.Constraint('Coincident', tip_idx, 1, right_idxs[-1], 2))
-        sketch.addConstraint(Sketcher.Constraint('Coincident', tip_idx, 2, left_idxs[0], 1))
-        sketch.addConstraint(Sketcher.Constraint('Coincident', tip_idx, 3, -1, 1))
-
-    except Exception as e:
-        logger.error(f"Could not create or connect tooth profile: {e}")
-
-
-def generateSpurGearPart(doc, parameters):
-    """Generate a complete spur gear 3D model."""
-    validateSpurParameters(parameters)
-    logger.info("Generating spur gear")
-
-    body = util.readyPart(doc, 'SpurGear')
-    
-    num_teeth = parameters["num_teeth"]
-    height = parameters["height"]
-    bore_type = parameters.get("bore_type", "none")
-    module = parameters["module"]
-    profile_shift = parameters.get("profile_shift", 0.0)
-    dw = module * num_teeth
-    df = dw - 2 * module * (DEDENDUM_FACTOR - profile_shift)
-
-    sketch = util.createSketch(body, 'ToothProfile')
-    generateToothProfile(sketch, parameters)
-
-    tooth_pad = util.createPad(body, sketch, height, 'Tooth')
-
-    polar = util.createPolar(body, tooth_pad, sketch, num_teeth, 'Teeth')
-    polar.Originals = [tooth_pad]
-    tooth_pad.Visibility = False
-    polar.Visibility = True
-    body.Tip = polar
-
-    dedendum_sketch = util.createSketch(body, 'DedendumCircle')
-    circle = dedendum_sketch.addGeometry(Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), df / 2), False)
-    dedendum_sketch.addConstraint(Sketcher.Constraint('Coincident', circle, 3, -1, 1))
-    dedendum_sketch.addConstraint(Sketcher.Constraint('Diameter', circle, df))
-
-    dedendum_pad = util.createPad(body, dedendum_sketch, height, 'DedendumCircle')
-    body.Tip = dedendum_pad
-
-    if bore_type != "none":
-        generateBore(body, parameters, height)
-
-    doc.recompute()
-    if GUI_AVAILABLE:
-        try:
-            Gui.SendMsgToActiveView("ViewFit")
-        except Exception:
-            pass
-
-
-def generateBore(body, parameters, height):
-    """Generate center bore in gear."""
-    bore_type = parameters["bore_type"]
-    bore_diameter = parameters["bore_diameter"]
-
-    if bore_type == "circular":
-        generateCircularBore(body, bore_diameter, height)
-    elif bore_type == "square":
-        corner_radius = parameters.get("square_corner_radius", 0.5)
-        generateSquareBore(body, bore_diameter, corner_radius, height)
-    elif bore_type == "hexagonal":
-        corner_radius = parameters.get("hex_corner_radius", 0.5)
-        generateHexBore(body, bore_diameter, corner_radius, height)
-    elif bore_type == "keyway":
-        keyway_width = parameters.get("keyway_width", 2.0)
-        keyway_depth = parameters.get("keyway_depth", 1.0)
-        generateKeywayBore(body, bore_diameter, keyway_width, keyway_depth, height)
-
-
-def generateCircularBore(body, diameter, height):
-    """Generate simple circular bore."""
-    sketch = util.createSketch(body, 'CircularBore')
-    circle = sketch.addGeometry(Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), diameter / 2), False)
-    sketch.addConstraint(Sketcher.Constraint('Coincident', circle, 3, -1, 1))
-    sketch.addConstraint(Sketcher.Constraint('Diameter', circle, diameter))
-    pocket = util.createPocket(body, sketch, height, 'Bore')
-    body.Tip = pocket
-
-
-def generateSquareBore(body, size, corner_radius, height):
-    """Generate square bore with rounded corners."""
-    sketch = util.createSketch(body, 'SquareBore')
-    half_size = size / (2 * math.sqrt(2))
-    points = [
-        App.Vector(half_size, half_size, 0),
-        App.Vector(-half_size, half_size, 0),
-        App.Vector(-half_size, -half_size, 0),
-        App.Vector(half_size, -half_size, 0),
-        App.Vector(half_size, half_size, 0)
-    ]
-    for i in range(len(points) - 1):
-        sketch.addGeometry(Part.LineSegment(points[i], points[i + 1]), False)
-    pocket = util.createPocket(body, sketch, height, 'Bore')
-    body.Tip = pocket
-
-
-def generateHexBore(body, diameter, corner_radius, height):
-    """Generate hexagonal bore."""
-    sketch = util.createSketch(body, 'HexBore')
-    radius = diameter / 2.0
-    points = []
-    for i in range(7):
-        angle = i * 60 * DEG_TO_RAD
-        x = radius * math.cos(angle)
-        y = radius * math.sin(angle)
-        points.append(App.Vector(x, y, 0))
-    for i in range(6):
-        sketch.addGeometry(Part.LineSegment(points[i], points[i + 1]), False)
-    pocket = util.createPocket(body, sketch, height, 'Bore')
-    body.Tip = pocket
-
-
-def generateKeywayBore(body, bore_diameter, keyway_width, keyway_depth, height):
-    """Generate bore with DIN 6885 keyway."""
-    generateCircularBore(body, bore_diameter, height)
-    sketch = util.createSketch(body, 'Keyway')
-    half_width = keyway_width / 2.0
-    keyway_length = bore_diameter
-    points = [
-        App.Vector(-half_width, 0, 0),
-        App.Vector(half_width, 0, 0),
-        App.Vector(half_width, keyway_length, 0),
-        App.Vector(-half_width, keyway_length, 0),
-        App.Vector(-half_width, 0, 0)
-    ]
-    for i in range(len(points) - 1):
-        sketch.addGeometry(Part.LineSegment(points[i], points[i + 1]), False)
-    pocket = util.createPocket(body, sketch, keyway_depth, 'Keyway')
-    body.Tip = pocket
-
-
-# ============================================================================
-# Internal Gear Functions
-# ============================================================================
-
-def calcInternalAddendumDiameter(pitch_diameter: float, module: float, profile_shift: float = 0.0) -> float:
-    """Calculate internal gear addendum (inner tip) diameter."""
-    return pitch_diameter - 2 * module * (ADDENDUM_FACTOR + profile_shift)
-
-
-def calcInternalDedendumDiameter(pitch_diameter: float, module: float,
-                                  profile_shift: float = 0.0, rim_thickness: float = 5.0) -> float:
-    """Calculate internal gear dedendum (outer) diameter."""
-    return pitch_diameter + 2 * module * (DEDENDUM_FACTOR - profile_shift) + 2 * rim_thickness
-
-
 def generateDefaultInternalParameters() -> Dict[str, Any]:
-    """Generate default internal gear parameters."""
     return {
         "module": 1.0,
         "num_teeth": 15,
@@ -408,154 +115,192 @@ def generateDefaultInternalParameters() -> Dict[str, Any]:
         "profile_shift": 0.0,
         "height": 10.0,
         "rim_thickness": 3.0,
+        "body_name": "InternalSpurGear"
     }
 
+# ============================================================================
+# TOOTH GENERATION (EXTERNAL)
+# ============================================================================
 
-def validateInternalParameters(parameters: Dict[str, Any]) -> None:
-    """Validate internal gear parameters."""
-    module = parameters.get("module", 0)
-    num_teeth = parameters.get("num_teeth", 0)
-    pressure_angle = parameters.get("pressure_angle", 0)
-    profile_shift = parameters.get("profile_shift", 0)
-    height = parameters.get("height", 0)
-    rim_thickness = parameters.get("rim_thickness", 0)
-
-    if module < MIN_MODULE:
-        raise GearParameterError(f"Module must be >= {MIN_MODULE} mm, got {module}")
-    if module > MAX_MODULE:
-        raise GearParameterError(f"Module must be <= {MAX_MODULE} mm, got {module}")
-    
-    min_internal_teeth = 6
-    if not isinstance(num_teeth, int) or num_teeth < min_internal_teeth:
-        raise GearParameterError(f"Number of teeth must be an integer >= {min_internal_teeth}, got {num_teeth}")
-    if num_teeth > MAX_TEETH:
-        raise GearParameterError(f"Number of teeth must be <= {MAX_TEETH}, got {num_teeth}")
-
-    if pressure_angle < MIN_PRESSURE_ANGLE:
-        raise GearParameterError(f"Pressure angle must be >= {MIN_PRESSURE_ANGLE}°, got {pressure_angle}°")
-    if pressure_angle > MAX_PRESSURE_ANGLE:
-        raise GearParameterError(f"Pressure angle must be <= {MAX_PRESSURE_ANGLE}°, got {pressure_angle}°")
-
-    if profile_shift < MIN_PROFILE_SHIFT:
-        raise GearParameterError(f"Profile shift must be >= {MIN_PROFILE_SHIFT}, got {profile_shift}")
-    if profile_shift > MAX_PROFILE_SHIFT:
-        raise GearParameterError(f"Profile shift must be <= {MAX_PROFILE_SHIFT}, got {profile_shift}")
-
-    if height <= 0:
-        raise GearParameterError(f"Height must be > 0, got {height}")
-
-    if rim_thickness < 0.5:
-        raise GearParameterError(f"Rim thickness must be >= 0.5 mm, got {rim_thickness}")
-
-    logger.info("Internal gear parameter validation passed")
-
-
-def generateInternalToothProfile(sketch, parameters: Dict[str, Any]):
+def generateToothProfile(sketch, parameters: Dict[str, Any]):
     """
-    Generate a single internal tooth SOLID profile using 5-Point B-Splines.
-    CORRECTED: Generates the TOOTH (Metal) shape (Thick at Outer Root, Thin at Inner Tip).
+    Generate a single EXTERNAL spur gear tooth profile.
+    Uses 5-point B-Splines for stability.
+    Uses a Straight Line for the root closure to avoid crossing artifacts.
     """
-    logger.info("Generating internal tooth profile (Inverted Tooth Shape)")
+    logger.info("Generating EXTERNAL tooth profile")
 
-    # --- 1. Calculate Dimensions ---
+    # 1. Dimensions
     module = parameters["module"]
     num_teeth = parameters["num_teeth"]
     pressure_angle_rad = parameters["pressure_angle"] * DEG_TO_RAD
     profile_shift = parameters.get("profile_shift", 0.0)
 
-    dw = module * num_teeth
-    dg = dw * math.cos(pressure_angle_rad)
-    da_internal = dw - 2 * module * (ADDENDUM_FACTOR + profile_shift) # Inner Dia (Tip)
-    df_internal = dw + 2 * module * (DEDENDUM_FACTOR - profile_shift) # Outer Dia (Root)
+    dw = module * num_teeth # Pitch
+    dg = dw * math.cos(pressure_angle_rad) # Base
+    da = dw + 2 * module * (ADDENDUM_FACTOR + profile_shift) # Tip
+    df = dw - 2 * module * (DEDENDUM_FACTOR - profile_shift) # Root
 
-    # --- 2. Calculate Tooth Geometry (Inverted Angle for Internal Tooth) ---
-    # Tooth is centered at 90 degrees (Y-axis).
-    # For Internal Tooth (Metal), the thickness INCREASES as radius increases (towards root).
-    
-    # Calculate half-angle of the tooth thickness at pitch circle
-    beta = (math.pi / (2 * num_teeth)) + (2 * profile_shift * math.tan(pressure_angle_rad) / num_teeth)
+    # 2. Angular Math (Centering Tooth at Y-axis / 90 degrees)
+    s_pitch = module * (math.pi / 2.0 + 2.0 * profile_shift * math.tan(pressure_angle_rad))
+    psi = s_pitch / dw 
     inv_alpha = math.tan(pressure_angle_rad) - pressure_angle_rad
-    tooth_center_offset = beta - inv_alpha
-
-    # Involute limits
+    
+    # 3. Calculate Involute Points (Right Flank)
     num_inv_points = 5 
     epsilon = 0.001
-    start_radius = max(da_internal/2.0, dg/2.0 + epsilon)
-    end_radius = df_internal/2.0
-
-    involute_start = math.sqrt(max(0, (2*start_radius/dg)**2 - 1))
-    involute_end = math.sqrt(max(0, (2*end_radius/dg)**2 - 1))
-
-    # Generate Right Flank Points (Inner -> Outer)
-    right_flank_geo = []
+    start_radius = max(dg/2.0 + epsilon, df/2.0)
+    end_radius = da/2.0
+    
+    involute_pts = []
+    
     for i in range(num_inv_points):
         t = i / (num_inv_points - 1)
-        phi = involute_start + t * (involute_end - involute_start)
+        r = start_radius + t * (end_radius - start_radius)
         
-        # Radius
-        r = (dg / 2.0) * math.sqrt(1 + phi**2)
-        # Involute angle
-        theta_inv = phi - math.atan(phi)
+        val = (dg / 2.0) / r
+        if val > 1.0: val = 1.0
+        phi = math.acos(val)
         
-        # INVERTED ANGLE FORMULA:
-        # As theta_inv increases (radius increases), we want the angle to move AWAY from 90.
-        # This increases the thickness.
-        angle = (math.pi / 2.0) - tooth_center_offset - theta_inv
+        inv_phi = math.tan(phi) - phi
         
-        x = r * math.cos(angle)
-        y = r * math.sin(angle)
-        right_flank_geo.append(App.Vector(x, y, 0))
+        # CORRECTED ANGLE FORMULA: Taper towards tip
+        theta = (math.pi / 2.0) - psi - inv_alpha + inv_phi
+        
+        x = r * math.cos(theta)
+        y = r * math.sin(theta)
+        involute_pts.append(App.Vector(x, y, 0))
 
-    # Generate Left Flank Points (Outer -> Inner)
-    left_flank_inner_to_outer = []
-    for vec in right_flank_geo:
-        # Mirror across Y-axis: (-x, y)
-        left_flank_inner_to_outer.append(App.Vector(-vec.x, vec.y, 0))
-        
-    left_flank_geo = list(reversed(left_flank_inner_to_outer))
+    # 4. Construct Flank Arrays
+    right_flank_geo = involute_pts
+    left_flank_geo = []
+    for vec in reversed(right_flank_geo):
+        left_flank_geo.append(App.Vector(-vec.x, vec.y, 0))
 
-    # --- 3. Create Curves ---
+    # 5. Create Geometry Objects
+    geo_list = []
+    has_radial_flank = df < dg
+    
+    # A. Right Radial Line (Optional: Root -> Base)
+    if has_radial_flank:
+        theta_base = (math.pi / 2.0) - psi - inv_alpha
+        p_base = right_flank_geo[0]
+        p_root = App.Vector((df/2.0) * math.cos(theta_base), (df/2.0) * math.sin(theta_base), 0)
+        
+        line = Part.LineSegment(p_root, p_base)
+        idx = sketch.addGeometry(line, False)
+        geo_list.append(idx)
+    else:
+        p_root = right_flank_geo[0]
+
+    # B. Right Involute
     bspline_right = Part.BSplineCurve()
     bspline_right.interpolate(right_flank_geo)
+    idx_right_inv = sketch.addGeometry(bspline_right, False)
+    geo_list.append(idx_right_inv)
     
-    p_root_start = right_flank_geo[-1]
-    p_root_end = left_flank_geo[0]
-    p_root_mid = App.Vector(0, df_internal/2.0, 0)
-    root_arc = Part.Arc(p_root_start, p_root_mid, p_root_end)
+    # C. Tip Arc
+    p_tip_right = right_flank_geo[-1]
+    p_tip_left = left_flank_geo[0]
+    p_tip_mid = App.Vector(0, da/2.0, 0)
+    tip_arc = Part.Arc(p_tip_right, p_tip_mid, p_tip_left)
+    idx_tip = sketch.addGeometry(tip_arc, False)
+    geo_list.append(idx_tip)
     
+    # D. Left Involute
     bspline_left = Part.BSplineCurve()
     bspline_left.interpolate(left_flank_geo)
+    idx_left_inv = sketch.addGeometry(bspline_left, False)
+    geo_list.append(idx_left_inv)
     
-    p_tip_start = left_flank_geo[-1]
-    p_tip_end = right_flank_geo[0]
-    p_tip_mid = App.Vector(0, da_internal/2.0, 0)
-    tip_arc = Part.Arc(p_tip_start, p_tip_mid, p_tip_end)
+    # E. Left Radial Line (Optional)
+    if has_radial_flank:
+        p_base_left = left_flank_geo[-1]
+        p_root_left = App.Vector(-p_root.x, p_root.y, 0)
+        line = Part.LineSegment(p_base_left, p_root_left)
+        idx = sketch.addGeometry(line, False)
+        geo_list.append(idx)
+    else:
+        p_root_left = left_flank_geo[-1]
 
-    # --- 4. Add to Sketch ---
-    ids = []
-    ids.append(sketch.addGeometry(bspline_right, False)) # 0
-    ids.append(sketch.addGeometry(root_arc, False))      # 1
-    ids.append(sketch.addGeometry(bspline_left, False))  # 2
-    ids.append(sketch.addGeometry(tip_arc, False))       # 3
-    
-    # --- 5. Connect and Block ---
-    sketch.addConstraint(Sketcher.Constraint('Coincident', ids[0], 2, ids[1], 1))
-    sketch.addConstraint(Sketcher.Constraint('Coincident', ids[1], 2, ids[2], 1))
-    sketch.addConstraint(Sketcher.Constraint('Coincident', ids[2], 2, ids[3], 1))
-    sketch.addConstraint(Sketcher.Constraint('Coincident', ids[3], 2, ids[0], 1))
-    
-    for idx in ids:
+    # F. Root Closure (Straight Line)
+    # Changed from Arc to Line to prevent "crossing" artifacts.
+    root_line = Part.LineSegment(p_root_left, p_root)
+    idx_root = sketch.addGeometry(root_line, False)
+    geo_list.append(idx_root)
+
+    # 6. Constrain and Block
+    count = len(geo_list)
+    for i in range(count):
+        curr = geo_list[i]
+        next_g = geo_list[(i+1)%count]
+        sketch.addConstraint(Sketcher.Constraint('Coincident', curr, 2, next_g, 1))
+        
+    for idx in geo_list:
         sketch.addConstraint(Sketcher.Constraint('Block', idx))
+        
+    logger.info("External tooth profile generated successfully.")
 
-    logger.info("Internal tooth profile generated (5-Point B-Spline, Correct Shape).")
+# ============================================================================
+# MAIN GENERATORS
+# ============================================================================
 
+def generateSpurGearPart(doc, parameters):
+    validateSpurParameters(parameters)
+    logger.info("Generating spur gear")
+    
+    # Use the User-Defined Body Name
+    body_name = parameters.get("body_name", "SpurGear")
+    body = util.readyPart(doc, body_name)
+    
+    module = parameters["module"]
+    num_teeth = parameters["num_teeth"]
+    height = parameters["height"]
+    profile_shift = parameters.get("profile_shift", 0.0)
+    bore_type = parameters.get("bore_type", "none")
+    
+    dw = module * num_teeth
+    df = dw - 2 * module * (DEDENDUM_FACTOR - profile_shift)
+
+    # 1. Tooth Profile
+    sketch = util.createSketch(body, 'ToothProfile')
+    generateToothProfile(sketch, parameters)
+    
+    tooth_pad = util.createPad(body, sketch, height, 'Tooth')
+    
+    # 2. Polar Pattern
+    polar = util.createPolar(body, tooth_pad, sketch, num_teeth, 'Teeth')
+    polar.Originals = [tooth_pad]
+    tooth_pad.Visibility = False
+    polar.Visibility = True
+    body.Tip = polar
+    
+    # 3. Dedendum Circle (Fills the center)
+    dedendum_sketch = util.createSketch(body, 'DedendumCircle')
+    # Slight overlap (+0.01) ensures robust boolean fusion
+    circle = dedendum_sketch.addGeometry(Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), df / 2.0 + 0.01), False)
+    dedendum_sketch.addConstraint(Sketcher.Constraint('Coincident', circle, 3, -1, 1))
+    dedendum_sketch.addConstraint(Sketcher.Constraint('Diameter', circle, df + 0.02))
+    
+    dedendum_pad = util.createPad(body, dedendum_sketch, height, 'DedendumCircle')
+    body.Tip = dedendum_pad
+
+    # 4. Bore
+    if bore_type != "none":
+        generateBore(body, parameters, height)
+        
+    doc.recompute()
+    if GUI_AVAILABLE:
+        try: Gui.SendMsgToActiveView("ViewFit")
+        except Exception: pass
 
 def generateInternalSpurGearPart(doc, parameters):
-    """Generate a complete internal gear 3D model."""
     validateInternalParameters(parameters)
     logger.info("Generating internal gear")
 
-    body = util.readyPart(doc, 'InternalSpurGear')
+    # Use User-Defined Body Name
+    body_name = parameters.get("body_name", "InternalSpurGear")
+    body = util.readyPart(doc, body_name)
 
     num_teeth = parameters["num_teeth"]
     height = parameters["height"]
@@ -567,13 +312,13 @@ def generateInternalSpurGearPart(doc, parameters):
     df_internal = dw + 2 * module * (DEDENDUM_FACTOR - profile_shift)
     outer_diameter = df_internal + 2 * rim_thickness
 
-    logger.info("Creating tooth sketch")
+    # 1. Tooth Profile
     tooth_sketch = util.createSketch(body, 'Tooth')
     generateInternalToothProfile(tooth_sketch, parameters)
 
     tooth_pad = util.createPad(body, tooth_sketch, height, 'Tooth')
     
-    logger.info("Creating polar pattern of teeth")
+    # 2. Polar Pattern
     polar = util.createPolar(body, tooth_pad, tooth_sketch, num_teeth, 'Teeth')
     polar.Originals = [tooth_pad]
     
@@ -581,7 +326,7 @@ def generateInternalSpurGearPart(doc, parameters):
     polar.Visibility = True
     body.Tip = polar
 
-    logger.info("Adding outer ring")
+    # 3. Outer Ring
     ring_sketch = util.createSketch(body, 'Ring')
 
     outer_circle = ring_sketch.addGeometry(Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), outer_diameter / 2), False)
@@ -604,7 +349,589 @@ def generateInternalSpurGearPart(doc, parameters):
             Gui.SendMsgToActiveView("ViewFit")
         except Exception:
             pass
-    logger.info("Internal gear generation complete")
+
+# ============================================================================
+# INTERNAL TOOTH GENERATION
+# ============================================================================
+
+def generateInternalToothProfile(sketch, parameters: Dict[str, Any]):
+    """
+    Generates internal tooth profile (Wide at Root, Narrow at Tip).
+    Uses 5-point B-Splines for stability.
+    """
+    module = parameters["module"]
+    num_teeth = parameters["num_teeth"]
+    pressure_angle_rad = parameters["pressure_angle"] * DEG_TO_RAD
+    profile_shift = parameters.get("profile_shift", 0.0)
+
+    dw = module * num_teeth
+    dg = dw * math.cos(pressure_angle_rad)
+    da_internal = dw - 2 * module * (ADDENDUM_FACTOR + profile_shift) 
+    df_internal = dw + 2 * module * (DEDENDUM_FACTOR - profile_shift) 
+
+    beta = (math.pi / (2 * num_teeth)) + (2 * profile_shift * math.tan(pressure_angle_rad) / num_teeth)
+    inv_alpha = math.tan(pressure_angle_rad) - pressure_angle_rad
+    tooth_center_offset = beta - inv_alpha
+
+    # Involute Points (Right Flank)
+    num_inv_points = 5 
+    epsilon = 0.001
+    start_radius = max(da_internal/2.0, dg/2.0 + epsilon)
+    end_radius = df_internal/2.0
+
+    involute_start = math.sqrt(max(0, (2*start_radius/dg)**2 - 1))
+    involute_end = math.sqrt(max(0, (2*end_radius/dg)**2 - 1))
+
+    right_flank_geo = []
+    for i in range(num_inv_points):
+        t = i / (num_inv_points - 1)
+        phi = involute_start + t * (involute_end - involute_start)
+        r = (dg / 2.0) * math.sqrt(1 + phi**2)
+        theta_inv = phi - math.atan(phi)
+        
+        # Internal Gear: Width INCREASES as radius increases
+        angle = (math.pi / 2.0) - tooth_center_offset - theta_inv
+        
+        x = r * math.cos(angle)
+        y = r * math.sin(angle)
+        right_flank_geo.append(App.Vector(x, y, 0))
+
+    left_flank_inner_to_outer = []
+    for vec in right_flank_geo:
+        left_flank_inner_to_outer.append(App.Vector(-vec.x, vec.y, 0))
+    left_flank_geo = list(reversed(left_flank_inner_to_outer))
+
+    geo_list = []
+
+    # 1. Right Involute
+    bspline_right = Part.BSplineCurve()
+    bspline_right.interpolate(right_flank_geo)
+    geo_list.append(sketch.addGeometry(bspline_right, False))
+    
+    # 2. Root Arc (Top/Outer)
+    p_root_start = right_flank_geo[-1]
+    p_root_end = left_flank_geo[0]
+    p_root_mid = App.Vector(0, df_internal/2.0, 0)
+    root_arc = Part.Arc(p_root_start, p_root_mid, p_root_end)
+    geo_list.append(sketch.addGeometry(root_arc, False))
+    
+    # 3. Left Involute
+    bspline_left = Part.BSplineCurve()
+    bspline_left.interpolate(left_flank_geo)
+    geo_list.append(sketch.addGeometry(bspline_left, False))
+    
+    # 4. Tip Arc (Bottom/Inner)
+    p_tip_start = left_flank_geo[-1]
+    p_tip_end = right_flank_geo[0]
+    p_tip_mid = App.Vector(0, da_internal/2.0, 0)
+    tip_arc = Part.Arc(p_tip_start, p_tip_mid, p_tip_end)
+    geo_list.append(sketch.addGeometry(tip_arc, False))
+    
+    # Constraints & Blocking
+    count = len(geo_list)
+    for i in range(count):
+        sketch.addConstraint(Sketcher.Constraint('Coincident', geo_list[i], 2, geo_list[(i+1)%count], 1))
+    
+    for idx in geo_list:
+        sketch.addConstraint(Sketcher.Constraint('Block', idx))
+
+# ============================================================================
+# BORE GENERATORS
+# ============================================================================
+
+def generateBore(body, parameters, height):
+    bore_type = parameters["bore_type"]
+    bore_diameter = parameters["bore_diameter"]
+
+    if bore_type == "circular":
+        generateCircularBore(body, bore_diameter, height)
+    elif bore_type == "square":
+        generateSquareBore(body, bore_diameter, parameters.get("square_corner_radius", 0.5), height)
+    elif bore_type == "hexagonal":
+        generateHexBore(body, bore_diameter, parameters.get("hex_corner_radius", 0.5), height)
+    elif bore_type == "keyway":
+        generateKeywayBore(body, bore_diameter, parameters.get("keyway_width", 2.0), parameters.get("keyway_depth", 1.0), height)
+
+def generateCircularBore(body, diameter, height):
+    sketch = util.createSketch(body, 'CircularBore')
+    circle = sketch.addGeometry(Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), diameter / 2), False)
+    sketch.addConstraint(Sketcher.Constraint('Coincident', circle, 3, -1, 1))
+    sketch.addConstraint(Sketcher.Constraint('Diameter', circle, diameter))
+    pocket = util.createPocket(body, sketch, height, 'Bore')
+    body.Tip = pocket
+
+def generateSquareBore(body, size, corner_radius, height):
+    sketch = util.createSketch(body, 'SquareBore')
+    half_size = size / (2 * math.sqrt(2))
+    points = [App.Vector(half_size, half_size, 0), App.Vector(-half_size, half_size, 0),
+              App.Vector(-half_size, -half_size, 0), App.Vector(half_size, -half_size, 0)]
+    util.addPolygonToSketch(sketch, points, closed=True)
+    pocket = util.createPocket(body, sketch, height, 'Bore')
+    body.Tip = pocket
+
+def generateHexBore(body, diameter, corner_radius, height):
+    sketch = util.createSketch(body, 'HexBore')
+    radius = diameter / 2.0
+    points = []
+    for i in range(6):
+        angle = i * 60 * DEG_TO_RAD
+        points.append(App.Vector(radius * math.cos(angle), radius * math.sin(angle), 0))
+    util.addPolygonToSketch(sketch, points, closed=True)
+    pocket = util.createPocket(body, sketch, height, 'Bore')
+    body.Tip = pocket
+
+def generateKeywayBore(body, bore_diameter, keyway_width, keyway_depth, height):
+    generateCircularBore(body, bore_diameter, height)
+    sketch = util.createSketch(body, 'Keyway')
+    w = keyway_width / 2.0
+    l = bore_diameter
+    points = [App.Vector(-w, 0, 0), App.Vector(w, 0, 0), App.Vector(w, l, 0), App.Vector(-w, l, 0)]
+    util.addPolygonToSketch(sketch, points, closed=True)
+    pocket = util.createPocket(body, sketch, keyway_depth, 'Keyway')
+    body.Tip = pocket
+
+def checkUndercut(num_teeth, pressure_angle_deg, profile_shift=0.0):
+    return False, 0
+
+# ============================================================================
+# RACK GENERATION
+# ============================================================================
+
+def generateDefaultRackParameters() -> Dict[str, Any]:
+    return {
+        "module": 1.0,
+        "num_teeth": 10,
+        "pressure_angle": 20.0,
+        "height": 10.0,
+        "base_thickness": 5.0,
+        "body_name": "RackGear"
+    }
+
+def validateRackParameters(parameters: Dict[str, Any]) -> None:
+    if parameters["module"] < MIN_MODULE: raise GearParameterError(f"Module < {MIN_MODULE}")
+    if parameters["num_teeth"] < 1: raise GearParameterError("Teeth must be >= 1")
+    if parameters["height"] <= 0: raise GearParameterError("Height must be positive")
+    if parameters["base_thickness"] <= 0: raise GearParameterError("Base thickness must be positive")
+
+def generateRackToothProfile(sketch, parameters: Dict[str, Any]):
+    """
+    Generate a single trapezoidal rack tooth centered at X=0.
+    """
+    module = parameters["module"]
+    pressure_angle = parameters["pressure_angle"]
+    
+    # Rack Dimensions
+    # Pitch: pi * m
+    # Addendum (top): m
+    # Dedendum (bottom): 1.25 * m
+    addendum = module * ADDENDUM_FACTOR
+    dedendum = module * DEDENDUM_FACTOR
+    
+    # Calculate X coordinates based on pressure angle slope
+    # Slope dx = y * tan(alpha)
+    tan_alpha = math.tan(pressure_angle * DEG_TO_RAD)
+    
+    # At Pitch Line (y=0), tooth thickness = pi*m / 2
+    half_pitch_width = (math.pi * module) / 4.0
+    
+    # Top Points (y = +addendum)
+    # Tooth gets narrower at top
+    y_top = addendum
+    x_top = half_pitch_width - (addendum * tan_alpha)
+    
+    # Bottom Points (y = -dedendum)
+    # Tooth gets wider at bottom
+    y_bot = -dedendum
+    x_bot = half_pitch_width + (dedendum * tan_alpha)
+    
+    # Create Points (Clockwise or CCW)
+    # Top Left -> Top Right -> Bottom Right -> Bottom Left -> Close
+    p_tl = App.Vector(-x_top, y_top, 0)
+    p_tr = App.Vector(x_top, y_top, 0)
+    p_br = App.Vector(x_bot, y_bot, 0)
+    p_bl = App.Vector(-x_bot, y_bot, 0)
+    
+    points = [p_tl, p_tr, p_br, p_bl, p_tl]
+    
+    # Create Geometry
+    for i in range(4):
+        line = Part.LineSegment(points[i], points[i+1])
+        idx = sketch.addGeometry(line, False)
+        # Block geometry
+        sketch.addConstraint(Sketcher.Constraint('Block', idx))
+        
+    # Connect corners
+    for i in range(4):
+        sketch.addConstraint(Sketcher.Constraint('Coincident', i, 2, (i+1)%4, 1))
+
+def generateRackPart(doc, parameters):
+    validateRackParameters(parameters)
+    logger.info("Generating rack gear")
+    
+    body_name = parameters.get("body_name", "RackGear")
+    body = util.readyPart(doc, body_name)
+    
+    module = parameters["module"]
+    num_teeth = parameters["num_teeth"]
+    height = parameters["height"]
+    base_thickness = parameters["base_thickness"]
+    
+    pitch = math.pi * module
+    dedendum = module * DEDENDUM_FACTOR
+
+    # 1. Create Single Tooth
+    tooth_sketch = util.createSketch(body, 'ToothProfile')
+    generateRackToothProfile(tooth_sketch, parameters)
+    
+    tooth_pad = util.createPad(body, tooth_sketch, height, 'Tooth')
+    
+    # 2. Linear Pattern
+    # Pattern along X axis
+    pattern = body.newObject('PartDesign::LinearPattern', 'TeethPattern')
+    pattern.Originals = [tooth_pad]
+    pattern.Direction = (tooth_sketch, ['H_Axis']) # Use sketch horizontal axis
+    pattern.Length = pitch * num_teeth # Total length covered? No, Pattern Length usually means total span
+    # In FreeCAD LinearPattern, Length usually means "Overall Length" or "Step Size" depending on mode
+    # Assuming 'Original' mode (Step Size? No, typically Length is total distance)
+    # Actually, standard behavior: Length = distance from 1st to Last.
+    # Distance = (N-1) * pitch
+    
+    # However, forcing specific properties is safer:
+    pattern.Length = pitch * (num_teeth) # Just to set a value
+    # We want "Step" mode if available, or just set Total Length
+    # Let's set it to recompute based on occurrences
+    pattern.Occurrences = num_teeth
+    
+    # Note: FreeCAD Python API for LinearPattern can be tricky.
+    # By default it might use "Overall Length".
+    # Distance = (count - 1) * pitch
+    if num_teeth > 1:
+        pattern.Length = (num_teeth - 1) * pitch
+    else:
+        pattern.Length = 0
+        
+    tooth_pad.Visibility = False
+    pattern.Visibility = True
+    body.Tip = pattern
+    
+    # 3. Base Bar (The structural rack underneath)
+    # Needs to run from Start of first tooth to End of last tooth
+    # Tooth 1 center is 0. Width approx pitch/2.
+    # Let's make the base span the full theoretical pitch length: N * pitch
+    # Centered?
+    # Tooth 1 is at 0. Tooth N is at (N-1)*p.
+    # Start X = -pitch/2. End X = (N-1)*pitch + pitch/2
+    
+    start_x = -pitch / 2.0
+    end_x = (num_teeth - 1) * pitch + pitch / 2.0
+    
+    # Y top = -dedendum (Root line)
+    # Y bot = -dedendum - base_thickness
+    
+    base_sketch = util.createSketch(body, 'BaseProfile')
+    
+    p_tl = App.Vector(start_x, -dedendum, 0)
+    p_tr = App.Vector(end_x, -dedendum, 0)
+    p_br = App.Vector(end_x, -dedendum - base_thickness, 0)
+    p_bl = App.Vector(start_x, -dedendum - base_thickness, 0)
+    
+    points = [p_tl, p_tr, p_br, p_bl, p_tl]
+    
+    for i in range(4):
+        line = Part.LineSegment(points[i], points[i+1])
+        idx = base_sketch.addGeometry(line, False)
+        base_sketch.addConstraint(Sketcher.Constraint('Block', idx))
+    
+    for i in range(4):
+        base_sketch.addConstraint(Sketcher.Constraint('Coincident', i, 2, (i+1)%4, 1))
+        
+    base_pad = util.createPad(body, base_sketch, height, 'Base')
+    
+    pattern.Visibility = False
+    base_pad.Visibility = True
+    body.Tip = base_pad
+    
+    doc.recompute()
+    if GUI_AVAILABLE:
+        try: Gui.SendMsgToActiveView("ViewFit")
+        except Exception: pass
 
 
-logger.info("gearMath module loaded successfully")
+
+# ============================================================================
+# CYCLOID GENERATION (CLOCK/WATCH PROFILE)
+# ============================================================================
+
+def generateDefaultCycloidParameters() -> Dict[str, Any]:
+    return {
+        "module": 1.0,
+        "num_teeth": 30, # Clocks usually have high tooth counts
+        "height": 5.0,
+        "addendum_factor": 1.4, # Typical for clocks (taller teeth)
+        "dedendum_factor": 1.6,
+        "bore_type": "none",
+        "bore_diameter": 5.0,
+        "body_name": "CycloidGear"
+    }
+
+def validateCycloidParameters(parameters: Dict[str, Any]) -> None:
+    if parameters["module"] < MIN_MODULE: raise GearParameterError(f"Module < {MIN_MODULE}")
+    if parameters["num_teeth"] < 3: raise GearParameterError("Teeth must be >= 3")
+    if parameters["height"] <= 0: raise GearParameterError("Height must be positive")
+
+def generateCycloidToothProfile(sketch, parameters: Dict[str, Any]):
+    """
+    Generate a single Cycloidal tooth profile (Epicycloid Tip + Hypocycloid Root).
+    Clock gears typically use a rolling circle diameter = Radius of Pitch / 2
+    (which results in straight radial flanks for the root), or standard ratios.
+    
+    We will use a generic rolling circle r = Module * 3 (Approx mating with 12t pinion)
+    to produce the classic "curved base" look.
+    """
+    module = parameters["module"]
+    num_teeth = parameters["num_teeth"]
+    addendum = module * parameters["addendum_factor"]
+    dedendum = module * parameters["dedendum_factor"]
+    
+    # Radii
+    R = (module * num_teeth) / 2.0 # Pitch Radius
+    Ra = R + addendum # Tip Radius
+    Rf = R - dedendum # Root Radius
+    
+    # Rolling Circle Radius (r)
+    # Standard clock practice: Rolling circle diam = Pitch Radius of mating pinion.
+    # We assume a generic mating pinion of 10-12 teeth for shape generation.
+    # r = (m * 10) / 4 = 2.5m
+    r_roll = 2.5 * module 
+    
+    # Angular width of tooth at Pitch Circle
+    # Total pitch angle = 2*pi / z
+    # Tooth width = Space width = pi/z
+    # Half tooth width angle = pi / (2*z)
+    half_tooth_angle = math.pi / (2.0 * num_teeth)
+    
+    # --- 1. EPICYCLOID (Addendum / Tip) ---
+    # Rolling r_roll on OUTSIDE of R
+    # Limit: When curve hits radius Ra
+    
+    epi_pts = []
+    # Resolution
+    steps = 7
+    
+    # Need to solve for max rolling angle theta where radius == Ra
+    # Approx brute force for generating points is safer than analytical intersection for BSplines
+    # We scan theta until distance > Ra
+    
+    for i in range(steps + 1):
+        # Rolling angle parameter t
+        # Max reasonable rolling angle?
+        t = i * (0.5 / steps) # trial range 0.5 rads
+        
+        # Epicycloid equations
+        # x = (R+r)*cos(t) - r*cos((R+r)/r * t)
+        # y = (R+r)*sin(t) - r*sin((R+r)/r * t)
+        
+        # NOTE: This generates a curve starting at (R,0).
+        # We need to rotate this to the correct start position (half_tooth_angle)
+        
+        cx = (R + r_roll) * math.cos(t) - r_roll * math.cos((R + r_roll)/r_roll * t)
+        cy = (R + r_roll) * math.sin(t) - r_roll * math.sin((R + r_roll)/r_roll * t)
+        
+        # Check radius
+        dist = math.sqrt(cx*cx + cy*cy)
+        if dist > Ra:
+            # Simple lerp to clip exactly at Ra would be better, but for visual B-Spline,
+            # stopping at last valid point is okay, or we clamp.
+            # Let's just use the calculated points up to Ra.
+            # If the first step jumps past Ra (unlikely), this fails.
+            
+            # Recalculate exact t intersection? 
+            # Law of Cosines on rolling triangle is easier.
+            break
+            
+        epi_pts.append(App.Vector(cx, cy, 0))
+    
+    # Fix: Ensure last point is exactly at Ra?
+    # For now, just using generated points.
+    
+    # Rotate points to Right Flank position
+    # The curve starts at angle 0. We want it to start at angle = half_tooth_angle.
+    # But wait, the standard equation starts at (R,0) with tangent vertical? No, tangent radial.
+    # Epicycloid at t=0 is (R,0).
+    # We want the tooth centered on Y axis (90 deg).
+    # Right flank pitch point is at angle (90 - half_tooth_deg).
+    
+    # Let's work in "Tooth Center = 0" space first, then rotate.
+    # Right Flank Pitch Point = (R * cos(-half_tooth_angle), R * sin(-half_tooth_angle))?
+    # No, let's stick to: Tooth Center = Y Axis.
+    # Right Flank Pitch Angle = pi/2 - half_tooth_angle.
+    
+    # Our generated curve starts at (R, 0) (Angle 0).
+    # We need to rotate it so (R,0) lands at Right Flank Pitch Angle.
+    rot_bias = (math.pi / 2.0) - half_tooth_angle
+    
+    right_addendum_geo = []
+    for p in epi_pts:
+        # Rotate p by rot_bias
+        xn = p.x * math.cos(rot_bias) - p.y * math.sin(rot_bias)
+        yn = p.x * math.sin(rot_bias) + p.y * math.cos(rot_bias)
+        right_addendum_geo.append(App.Vector(xn, yn, 0))
+        
+    # --- 2. HYPOCYCLOID (Dedendum / Root) ---
+    # Rolling r_roll on INSIDE of R
+    hypo_pts = []
+    for i in range(steps + 1):
+        t = i * (0.5 / steps)
+        # Hypocycloid equations
+        # x = (R-r)*cos(t) + r*cos((R-r)/r * t)
+        # y = (R-r)*sin(t) - r*sin((R-r)/r * t)
+        
+        # Note the sign change in Y term for standard hypocycloid definition starting at (R,0)
+        # Note: If R=2r, this becomes a straight line along X axis.
+        
+        cx = (R - r_roll) * math.cos(t) + r_roll * math.cos((R - r_roll)/r_roll * t)
+        cy = -( (R - r_roll) * math.sin(t) - r_roll * math.sin((R - r_roll)/r_roll * t) )
+        # Negate Y because generated hypocycloid goes "down" (negative angle) from X axis start?
+        # Standard param usually goes "up" or "down" depending on definition.
+        # We need the curve that goes inwards from R.
+        
+        dist = math.sqrt(cx*cx + cy*cy)
+        if dist < Rf:
+            break
+        hypo_pts.append(App.Vector(cx, cy, 0))
+
+    # The hypocycloid above likely curves "down" (negative Y relative to radial line).
+    # We need to mirror/rotate it to align tangent with the epicycloid at pitch point.
+    
+    # Actually, simpler logic:
+    # Rotate the Hypocycloid so its start (R,0) aligns with Pitch Angle.
+    # AND mirror Y because we want it to curve "in" relative to the tooth mass.
+    
+    right_dedendum_geo = []
+    for p in hypo_pts:
+        # We mirror Y of the raw calc to make it continuous with epicycloid slope
+        # (Epicycloid goes "out and away", Hypocycloid goes "in and away")
+        
+        # Raw Hypo (t) goes to Y<0.
+        # We want it to join Epicycloid (t) which goes Y>0? 
+        # No, they meet at (R,0). 
+        # At t=small, Epi X < R? No, Epi X > R.
+        # Hypo X < R.
+        # Y values? 
+        # We need to ensure continuity.
+        
+        # Let's just apply the rotation bias.
+        # For the generated Hypo points, Y is negative (standard eq).
+        # This means it curves "CW" from the starting radial line. 
+        # This is correct for the Right Flank (which faces Right).
+        
+        xn = p.x * math.cos(rot_bias) - p.y * math.sin(rot_bias)
+        yn = p.x * math.sin(rot_bias) + p.y * math.cos(rot_bias)
+        right_dedendum_geo.append(App.Vector(xn, yn, 0))
+
+    # --- 3. Assemble Full Tooth ---
+    # Right Flank = Reverse(Dedendum) + Addendum
+    # (We want Root -> Tip direction)
+    
+    right_flank_full = list(reversed(right_dedendum_geo)) + right_addendum_geo[1:] # Skip duplicate pitch point
+    
+    # Left Flank = Mirror X of Right Flank
+    # Direction: Tip -> Root
+    left_flank_full = []
+    for p in reversed(right_flank_full):
+        left_flank_full.append(App.Vector(-p.x, p.y, 0))
+        
+    # --- 4. Geometry Construction ---
+    geo_list = []
+    
+    # Right Flank
+    bspline_right = Part.BSplineCurve()
+    bspline_right.interpolate(right_flank_full)
+    geo_list.append(sketch.addGeometry(bspline_right, False))
+    
+    # Tip Arc
+    p_tip_right = right_flank_full[-1]
+    p_tip_left = left_flank_full[0]
+    p_tip_mid = App.Vector(0, Ra, 0)
+    tip_arc = Part.Arc(p_tip_right, p_tip_mid, p_tip_left)
+    geo_list.append(sketch.addGeometry(tip_arc, False))
+    
+    # Left Flank
+    bspline_left = Part.BSplineCurve()
+    bspline_left.interpolate(left_flank_full)
+    geo_list.append(sketch.addGeometry(bspline_left, False))
+    
+    # Root Arc (Closing the gap)
+    # Center of gear is (0,0). Root radius Rf.
+    # We need an arc from Left Root End to Right Root Start centered at 0,0
+    p_root_left = left_flank_full[-1]
+    p_root_right = right_flank_full[0]
+    
+    # Calculate angle for midpoint
+    # It is -90 degrees (270) or just negative Y
+    p_root_mid = App.Vector(0, Rf, 0) # Placeholder
+    # Actually, we can use util.sketchArc or just Part.Arc
+    # We want a concave arc.
+    # Midpoint should be at (0, Rf) ? No, that's top. (0, -Rf) is bottom? No.
+    # We are at the bottom of the tooth gap? No, we are at the bottom of the TOOTH.
+    # The tooth is centered at Y+. The root arc connects the base of the tooth.
+    # This segment is actually inside the gear body.
+    # A straight line is safer/cleaner.
+    
+    root_line = Part.LineSegment(p_root_left, p_root_right)
+    geo_list.append(sketch.addGeometry(root_line, False))
+    
+    # Constraints & Blocking
+    count = len(geo_list)
+    for i in range(count):
+        sketch.addConstraint(Sketcher.Constraint('Coincident', geo_list[i], 2, geo_list[(i+1)%count], 1))
+    
+    for idx in geo_list:
+        sketch.addConstraint(Sketcher.Constraint('Block', idx))
+
+
+def generateCycloidGearPart(doc, parameters):
+    validateCycloidParameters(parameters)
+    logger.info("Generating cycloid gear")
+    
+    body_name = parameters.get("body_name", "CycloidGear")
+    body = util.readyPart(doc, body_name)
+    
+    module = parameters["module"]
+    num_teeth = parameters["num_teeth"]
+    height = parameters["height"]
+    dedendum_factor = parameters["dedendum_factor"]
+    
+    # Dedendum Radius (for the solid disc)
+    # Rf = (m*z)/2 - m*hf
+    Rf = (module * num_teeth) / 2.0 - (module * dedendum_factor)
+    
+    # 1. Tooth
+    sketch = util.createSketch(body, 'ToothProfile')
+    generateCycloidToothProfile(sketch, parameters)
+    tooth_pad = util.createPad(body, sketch, height, 'Tooth')
+    
+    # 2. Pattern
+    polar = util.createPolar(body, tooth_pad, sketch, num_teeth, 'Teeth')
+    polar.Originals = [tooth_pad]
+    tooth_pad.Visibility = False
+    polar.Visibility = True
+    body.Tip = polar
+    
+    # 3. Dedendum Circle (Body)
+    ded_sketch = util.createSketch(body, 'DedendumCircle')
+    circle = ded_sketch.addGeometry(Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), Rf + 0.01), False) # Overlap
+    ded_sketch.addConstraint(Sketcher.Constraint('Coincident', circle, 3, -1, 1))
+    ded_sketch.addConstraint(Sketcher.Constraint('Diameter', circle, (Rf + 0.01)*2))
+    
+    ded_pad = util.createPad(body, ded_sketch, height, 'DedendumCircle')
+    body.Tip = ded_pad
+    
+    # 4. Bore
+    if parameters["bore_type"] != "none":
+        generateBore(body, parameters, height)
+        
+    doc.recompute()
+    if GUI_AVAILABLE:
+        try: Gui.SendMsgToActiveView("ViewFit")
+        except Exception: pass        

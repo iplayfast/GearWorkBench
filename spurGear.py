@@ -4,16 +4,8 @@ This module provides the FreeCAD command and FeaturePython object for
 creating parametric involute spur gears.
 
 Copyright 2025, Chris Bruner
-Version v0.1
+Version v0.1.3
 License LGPL V2.1
-Homepage https://github.com/iplayfast/GearWorkbench
-
-Style guide:
-def functions_are_lowercase(variables_as_well):
-
-class ClassesArePascalCase:
-
-SomeClass.some_variable
 """
 from __future__ import division
 
@@ -34,7 +26,7 @@ App.Console.PrintMessage(f"Spur Gear icon path: {mainIcon}\n")
 if not os.path.exists(mainIcon):
     App.Console.PrintWarning(f"Spur Gear icon not found at: {mainIcon}\n")
 
-version = 'Nov 14, 2025'
+version = 'Nov 30, 2025'
 
 
 def QT_TRANSLATE_NOOP(scope, text):
@@ -60,8 +52,21 @@ class SpurGearCreateObject():
         if not App.ActiveDocument:
             App.newDocument()
         doc = App.ActiveDocument
+        
+        # --- Generate Unique Body Name ---
+        base_name = "SpurGear"
+        unique_name = base_name
+        count = 1
+        while doc.getObject(unique_name):
+            unique_name = f"{base_name}{count:03d}"
+            count += 1
+            
         gear_obj = doc.addObject("Part::FeaturePython", "SpurGearParameters")
         spur_gear = SpurGear(gear_obj)
+        
+        # Assign unique name to the property so gearMath uses it
+        gear_obj.BodyName = unique_name
+        
         doc.recompute()
         FreeCADGui.SendMsgToActiveView("ViewFit")
         FreeCADGui.ActiveDocument.ActiveView.viewIsometric()
@@ -148,6 +153,12 @@ class SpurGear():
             "App::PropertyLength", "Height", "SpurGear",
             QT_TRANSLATE_NOOP("App::Property", "Gear thickness/height")
         ).Height = H["height"]
+        
+        # --- NEW: Body Name Property ---
+        obj.addProperty(
+            "App::PropertyString", "BodyName", "SpurGear",
+            QT_TRANSLATE_NOOP("App::Property", "Name of the generated body")
+        ).BodyName = H["body_name"]
 
         # Bore parameters
         obj.addProperty(
@@ -186,6 +197,9 @@ class SpurGear():
         self.Object = obj
         self.doc = App.ActiveDocument
         obj.Proxy = self
+
+        # Trigger initial calculation of read-only properties
+        self.onChanged(obj, "Module")
 
     def __getstate__(self):
         """Return object state for serialization."""
@@ -242,6 +256,7 @@ class SpurGear():
             "pressure_angle": float(self.Object.PressureAngle.Value),
             "profile_shift": float(self.Object.ProfileShift),
             "height": float(self.Object.Height.Value),
+            "body_name": str(self.Object.BodyName), # Pass body name to math
             "bore_type": str(self.Object.BoreType),
             "bore_diameter": float(self.Object.BoreDiameter.Value),
             "square_corner_radius": float(self.Object.SquareCornerRadius.Value),

@@ -1,22 +1,14 @@
-"""Internal Gear generator for FreeCAD
+"""Internal Spur Gear generator for FreeCAD
 
 This module provides the FreeCAD command and FeaturePython object for
-creating parametric involute internal gears (ring gears).
+creating parametric involute internal spur gears (ring gears).
 
 Internal gears have teeth pointing inward and mesh with external gears
 (commonly used in planetary gearboxes).
 
 Copyright 2025, Chris Bruner
-Version v0.1
+Version v0.1.3
 License LGPL V2.1
-Homepage https://github.com/iplayfast/GearWorkbench
-
-Style guide:
-def functions_are_lowercase(variables_as_well):
-
-class ClassesArePascalCase:
-
-SomeClass.some_variable
 """
 from __future__ import division
 
@@ -37,7 +29,7 @@ App.Console.PrintMessage(f"Internal Gear icon path: {mainIcon}\n")
 if not os.path.exists(mainIcon):
     App.Console.PrintWarning(f"Internal Gear icon not found at: {mainIcon}\n")
 
-version = 'Nov 28, 2025'
+version = 'Nov 30, 2025'
 
 
 def QT_TRANSLATE_NOOP(scope, text):
@@ -63,8 +55,21 @@ class InternalSpurGearCreateObject():
         if not App.ActiveDocument:
             App.newDocument()
         doc = App.ActiveDocument
+        
+        # --- Generate Unique Body Name ---
+        base_name = "InternalSpurGear"
+        unique_name = base_name
+        count = 1
+        while doc.getObject(unique_name):
+            unique_name = f"{base_name}{count:03d}"
+            count += 1
+            
         gear_obj = doc.addObject("Part::FeaturePython", "InternalSpurGearParameters")
         internal_gear = InternalSpurGear(gear_obj)
+        
+        # Assign unique name
+        gear_obj.BodyName = unique_name
+        
         doc.recompute()
         FreeCADGui.SendMsgToActiveView("ViewFit")
         FreeCADGui.ActiveDocument.ActiveView.viewIsometric()
@@ -156,6 +161,12 @@ class InternalSpurGear():
             "App::PropertyLength", "RimThickness", "InternalSpurGear",
             QT_TRANSLATE_NOOP("App::Property", "Thickness of outer rim beyond tooth roots")
         ).RimThickness = H["rim_thickness"]
+        
+        # --- NEW: Body Name Property ---
+        obj.addProperty(
+            "App::PropertyString", "BodyName", "InternalSpurGear",
+            QT_TRANSLATE_NOOP("App::Property", "Name of the generated body")
+        ).BodyName = H["body_name"]
 
         self.Type = 'InternalSpurGear'
         self.Object = obj
@@ -224,6 +235,7 @@ class InternalSpurGear():
             "profile_shift": float(self.Object.ProfileShift),
             "height": float(self.Object.Height.Value),
             "rim_thickness": float(self.Object.RimThickness.Value),
+            "body_name": str(self.Object.BodyName), # Pass body name
         }
         return parameters
 
