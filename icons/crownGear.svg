@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   xmlns="http://www.w3.org/2000/svg"
+   width="64"
+   height="64"
+   viewBox="0 0 64 64"
+   version="1.1">
+  <defs>
+    <style type="text/css">
+      .gear-body { fill:#4a90e2; stroke:#2c5aa0; stroke-width:2; }
+      .gear-hole { fill:#ffffff; }
+    </style>
+  </defs>
+
+  <!-- Crown gear - gear with teeth perpendicular to face -->
+  <g transform="translate(32,32)">
+    <!-- Main disc -->
+    <circle cx="0" cy="0" r="22" class="gear-body" />
+
+    <!-- Vertical teeth around edge (shown as rectangles on top) -->
+    <g class="gear-body">
+      <rect x="18" y="-24" width="4" height="8" rx="0.5" />
+      <rect x="18" y="-24" width="4" height="8" rx="0.5" transform="rotate(30)" />
+      <rect x="18" y="-24" width="4" height="8" rx="0.5" transform="rotate(60)" />
+      <rect x="18" y="-24" width="4" height="8" rx="0.5" transform="rotate(90)" />
+      <rect x="18" y="-24" width="4" height="8" rx="0.5" transform="rotate(120)" />
+      <rect x="18" y="-24" width="4" height="8" rx="0.5" transform="rotate(150)" />
+      <rect x="18" y="-24" width="4" height="8" rx="0.5" transform="rotate(180)" />
+      <rect x="18" y="-24" width="4" height="8" rx="0.5" transform="rotate(210)" />
+      <rect x="18" y="-24" width="4" height="8" rx="0.5" transform="rotate(240)" />
+      <rect x="18" y="-24" width="4" height="8" rx="0.5" transform="rotate(270)" />
+      <rect x="18" y="-24" width="4" height="8" rx="0.5" transform="rotate(300)" />
+      <rect x="18" y="-24" width="4" height="8" rx="0.5" transform="rotate(330)" />
+    </g>
+
+    <!-- Center hole -->
+    <circle cx="0" cy="0" r="6" class="gear-hole" />
+  </g>
+</svg>

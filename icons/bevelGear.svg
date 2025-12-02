@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   xmlns="http://www.w3.org/2000/svg"
+   width="64"
+   height="64"
+   viewBox="0 0 64 64"
+   version="1.1">
+  <defs>
+    <style type="text/css">
+      .gear-body { fill:#4a90e2; stroke:#2c5aa0; stroke-width:2; }
+      .gear-face { fill:#6ba5e7; stroke:#2c5aa0; stroke-width:1.5; }
+      .gear-hole { fill:#ffffff; }
+    </style>
+  </defs>
+
+  <!-- Bevel gear - conical gear shown in perspective -->
+  <g transform="translate(32,32)">
+    <!-- Conical body (perspective view) -->
+    <ellipse cx="0" cy="8" rx="20" ry="8" class="gear-body" />
+
+    <!-- Teeth around the cone (8 teeth, perspective) -->
+    <g class="gear-body">
+      <!-- Top teeth (smaller due to perspective) -->
+      <rect x="16" y="-12" width="8" height="4" rx="0.5" />
+      <rect x="16" y="-12" width="8" height="4" rx="0.5" transform="rotate(45)" />
+      <rect x="16" y="-12" width="8" height="4" rx="0.5" transform="rotate(90)" />
+      <rect x="16" y="-12" width="8" height="4" rx="0.5" transform="rotate(135)" />
+      <rect x="16" y="-12" width="8" height="4" rx="0.5" transform="rotate(180)" />
+      <rect x="16" y="-12" width="8" height="4" rx="0.5" transform="rotate(225)" />
+      <rect x="16" y="-12" width="8" height="4" rx="0.5" transform="rotate(270)" />
+      <rect x="16" y="-12" width="8" height="4" rx="0.5" transform="rotate(315)" />
+
+      <!-- Inner circle at top -->
+      <circle cx="0" cy="0" r="16" />
+    </g>
+
+    <!-- Top face (lighter) -->
+    <ellipse cx="0" cy="0" rx="16" ry="6" class="gear-face" />
+
+    <!-- Center hole -->
+    <ellipse cx="0" cy="0" rx="6" ry="2.5" class="gear-hole" />
+  </g>
+</svg>

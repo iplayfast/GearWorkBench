@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   xmlns="http://www.w3.org/2000/svg"
+   width="64"
+   height="64"
+   viewBox="0 0 64 64"
+   version="1.1">
+  <defs>
+    <style type="text/css">
+      .gear-body { fill:#4a90e2; stroke:#2c5aa0; stroke-width:2; }
+      .gear-hole { fill:#ffffff; }
+    </style>
+  </defs>
+
+  <!-- Cycloidal gear - distinctive lobed profile -->
+  <g transform="translate(32,32)" class="gear-body">
+    <!-- Central body with lobes -->
+    <circle cx="0" cy="0" r="10" />
+
+    <!-- Lobed teeth (6 lobes for cycloidal drive) -->
+    <ellipse cx="0" cy="-16" rx="4" ry="6" />
+    <ellipse cx="13.86" cy="-8" rx="4" ry="6" transform="rotate(60 32 32)" />
+    <ellipse cx="13.86" cy="8" rx="4" ry="6" transform="rotate(120 32 32)" />
+    <ellipse cx="0" cy="16" rx="4" ry="6" transform="rotate(180 32 32)" />
+    <ellipse cx="-13.86" cy="8" rx="4" ry="6" transform="rotate(240 32 32)" />
+    <ellipse cx="-13.86" cy="-8" rx="4" ry="6" transform="rotate(300 32 32)" />
+
+    <!-- Outer ring (part of cycloidal drive) -->
+    <circle cx="0" cy="0" r="20" fill="none" stroke="#2c5aa0" stroke-width="3" stroke-dasharray="3,2" />
+
+    <!-- Center hole (offset for cycloidal motion) -->
+    <circle cx="2" cy="0" r="4" class="gear-hole" />
+  </g>
+</svg>

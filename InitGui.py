@@ -28,6 +28,9 @@ import internalSpurGear  # Import internal gear module
 import rackGear  # Import rack gear module
 import cycloidGear  # Import cycloid gear module
 import cycloidRack  # Import cycloid rack module
+import bevelGear # Import bevel gear module
+import crownGear # Import crown gear module
+import wormGear # Import worm gear module
 
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, 'icons')
@@ -52,7 +55,10 @@ class GearWorkbenchWB(Workbench):
                            "InternalSpurGearCreateObject",
                            "RackGearCreateObject",
                            "CycloidGearCreateObject",
-                           "CycloidRackCreateObject"
+                           "CycloidRackCreateObject",
+                           "BevelGearCreateObject",
+                           "CrownGearCreateObject",
+                           "WormGearCreateObject"
                            ]
 
             # Verify command is available

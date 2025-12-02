@@ -928,9 +928,327 @@ def generateCycloidGearPart(doc, parameters):
     body.Tip = ded_pad
     
     # 4. Bore
-    if parameters["bore_type"] != "none":
-        generateBore(body, parameters, height)
+# ============================================================================
+# BEVEL & CROWN GEAR GENERATION
+# ============================================================================
+
+def validateBevelParameters(parameters: Dict[str, Any]) -> None:
+    if parameters["module"] < MIN_MODULE: raise GearParameterError(f"Module < {MIN_MODULE}")
+    if parameters["num_teeth"] < MIN_TEETH: raise GearParameterError(f"Teeth < {MIN_TEETH}")
+    if parameters["face_width"] <= 0: raise GearParameterError("Face width must be positive")
+    if parameters["pitch_angle"] <= 0 or parameters["pitch_angle"] > 90:
+        raise GearParameterError("Pitch angle must be between 0 and 90 degrees")
+
+def validateCrownParameters(parameters: Dict[str, Any]) -> None:
+    # Crown gear doesn't use pitch_angle, so we just check module/teeth
+    if parameters["module"] < MIN_MODULE: raise GearParameterError(f"Module < {MIN_MODULE}")
+    if parameters["num_teeth"] < MIN_TEETH: raise GearParameterError(f"Teeth < {MIN_TEETH}")
+    if parameters["face_width"] <= 0: raise GearParameterError("Face width must be positive")
+
+def generateBevelGearPart(doc, parameters):
+    validateBevelParameters(parameters)
+    body_name = parameters.get("body_name", "BevelGear")
+    body = util.readyPart(doc, body_name)
+
+    module = parameters["module"]
+    num_teeth = parameters["num_teeth"]
+    face_width = parameters["face_width"]
+    pitch_angle = parameters["pitch_angle"]
+    pressure_angle = parameters["pressure_angle"]
+    
+    # Geometry
+    r_pitch = (module * num_teeth) / 2.0
+    sin_delta = math.sin(pitch_angle * DEG_TO_RAD)
+    if sin_delta < 0.001: sin_delta = 0.001
+    cone_dist = r_pitch / sin_delta
+    
+    if face_width > cone_dist * 0.5:
+        face_width = cone_dist * 0.5
+        App.Console.PrintWarning(f"Face width clamped to {face_width}mm\n")
+
+    cone_dist_inner = cone_dist - face_width
+    scale_factor = cone_dist_inner / cone_dist
+    module_inner = module * scale_factor
+
+    z_outer = cone_dist
+    z_inner = cone_dist_inner
+
+    dedendum = module * DEDENDUM_FACTOR
+    dedendum_inner = module_inner * DEDENDUM_FACTOR
+    
+    r_root_outer = r_pitch - (dedendum * math.cos(pitch_angle * DEG_TO_RAD))
+    r_root_inner = (r_pitch * scale_factor) - (dedendum_inner * math.cos(pitch_angle * DEG_TO_RAD))
+    if r_root_outer < 0.1: r_root_outer = 0.1
+    if r_root_inner < 0.1: r_root_inner = 0.1
+
+    # Base Cone
+    sk_core_out = util.createSketch(body, 'CoreCircle_Outer')
+    sk_core_out.MapMode = 'Deactivated'
+    c1 = sk_core_out.addGeometry(Part.Circle(App.Vector(0,0,0), App.Vector(0,0,1), r_root_outer), False)
+    sk_core_out.addConstraint(Sketcher.Constraint('Diameter', c1, r_root_outer * 2))
+    sk_core_out.Placement = App.Placement(App.Vector(0, 0, z_outer), App.Rotation(0,0,0))
+    
+    sk_core_in = util.createSketch(body, 'CoreCircle_Inner')
+    sk_core_in.MapMode = 'Deactivated'
+    c2 = sk_core_in.addGeometry(Part.Circle(App.Vector(0,0,0), App.Vector(0,0,1), r_root_inner), False)
+    sk_core_in.addConstraint(Sketcher.Constraint('Diameter', c2, r_root_inner * 2))
+    sk_core_in.Placement = App.Placement(App.Vector(0, 0, z_inner), App.Rotation(0,0,0))
+    
+    base_loft = body.newObject('PartDesign::AdditiveLoft', 'BaseCone')
+    base_loft.Profile = sk_core_out
+    base_loft.Sections = [sk_core_in]
+    base_loft.Ruled = True
+    body.Tip = base_loft
+    
+    # Spiral Twist
+    spiral_angle = parameters.get("spiral_angle", 0.0)
+    twist_angle_deg = 0.0
+    if abs(spiral_angle) > 0.001:
+        cone_dist_mean = (cone_dist + cone_dist_inner) / 2.0
+        r_mean = cone_dist_mean * sin_delta
+        twist_arc = face_width * math.tan(spiral_angle * DEG_TO_RAD)
+        twist_angle_rad = twist_arc / r_mean
+        twist_angle_deg = twist_angle_rad * RAD_TO_DEG
+
+    # Tooth Profiles
+    params_outer = parameters.copy()
+    params_inner = parameters.copy()
+    params_inner["module"] = module_inner
+    
+    sk_tooth_out = util.createSketch(body, 'ToothProfile_Outer')
+    generateToothProfile(sk_tooth_out, params_outer)
+    sk_tooth_out.MapMode = 'Deactivated'
+    sk_tooth_out.Placement = App.Placement(App.Vector(0, 0, z_outer), App.Rotation(0,0,0))
+    
+    sk_tooth_in = util.createSketch(body, 'ToothProfile_Inner')
+    generateToothProfile(sk_tooth_in, params_inner)
+    sk_tooth_in.MapMode = 'Deactivated'
+    # Apply Twist Rotation
+    sk_tooth_in.Placement = App.Placement(App.Vector(0, 0, z_inner), App.Rotation(App.Vector(0,0,1), twist_angle_deg))
+    
+    # Loft Tooth
+    tooth_loft = body.newObject('PartDesign::AdditiveLoft', 'Tooth')
+    tooth_loft.Profile = sk_tooth_out
+    tooth_loft.Sections = [sk_tooth_in]
+    tooth_loft.Ruled = False 
+    
+    # Pattern
+    polar = util.createPolar(body, tooth_loft, sk_core_out, num_teeth, 'Teeth')
+    polar.Originals = [tooth_loft]
+    body.Tip = polar
+    
+    # Bore
+    if parameters.get("bore_type", "none") != "none":
+        z_outer_place = App.Placement(App.Vector(0, 0, z_outer), App.Rotation(0,0,0))
+        util.createBore(body, parameters, cone_dist + 10.0, placement=z_outer_place, reversed=False)
+
+    doc.recompute()
+    if GUI_AVAILABLE:
+        try: Gui.SendMsgToActiveView("ViewFit")
+        except Exception: pass
+
+def generateCrownGearPart(doc, parameters):
+    print("Generating Crown Gear...")
+    validateCrownParameters(parameters)
+    body_name = parameters.get("body_name", "CrownGear")
+    body = util.readyPart(doc, body_name)
+
+    module = parameters["module"]
+    num_teeth = parameters["num_teeth"]
+    face_width = parameters["face_width"]
+    
+    r_pitch = (module * num_teeth) / 2.0
+    r_outer = r_pitch
+    r_inner = r_outer - face_width
+    if r_inner < 1.0: r_inner = 1.0
+    
+    scale_factor = r_inner / r_outer
+    module_inner = module * scale_factor
+    
+    dedendum = module * DEDENDUM_FACTOR
+    base_thickness = parameters.get("height", 3 * module)
+
+    # Base Disk
+    sk_base = util.createSketch(body, 'BaseDisk')
+    sk_base.MapMode = 'Deactivated'
+    c_out = sk_base.addGeometry(Part.Circle(App.Vector(0,0,0), App.Vector(0,0,1), r_outer), False)
+    sk_base.addConstraint(Sketcher.Constraint('Diameter', c_out, r_outer * 2))
+    sk_base.Placement = App.Placement(App.Vector(0, 0, -dedendum), App.Rotation(0,0,0))
+    
+    pad_base = body.newObject('PartDesign::Pad', 'Base')
+    pad_base.Profile = sk_base
+    pad_base.Length = base_thickness
+    pad_base.Reversed = True 
+    body.Tip = pad_base
+
+    # Profiles
+    rot_placement = App.Rotation(90, 0, 90)
+    
+    # Twist
+    spiral_angle = parameters.get("spiral_angle", 0.0)
+    twist_angle_deg = 0.0
+    if abs(spiral_angle) > 0.001:
+        r_mean = (r_outer + r_inner) / 2.0
+        twist_arc = face_width * math.tan(spiral_angle * DEG_TO_RAD)
+        twist_angle_rad = twist_arc / r_mean
+        twist_angle_deg = twist_angle_rad * RAD_TO_DEG
+    
+    params_out = parameters.copy()
+    sk_tooth_out = util.createSketch(body, 'ToothProfile_Outer')
+    generateRackToothProfile(sk_tooth_out, params_out)
+    sk_tooth_out.MapMode = 'Deactivated'
+    sk_tooth_out.Placement = App.Placement(App.Vector(r_outer, 0, 0), rot_placement)
+    
+    params_in = parameters.copy()
+    params_in["module"] = module_inner
+    sk_tooth_in = util.createSketch(body, 'ToothProfile_Inner')
+    generateRackToothProfile(sk_tooth_in, params_in)
+    sk_tooth_in.MapMode = 'Deactivated'
+    
+    # Twisted Placement
+    rot_z = App.Rotation(App.Vector(0,0,1), twist_angle_deg)
+    final_pos = rot_z.multVec(App.Vector(r_inner, 0, 0))
+    final_rot = rot_z.multiply(rot_placement)
+    sk_tooth_in.Placement = App.Placement(final_pos, final_rot)
+    
+    # Loft
+    tooth_loft = body.newObject('PartDesign::AdditiveLoft', 'Tooth')
+    tooth_loft.Profile = sk_tooth_out
+    tooth_loft.Sections = [sk_tooth_in]
+    tooth_loft.Ruled = True
+    body.Tip = tooth_loft
+    
+    # Pattern
+    polar = util.createPolar(body, tooth_loft, sk_base, num_teeth, 'Teeth')
+    polar.Originals = [tooth_loft]
+    body.Tip = polar
+    
+    # Bore
+    if parameters.get("bore_type", "none") != "none":
+         z_top = dedendum + module + 10.0
+         top_place = App.Placement(App.Vector(0, 0, z_top), App.Rotation(0,0,0))
+         util.createBore(body, parameters, z_top + base_thickness + dedendum + 10.0, placement=top_place, reversed=False)
+
+    doc.recompute()
+    if GUI_AVAILABLE:
+        try: Gui.SendMsgToActiveView("ViewFit")
+        except Exception: pass
+
+# ============================================================================
+# WORM GEAR GENERATION
+# ============================================================================
+
+def validateWormParameters(parameters: Dict[str, Any]) -> None:
+    if parameters["module"] < MIN_MODULE: raise GearParameterError(f"Module < {MIN_MODULE}")
+    if parameters["worm_diameter"] <= 0: raise GearParameterError("Worm Diameter must be positive")
+    if parameters["length"] <= 0: raise GearParameterError("Length must be positive")
+
+def generateWormGearPart(doc, parameters):
+    print("Generating Worm Gear...")
+    validateWormParameters(parameters)
+    body_name = parameters.get("body_name", "WormGear")
+    body = util.readyPart(doc, body_name)
+
+    module = parameters["module"]
+    num_threads = parameters["num_threads"] # z1
+    worm_dia = parameters["worm_diameter"] # Pitch Diameter
+    length = parameters["length"]
+    pressure_angle = parameters["pressure_angle"]
+    right_handed = parameters["right_handed"]
+    
+    # Geometry Constants
+    addendum = module * ADDENDUM_FACTOR
+    dedendum = module * DEDENDUM_FACTOR
+    whole_depth = addendum + dedendum
+    
+    root_dia = worm_dia - 2 * dedendum
+    
+    pitch = math.pi * module
+    lead = pitch * num_threads
+    
+    # 1. Base Cylinder (Root)
+    sk_base = util.createSketch(body, 'RootShaft')
+    sk_base.MapMode = 'Deactivated'
+    c_base = sk_base.addGeometry(Part.Circle(App.Vector(0,0,0), App.Vector(0,0,1), root_dia/2), False)
+    sk_base.addConstraint(Sketcher.Constraint('Diameter', c_base, root_dia))
+    
+    pad_base = body.newObject('PartDesign::Pad', 'Base')
+    pad_base.Profile = sk_base
+    pad_base.Length = length
+    body.Tip = pad_base
+    
+    # 2. Thread Profile
+    # Standard FreeCAD Workflow: Attach Sketch to XZ Plane, Offset by Radius.
+    
+    sk_profile = util.createSketch(body, 'ThreadProfile')
+    
+    # Find XZ Plane
+    xz_plane = None
+    if hasattr(body, 'Origin') and body.Origin:
+        for child in body.Origin.Group:
+            if 'XZ' in child.Name or 'XZ' in child.Label:
+                xz_plane = child
+                break
+        # Fallback
+        if not xz_plane and len(body.Origin.Group) > 1:
+             xz_plane = body.Origin.Group[1]
+
+    if xz_plane:
+        sk_profile.AttachmentSupport = [(xz_plane, '')]
+        sk_profile.MapMode = 'ObjectXY' # Align sketch local system with plane
+        sk_profile.AttachmentOffset = App.Placement(App.Vector(root_dia/2, 0, 0), App.Rotation(0,0,0))
+    else:
+        # Fallback: Manual
+        sk_profile.MapMode = 'Deactivated'
+        sk_profile.Placement = App.Placement(App.Vector(root_dia/2, 0, 0), App.Rotation(App.Vector(1,0,0), 90))
+
+    # Coordinates: (Radial, Axial) -> (Sketch X, Sketch Y) on XZ Plane
+    tan_a = math.tan(pressure_angle * DEG_TO_RAD)
+    
+    # Axial Widths (Half-widths)
+    # At Root (Radial=0): Root is WIDER than pitch line.
+    hw_root = (pitch / 4.0) + (dedendum * tan_a)
+    
+    # At Tip (Radial=whole_depth): Tip is NARROWER than pitch line.
+    hw_tip = (pitch / 4.0) - (addendum * tan_a)
+    if hw_tip < 0: hw_tip = 0.01
+    
+    # P0: (0, hw_root)  -> X=0 (Radial start), Y=hw (Axial +)
+    p0 = App.Vector(0, hw_root, 0)
+    p1 = App.Vector(whole_depth, hw_tip, 0)
+    p2 = App.Vector(whole_depth, -hw_tip, 0)
+    p3 = App.Vector(0, -hw_root, 0)
+    
+    pts = [p0, p1, p2, p3, p0]
+    
+    for i in range(4):
+        line = Part.LineSegment(pts[i], pts[i+1])
+        sk_profile.addGeometry(line, False)
         
+    # 3. Helix
+    helix = body.newObject('PartDesign::AdditiveHelix', 'WormThread')
+    helix.Profile = sk_profile
+    helix.Pitch = lead 
+    helix.Height = length + 2*pitch
+    helix.Reversed = False
+    helix.LeftHanded = not right_handed
+    
+    # CORRECT AXIS LINK: Use Sketch V-Axis (Global Z)
+    helix.ReferenceAxis = (sk_profile, ['V_Axis'])
+    
+    body.Tip = helix
+    
+    # 4. Pattern (Multi-Start)
+    if num_threads > 1:
+        polar = util.createPolar(body, helix, None, num_threads, 'Threads')
+        # Fix axis
+        polar.Axis = (sk_base, ['N_Axis'])
+        body.Tip = polar
+
+    # 5. Bore
+    if parameters.get("bore_type", "none") != "none":
+         util.createBore(body, parameters, length + 10.0)
+
     doc.recompute()
     if GUI_AVAILABLE:
         try: Gui.SendMsgToActiveView("ViewFit")

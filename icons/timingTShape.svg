@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   xmlns="http://www.w3.org/2000/svg"
+   width="64"
+   height="64"
+   viewBox="0 0 64 64"
+   version="1.1">
+  <defs>
+    <style type="text/css">
+      .gear-body { fill:#4a90e2; stroke:#2c5aa0; stroke-width:2; }
+      .gear-hole { fill:#ffffff; }
+    </style>
+  </defs>
+
+  <!-- Timing belt T-shape profile -->
+  <g transform="translate(32,32)">
+    <g class="gear-body">
+      <!-- Inner ring -->
+      <circle cx="0" cy="0" r="14" />
+
+      <!-- T-shaped teeth (12 teeth) -->
+      <!-- Each tooth is a T-shape protruding outward -->
+      <g>
+        <rect x="14" y="-2" width="6" height="4" rx="0.5" />
+        <rect x="18" y="-4" width="3" height="8" rx="0.5" />
+      </g>
+      <g transform="rotate(30)">
+        <rect x="14" y="-2" width="6" height="4" rx="0.5" />
+        <rect x="18" y="-4" width="3" height="8" rx="0.5" />
+      </g>
+      <g transform="rotate(60)">
+        <rect x="14" y="-2" width="6" height="4" rx="0.5" />
+        <rect x="18" y="-4" width="3" height="8" rx="0.5" />
+      </g>
+      <g transform="rotate(90)">
+        <rect x="14" y="-2" width="6" height="4" rx="0.5" />
+        <rect x="18" y="-4" width="3" height="8" rx="0.5" />
+      </g>
+      <g transform="rotate(120)">
+        <rect x="14" y="-2" width="6" height="4" rx="0.5" />
+        <rect x="18" y="-4" width="3" height="8" rx="0.5" />
+      </g>
+      <g transform="rotate(150)">
+        <rect x="14" y="-2" width="6" height="4" rx="0.5" />
+        <rect x="18" y="-4" width="3" height="8" rx="0.5" />
+      </g>
+      <g transform="rotate(180)">
+        <rect x="14" y="-2" width="6" height="4" rx="0.5" />
+        <rect x="18" y="-4" width="3" height="8" rx="0.5" />
+      </g>
+      <g transform="rotate(210)">
+        <rect x="14" y="-2" width="6" height="4" rx="0.5" />
+        <rect x="18" y="-4" width="3" height="8" rx="0.5" />
+      </g>
+      <g transform="rotate(240)">
+        <rect x="14" y="-2" width="6" height="4" rx="0.5" />
+        <rect x="18" y="-4" width="3" height="8" rx="0.5" />
+      </g>
+      <g transform="rotate(270)">
+        <rect x="14" y="-2" width="6" height="4" rx="0.5" />
+        <rect x="18" y="-4" width="3" height="8" rx="0.5" />
+      </g>
+      <g transform="rotate(300)">
+        <rect x="14" y="-2" width="6" height="4" rx="0.5" />
+        <rect x="18" y="-4" width="3" height="8" rx="0.5" />
+      </g>
+      <g transform="rotate(330)">
+        <rect x="14" y="-2" width="6" height="4" rx="0.5" />
+        <rect x="18" y="-4" width="3" height="8" rx="0.5" />
+      </g>
+    </g>
+
+    <!-- Center hole -->
+    <circle cx="0" cy="0" r="6" class="gear-hole" />
+  </g>
+</svg>
