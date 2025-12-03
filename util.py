@@ -104,6 +104,18 @@ def toCart(r: float, a: float) -> Tuple[float, float]:
     return r * math.cos(a), r * math.sin(a)
 
 
+def mirrorPointsX(points: List[App.Vector]) -> List[App.Vector]:
+    """Mirror a list of points across the Y-axis (X -> -X).
+
+    Args:
+        points: List of FreeCAD Vectors
+
+    Returns:
+        New list of FreeCAD Vectors, mirrored and reversed
+    """
+    return [App.Vector(-p.x, p.y, p.z) for p in reversed(points)]
+
+
 # ============================================================================
 # Math Utilities
 # ============================================================================
@@ -434,7 +446,7 @@ def sketchLineByCoordinates(sketch, x1, y1, x2, y2, addConstrainLength=False, ad
     # 1. Define the start and end points
     p1 = App.Vector(x1, y1, 0.0)
     p2 = App.Vector(x2, y2, 0.0)
-    return sketchLine(sketch,p1,p2,addConstrainLength,addConstrainStart,addConstrainEnd,isConstruction)
+    return sketchLineByPoints(sketch,p1,p2,addConstrainLength,addConstrainStart,addConstrainEnd,isConstruction)
 
 def sketchArc(sketch, x, y, diameter, startAngle, endAngle, Name="", isConstruction=False):
     """Add an arc to a sketch with proper constraints and return key info.
@@ -516,16 +528,36 @@ def sketchCircle(sketch, x, y, diameter, last, Name="", isConstruction=False):
         else:
             cst = sketch.addConstraint(Sketcher.Constraint('DistanceY', c, 3, -1, 1, y))
 
-    if last != -1:
-        rad = sketch.addConstraint(Sketcher.Constraint('Equal', last, c))
-    else:
-        rad = sketch.addConstraint(Sketcher.Constraint('Diameter', c, diameter))
-        if Name != "":
-            sketch.renameConstraint(rad, Name)
+            if last != -1:
+                rad = sketch.addConstraint(Sketcher.Constraint('Equal', last, c))
+            else:
+                rad = sketch.addConstraint(Sketcher.Constraint('Diameter', c, diameter))
+                if Name != "":
+                    sketch.renameConstraint(rad, Name)
+        
+            if isConstruction:
+                sketch.toggleConstruction(c)
+            return c
 
-    if isConstruction:
-        sketch.toggleConstruction(c)
-    return c
+def finalizeSketchGeometry(sketch, geo_indices, closed=True, block=True):
+    """
+    Connects a list of geometry indices in a sketch with Coincident constraints
+    and optionally applies Block constraints.
+    """
+    count = len(geo_indices)
+    if count < 2: return
+
+    # Connect end of item i to start of item i+1
+    for i in range(count - 1):
+        sketch.addConstraint(Sketcher.Constraint('Coincident', geo_indices[i], 2, geo_indices[i+1], 1))
+    
+    # Close the loop
+    if closed:
+        sketch.addConstraint(Sketcher.Constraint('Coincident', geo_indices[count-1], 2, geo_indices[0], 1))
+
+    if block:
+        for idx in geo_indices:
+            sketch.addConstraint(Sketcher.Constraint('Block', idx))
 
 
 def sketchCircleOfCircles(sketch, circleRadius, outerCircleRadius, outerCircleCount, orgX, orgY, name):
@@ -545,7 +577,6 @@ def sketchCircleOfCircles(sketch, circleRadius, outerCircleRadius, outerCircleCo
         x = orgX + circleRadius * math.cos((2.0 * math.pi / outerCircleCount) * i)
         y = orgY + circleRadius * math.sin((2.0 * math.pi / outerCircleCount) * i)
         last = sketchCircle(sketch, x, y, outerCircleRadius, last, "")
-
 
 def parametricCircle(radius, segmentCount, segmentIndex):
     """Calculate position of a hole in a circular pattern.

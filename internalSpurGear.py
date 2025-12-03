@@ -25,7 +25,7 @@ global mainIcon
 mainIcon = os.path.join(smWB_icons_path, 'internalSpurGear.svg')
 
 # Debug: print icon path
-App.Console.PrintMessage(f"Internal Gear icon path: {mainIcon}\n")
+# App.Console.PrintMessage(f"Internal Gear icon path: {mainIcon}\n")
 if not os.path.exists(mainIcon):
     App.Console.PrintWarning(f"Internal Gear icon not found at: {mainIcon}\n")
 
@@ -253,7 +253,7 @@ class InternalSpurGear():
                 gearMath.generateInternalSpurGearPart(App.ActiveDocument, parameters)
                 self.Dirty = False
                 App.ActiveDocument.recompute()
-                App.Console.PrintMessage("Internal gear generated successfully\n")
+                # App.Console.PrintMessage("Internal gear generated successfully\n")
             except gearMath.GearParameterError as e:
                 App.Console.PrintError(f"Internal Gear Parameter Error: {str(e)}\n")
                 App.Console.PrintError("Please adjust the parameters and try again.\n")
@@ -415,7 +415,7 @@ class ViewProviderInternalSpurGear:
 # Register command with FreeCAD
 try:
     FreeCADGui.addCommand('InternalSpurGearCreateObject', InternalSpurGearCreateObject())
-    App.Console.PrintMessage("InternalSpurGearCreateObject command registered successfully\n")
+    # App.Console.PrintMessage("InternalSpurGearCreateObject command registered successfully\n")
 except Exception as e:
     App.Console.PrintError(f"Failed to register InternalSpurGearCreateObject: {e}\n")
     import traceback

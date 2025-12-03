@@ -22,7 +22,7 @@ global mainIcon
 mainIcon = os.path.join(smWB_icons_path, 'spurGear.svg')
 
 # Debug: print icon path
-App.Console.PrintMessage(f"Spur Gear icon path: {mainIcon}\n")
+# App.Console.PrintMessage(f"Spur Gear icon path: {mainIcon}\n")
 if not os.path.exists(mainIcon):
     App.Console.PrintWarning(f"Spur Gear icon not found at: {mainIcon}\n")
 
@@ -280,7 +280,7 @@ class SpurGear():
                 gearMath.generateSpurGearPart(App.ActiveDocument, parameters)
                 self.Dirty = False
                 App.ActiveDocument.recompute()
-                App.Console.PrintMessage("Spur gear generated successfully\n")
+                # App.Console.PrintMessage("Spur gear generated successfully\n")
             except gearMath.GearParameterError as e:
                 App.Console.PrintError(f"Spur Gear Parameter Error: {str(e)}\n")
                 App.Console.PrintError("Please adjust the parameters and try again.\n")
@@ -442,7 +442,7 @@ class ViewProviderSpurGear:
 # Register command with FreeCAD
 try:
     FreeCADGui.addCommand('SpurGearCreateObject', SpurGearCreateObject())
-    App.Console.PrintMessage("SpurGearCreateObject command registered successfully\n")
+    # App.Console.PrintMessage("SpurGearCreateObject command registered successfully\n")
 except Exception as e:
     App.Console.PrintError(f"Failed to register SpurGearCreateObject: {e}\n")
     import traceback

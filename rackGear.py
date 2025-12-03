@@ -23,7 +23,7 @@ global mainIcon
 mainIcon = os.path.join(smWB_icons_path, 'rackGear.svg')
 
 # Debug: print icon path
-App.Console.PrintMessage(f"Rack Gear icon path: {mainIcon}\n")
+# App.Console.PrintMessage(f"Rack Gear icon path: {mainIcon}\n")
 if not os.path.exists(mainIcon):
     App.Console.PrintWarning(f"Rack Gear icon not found at: {mainIcon}\n")
 
@@ -165,8 +165,8 @@ class RackGear():
                 gearMath.generateRackPart(App.ActiveDocument, parameters)
                 self.Dirty = False
                 App.ActiveDocument.recompute()
-                App.Console.PrintMessage("Rack gear generated successfully\n")
-            except Exception as e:
+                # App.Console.PrintMessage("Rack gear generated successfully\n")
+            except gearMath.GearParameterError as e:
                 App.Console.PrintError(f"Rack Gear Error: {str(e)}\n")
 
     def execute(self, obj):

@@ -22,7 +22,7 @@ global mainIcon
 mainIcon = os.path.join(smWB_icons_path, 'cycloidGear.svg')
 
 # Debug: print icon path
-App.Console.PrintMessage(f"Cycloid Gear icon path: {mainIcon}\n")
+# App.Console.PrintMessage(f"Cycloid Gear icon path: {mainIcon}\n")
 if not os.path.exists(mainIcon):
     App.Console.PrintWarning(f"Cycloid Gear icon not found at: {mainIcon}\n")
 
@@ -147,7 +147,7 @@ class CycloidGear():
                 gearMath.generateCycloidGearPart(App.ActiveDocument, parameters)
                 self.Dirty = False
                 App.ActiveDocument.recompute()
-                App.Console.PrintMessage("Cycloid gear generated successfully\n")
+                # App.Console.PrintMessage("Cycloid gear generated successfully\n")
             except Exception as e:
                 App.Console.PrintError(f"Cycloid Gear Error: {str(e)}\n")
                 import traceback

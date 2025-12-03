@@ -39,7 +39,6 @@ class WormGearCreateObject():
         gear = WormGear(gear_obj)
         gear_obj.BodyName = unique_name
         
-        gear.force_Recompute()
         doc.recompute()
         FreeCADGui.SendMsgToActiveView("ViewFit")
         return gear
@@ -56,7 +55,9 @@ class WormGear():
         obj.addProperty("App::PropertyLength", "WormDiameter", "WormGear", QT_TRANSLATE_NOOP("App::Property", "Pitch Diameter of the worm")).WormDiameter = 20.0
         obj.addProperty("App::PropertyInteger", "NumberOfThreads", "WormGear", QT_TRANSLATE_NOOP("App::Property", "Number of threads (starts)")).NumberOfThreads = 1
         obj.addProperty("App::PropertyAngle", "PressureAngle", "WormGear", QT_TRANSLATE_NOOP("App::Property", "Pressure angle")).PressureAngle = 20.0
-        obj.addProperty("App::PropertyLength", "Length", "WormGear", QT_TRANSLATE_NOOP("App::Property", "Length of the worm")).Length = 50.0
+        obj.addProperty("App::PropertyLength", "Length", "WormGear", QT_TRANSLATE_NOOP("App::Property", "Total length of the worm cylinder")).Length = 50.0
+        obj.addProperty("App::PropertyLength", "HelixLength", "WormGear", QT_TRANSLATE_NOOP("App::Property", "Length of the threaded portion")).HelixLength = 40.0
+        obj.addProperty("App::PropertyBool", "CenterHelix", "WormGear", QT_TRANSLATE_NOOP("App::Property", "Center the helix along the cylinder")).CenterHelix = True
         obj.addProperty("App::PropertyBool", "RightHanded", "WormGear", QT_TRANSLATE_NOOP("App::Property", "True for Right-handed, False for Left-handed")).RightHanded = True
         obj.addProperty("App::PropertyString", "BodyName", "WormGear", QT_TRANSLATE_NOOP("App::Property", "Body Name")).BodyName = "WormGear"
         
@@ -76,16 +77,19 @@ class WormGear():
 
     def onChanged(self, fp, prop):
         self.Dirty = True
-        if prop in ["Module", "NumberOfThreads", "WormDiameter"]:
+        if prop in ["Module", "NumberOfThreads", "WormDiameter", "Length", "HelixLength"]:
             try:
+                # Calc Lead Angle
                 m = fp.Module.Value
                 z1 = fp.NumberOfThreads
                 d = fp.WormDiameter.Value
                 if d > 0:
-                    # Lead Angle = atan( (m * z1) / d )
                     val = (m * z1) / d
-                    angle = math.degrees(math.atan(val))
-                    fp.LeadAngle = angle
+                    fp.LeadAngle = math.degrees(math.atan(val))
+                
+                # Clamp Helix Length
+                if fp.HelixLength.Value > fp.Length.Value:
+                    fp.HelixLength = fp.Length.Value
             except: pass
 
     def GetParameters(self):
@@ -95,6 +99,8 @@ class WormGear():
             "pressure_angle": float(self.Object.PressureAngle.Value),
             "worm_diameter": float(self.Object.WormDiameter.Value),
             "length": float(self.Object.Length.Value),
+            "helix_length": float(self.Object.HelixLength.Value),
+            "center_helix": bool(self.Object.CenterHelix),
             "right_handed": bool(self.Object.RightHanded),
             "body_name": str(self.Object.BodyName),
             "bore_type": str(self.Object.BoreType),

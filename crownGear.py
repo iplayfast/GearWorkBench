@@ -41,7 +41,6 @@ class CrownGearCreateObject():
         gear = CrownGear(gear_obj)
         gear_obj.BodyName = unique_name
         
-        gear.force_Recompute() # Ensure geometry is generated
         doc.recompute()
         FreeCADGui.SendMsgToActiveView("ViewFit")
         return gear

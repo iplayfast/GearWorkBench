@@ -65,9 +65,7 @@ class GearWorkbenchWB(Workbench):
             import FreeCADGui
             all_commands = FreeCADGui.listCommands()
             for cmd in gear_items:
-                if cmd in all_commands:
-                    Msg(f"✓ Command '{cmd}' found in FreeCAD\n")
-                else:
+                if cmd not in all_commands:
                     Err(f"✗ WARNING: Command '{cmd}' NOT found in FreeCAD!\n")
                     Err(f"  Available commands: {len(all_commands)} total\n")
 
@@ -75,7 +73,7 @@ class GearWorkbenchWB(Workbench):
             self.appendToolbar("GearWorkbench", gear_items)
             self.appendMenu("GearWorkbench", gear_items)
             Log("Loading GearWorkbench ... done\n")
-            Msg(f"GearWorkbench toolbar and menu created with commands: {gear_items}\n")
+            # Msg(f"GearWorkbench toolbar and menu created with commands: {gear_items}\n")
         except Exception as e:
             import traceback
             Err(f"Error initializing GearWorkbench: {e}\n")
@@ -85,11 +83,11 @@ class GearWorkbenchWB(Workbench):
         return "Gui::PythonWorkbench"
 
     def Activated(self):
-        Msg("GearWorkbench.Activated()\n")
+        pass # Msg("GearWorkbench.Activated()\n")
 
     def Deactivated(self):
         """This function is executed when the workbench is deactivated"""
-        Msg("GearWorkbench.Deactivated()\n")
+        pass # Msg("GearWorkbench.Deactivated()\n")
 
 
 FreeCADGui.addWorkbench(GearWorkbenchWB())
