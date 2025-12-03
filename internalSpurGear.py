@@ -1,24 +1,12 @@
-"""Internal Spur Gear generator for FreeCAD
-
-This module provides the FreeCAD command and FeaturePython object for
-creating parametric involute internal spur gears (ring gears).
-
-Internal gears have teeth pointing inward and mesh with external gears
-(commonly used in planetary gearboxes).
-
-Copyright 2025, Chris Bruner
-Version v0.1.3
-License LGPL V2.1
-"""
-from __future__ import division
-
-import os
-import FreeCADGui
 import FreeCAD as App
+import FreeCADGui
 import gearMath
-from PySide import QtCore
+import util
+import Part
+import Sketcher
+import os
+import math
 
-# Set up icon paths
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, 'icons')
 global mainIcon
@@ -36,6 +24,122 @@ def QT_TRANSLATE_NOOP(scope, text):
     """Qt translation placeholder."""
     return text
 
+# ============================================================================
+# GENERATION LOGIC (Moved from gearMath.py)
+# ============================================================================
+
+def validateInternalParameters(parameters):
+    if parameters["module"] < gearMath.MIN_MODULE: raise gearMath.GearParameterError(f"Module < {gearMath.MIN_MODULE}")
+    if parameters["num_teeth"] < gearMath.MIN_TEETH: raise gearMath.GearParameterError(f"Teeth < {gearMath.MIN_TEETH}")
+    if parameters["height"] <= 0: raise gearMath.GearParameterError("Height must be positive")
+
+def generateInternalToothProfile(sketch, parameters):
+    module = parameters["module"]
+    num_teeth = parameters["num_teeth"]
+    pressure_angle_rad = parameters["pressure_angle"] * util.DEG_TO_RAD
+    profile_shift = parameters.get("profile_shift", 0.0)
+
+    dw = module * num_teeth
+    dg = dw * math.cos(pressure_angle_rad)
+    da_internal = dw - 2 * module * (gearMath.ADDENDUM_FACTOR + profile_shift) 
+    df_internal = dw + 2 * module * (gearMath.DEDENDUM_FACTOR - profile_shift) 
+
+    beta = (math.pi / (2 * num_teeth)) + (2 * profile_shift * math.tan(pressure_angle_rad) / num_teeth)
+    inv_alpha = math.tan(pressure_angle_rad) - pressure_angle_rad
+    tooth_center_offset = beta - inv_alpha
+
+    num_inv_points = 5 
+    epsilon = 0.001
+    start_radius = max(da_internal/2.0, dg/2.0 + epsilon)
+    end_radius = df_internal/2.0
+
+    right_flank_geo = []
+    # Avoid domain error if start > end
+    if start_radius >= end_radius:
+         start_radius = end_radius - epsilon
+
+    for i in range(num_inv_points):
+        t = i / (num_inv_points - 1)
+        # Phi calculation for internal gear
+        # phi = sqrt((2*r/dg)^2 - 1)
+        phi_start = math.sqrt(max(0, (2*start_radius/dg)**2 - 1))
+        phi_end = math.sqrt(max(0, (2*end_radius/dg)**2 - 1))
+        phi = phi_start + t * (phi_end - phi_start)
+        
+        r = (dg / 2.0) * math.sqrt(1 + phi**2)
+        theta_inv = phi - math.atan(phi)
+        angle = (math.pi / 2.0) - tooth_center_offset - theta_inv
+        right_flank_geo.append(App.Vector(r * math.cos(angle), r * math.sin(angle), 0))
+
+    left_flank_geo = util.mirrorPointsX(right_flank_geo)
+
+    geo_list = []
+    
+    bspline_right = Part.BSplineCurve()
+    bspline_right.interpolate(right_flank_geo)
+    geo_list.append(sketch.addGeometry(bspline_right, False))
+    
+    p_root_start = right_flank_geo[-1]
+    p_root_end = left_flank_geo[0]
+    p_root_mid = App.Vector(0, df_internal/2.0, 0)
+    root_arc = Part.Arc(p_root_start, p_root_mid, p_root_end)
+    geo_list.append(sketch.addGeometry(root_arc, False))
+    
+    bspline_left = Part.BSplineCurve()
+    bspline_left.interpolate(left_flank_geo)
+    geo_list.append(sketch.addGeometry(bspline_left, False))
+    
+    p_tip_start = left_flank_geo[-1]
+    p_tip_end = right_flank_geo[0]
+    p_tip_mid = App.Vector(0, da_internal/2.0, 0)
+    tip_arc = Part.Arc(p_tip_start, p_tip_mid, p_tip_end)
+    geo_list.append(sketch.addGeometry(tip_arc, False))
+    
+    util.finalizeSketchGeometry(sketch, geo_list)
+
+def generateInternalSpurGearPart(doc, parameters):
+    validateInternalParameters(parameters)
+    body_name = parameters.get("body_name", "InternalSpurGear")
+    body = util.readyPart(doc, body_name)
+
+    num_teeth = parameters["num_teeth"]
+    height = parameters["height"]
+    module = parameters["module"]
+    profile_shift = parameters.get("profile_shift", 0.0)
+    rim_thickness = parameters.get("rim_thickness", 3.0)
+
+    dw = module * num_teeth
+    df_internal = dw + 2 * module * (gearMath.DEDENDUM_FACTOR - profile_shift)
+    outer_diameter = df_internal + 2 * rim_thickness
+
+    tooth_sketch = util.createSketch(body, 'Tooth')
+    generateInternalToothProfile(tooth_sketch, parameters)
+
+    tooth_pad = util.createPad(body, tooth_sketch, height, 'Tooth')
+    polar = util.createPolar(body, tooth_pad, tooth_sketch, num_teeth, 'Teeth')
+    polar.Originals = [tooth_pad]
+    tooth_pad.Visibility = False
+    polar.Visibility = True
+    body.Tip = polar
+
+    ring_sketch = util.createSketch(body, 'Ring')
+    outer_circle = ring_sketch.addGeometry(Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), outer_diameter / 2), False)
+    ring_sketch.addConstraint(Sketcher.Constraint('Coincident', outer_circle, 3, -1, 1))
+    ring_sketch.addConstraint(Sketcher.Constraint('Diameter', outer_circle, outer_diameter))
+
+    inner_hole = ring_sketch.addGeometry(Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), df_internal / 2), False)
+    ring_sketch.addConstraint(Sketcher.Constraint('Coincident', inner_hole, 3, -1, 1))
+    ring_sketch.addConstraint(Sketcher.Constraint('Diameter', inner_hole, df_internal))
+
+    ring_pad = util.createPad(body, ring_sketch, height, 'Ring')
+    polar.Visibility = False 
+    ring_pad.Visibility = True 
+    body.Tip = ring_pad
+
+    doc.recompute()
+    if App.GuiUp:
+        try: FreeCADGui.SendMsgToActiveView("ViewFit")
+        except Exception: pass
 
 class InternalSpurGearCreateObject():
     """Command to create a new internal gear object."""
@@ -249,11 +353,9 @@ class InternalSpurGear():
         if self.Dirty:
             try:
                 parameters = self.GetParameters()
-                gearMath.validateInternalParameters(parameters)
-                gearMath.generateInternalSpurGearPart(App.ActiveDocument, parameters)
+                generateInternalSpurGearPart(App.ActiveDocument, parameters)
                 self.Dirty = False
                 App.ActiveDocument.recompute()
-                # App.Console.PrintMessage("Internal gear generated successfully\n")
             except gearMath.GearParameterError as e:
                 App.Console.PrintError(f"Internal Gear Parameter Error: {str(e)}\n")
                 App.Console.PrintError("Please adjust the parameters and try again.\n")

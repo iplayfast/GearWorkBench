@@ -9,18 +9,19 @@ License LGPL V2.1
 """
 from __future__ import division
 
+import FreeCAD as App
+import FreeCADGui
+import gearMath
+import util
+import Part
+import Sketcher
 import os
 import math
-import FreeCADGui
-import FreeCAD as App
-import gearMath
-from PySide import QtCore
 
-# Set up icon paths
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, 'icons')
 global mainIcon
-mainIcon = os.path.join(smWB_icons_path, 'cycloidRack.svg') # User will provide this
+mainIcon = os.path.join(smWB_icons_path, 'cycloidRack.svg')
 
 # Debug: print icon path
 # App.Console.PrintMessage(f"Cycloid Rack icon path: {mainIcon}\n")
@@ -33,6 +34,129 @@ version = 'Nov 30, 2025'
 def QT_TRANSLATE_NOOP(scope, text):
     return text
 
+# ============================================================================
+# GENERATION LOGIC (Moved from gearMath.py)
+# ============================================================================
+
+def validateCycloidRackParameters(parameters):
+    if parameters["module"] < gearMath.MIN_MODULE: raise gearMath.GearParameterError(f"Module < {gearMath.MIN_MODULE}")
+    if parameters["num_teeth"] < 1: raise gearMath.GearParameterError("Teeth must be >= 1")
+    if parameters["height"] <= 0: raise gearMath.GearParameterError("Height must be positive")
+
+def generateCycloidRackToothProfile(sketch, parameters):
+    module = parameters["module"]
+    addendum = module * parameters["addendum_factor"]
+    dedendum = module * parameters["dedendum_factor"]
+    r_roll = 2.5 * module
+    pitch = math.pi * module
+    half_tooth_width = pitch / 4.0
+    
+    # Addendum (Tip)
+    val_add = max(-1.0, min(1.0, 1.0 - (addendum / r_roll)))
+    t_max_add = math.acos(val_add)
+    
+    steps = 5
+    addendum_pts = []
+    for i in range(steps + 1):
+        t = i * (t_max_add / steps)
+        x = half_tooth_width - r_roll * (t - math.sin(t))
+        y = r_roll * (1.0 - math.cos(t))
+        addendum_pts.append(App.Vector(x, y, 0))
+        
+    # Dedendum (Root)
+    val_ded = max(-1.0, min(1.0, 1.0 - (dedendum / r_roll)))
+    t_max_ded = math.acos(val_ded)
+    
+    dedendum_pts = []
+    for i in range(steps + 1):
+        t = i * (t_max_ded / steps)
+        # Use ADDITION to make root wider (flare outwards)
+        x = half_tooth_width + r_roll * (t - math.sin(t))
+        y = -r_roll * (1.0 - math.cos(t))
+        dedendum_pts.append(App.Vector(x, y, 0))
+        
+    right_flank = list(reversed(dedendum_pts)) + addendum_pts[1:]
+    left_flank = util.mirrorPointsX(right_flank)
+    
+    geo_list = []
+    
+    bspline_right = Part.BSplineCurve()
+    bspline_right.interpolate(right_flank)
+    geo_list.append(sketch.addGeometry(bspline_right, False))
+    
+    line_tip = Part.LineSegment(right_flank[-1], left_flank[0])
+    geo_list.append(sketch.addGeometry(line_tip, False))
+    
+    bspline_left = Part.BSplineCurve()
+    bspline_left.interpolate(left_flank)
+    geo_list.append(sketch.addGeometry(bspline_left, False))
+    
+    line_root = Part.LineSegment(left_flank[-1], right_flank[0])
+    geo_list.append(sketch.addGeometry(line_root, False))
+    
+    util.finalizeSketchGeometry(sketch, geo_list)
+
+def generateCycloidRackPart(doc, parameters):
+    validateCycloidRackParameters(parameters)
+    
+    body_name = parameters.get("body_name", "CycloidRack")
+    body = util.readyPart(doc, body_name)
+    
+    module = parameters["module"]
+    num_teeth = parameters["num_teeth"]
+    height = parameters["height"]
+    base_thickness = parameters["base_thickness"]
+    
+    pitch = math.pi * module
+    dedendum = module * parameters["dedendum_factor"]
+
+    tooth_sketch = util.createSketch(body, 'ToothProfile')
+    generateCycloidRackToothProfile(tooth_sketch, parameters)
+    tooth_pad = util.createPad(body, tooth_sketch, height, 'Tooth')
+    
+    pattern = body.newObject('PartDesign::LinearPattern', 'TeethPattern')
+    pattern.Originals = [tooth_pad]
+    pattern.Direction = (tooth_sketch, ['H_Axis'])
+    pattern.Occurrences = num_teeth
+    if num_teeth > 1:
+        pattern.Length = (num_teeth - 1) * pitch
+    else:
+        pattern.Length = 0
+        
+    tooth_pad.Visibility = False
+    pattern.Visibility = True
+    body.Tip = pattern
+    
+    start_x = -pitch / 2.0
+    end_x = (num_teeth - 1) * pitch + pitch / 2.0
+    
+    base_sketch = util.createSketch(body, 'BaseProfile')
+    y_root = -dedendum
+    y_base = -dedendum - base_thickness
+    
+    p_tl = App.Vector(start_x, y_root, 0)
+    p_tr = App.Vector(end_x, y_root, 0)
+    p_br = App.Vector(end_x, y_base, 0)
+    p_bl = App.Vector(start_x, y_base, 0)
+    
+    points = [p_tl, p_tr, p_br, p_bl, p_tl]
+    for i in range(4):
+        line = Part.LineSegment(points[i], points[i+1])
+        idx = base_sketch.addGeometry(line, False)
+        base_sketch.addConstraint(Sketcher.Constraint('Block', idx))
+    for i in range(4):
+        base_sketch.addConstraint(Sketcher.Constraint('Coincident', i, 2, (i+1)%4, 1))
+        
+    base_pad = util.createPad(body, base_sketch, height, 'Base')
+    
+    pattern.Visibility = False
+    base_pad.Visibility = True
+    body.Tip = base_pad
+    
+    doc.recompute()
+    if App.GuiUp:
+        try: FreeCADGui.SendMsgToActiveView("ViewFit")
+        except Exception: pass
 
 class CycloidRackCreateObject():
     """Command to create a new cycloid rack object."""
@@ -151,8 +275,7 @@ class CycloidRack():
         if self.Dirty:
             try:
                 parameters = self.GetParameters()
-                gearMath.validateCycloidRackParameters(parameters)
-                gearMath.generateCycloidRackPart(App.ActiveDocument, parameters)
+                generateCycloidRackPart(App.ActiveDocument, parameters)
                 self.Dirty = False
                 App.ActiveDocument.recompute()
                 # App.Console.PrintMessage("Cycloid rack generated successfully\n")

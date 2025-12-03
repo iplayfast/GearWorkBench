@@ -12,6 +12,9 @@ License LGPL V2.1
 import FreeCAD as App
 import FreeCADGui
 import gearMath
+import util
+import Part
+import Sketcher
 import os
 import math
 
@@ -21,6 +24,109 @@ global mainIcon
 mainIcon = os.path.join(smWB_icons_path, 'crownGear.svg') 
 
 def QT_TRANSLATE_NOOP(scope, text): return text
+
+# ============================================================================
+# GENERATION LOGIC (Moved from gearMath.py)
+# ============================================================================
+
+def validateCrownParameters(parameters):
+    # Crown gear doesn't use pitch_angle, so we just check module/teeth
+    if parameters["module"] < gearMath.MIN_MODULE: raise gearMath.GearParameterError(f"Module < {gearMath.MIN_MODULE}")
+    if parameters["num_teeth"] < gearMath.MIN_TEETH: raise gearMath.GearParameterError(f"Teeth < {gearMath.MIN_TEETH}")
+    if parameters["face_width"] <= 0: raise gearMath.GearParameterError("Face width must be positive")
+
+def generateCrownGearPart(doc, parameters):
+    validateCrownParameters(parameters)
+    body_name = parameters.get("body_name", "CrownGear")
+    body = util.readyPart(doc, body_name)
+
+    module = parameters["module"]
+    num_teeth = parameters["num_teeth"]
+    face_width = parameters["face_width"]
+    
+    # Geometry
+    r_pitch = (module * num_teeth) / 2.0
+    r_outer = r_pitch
+    r_inner = r_outer - face_width
+    if r_inner < 1.0: r_inner = 1.0
+    
+    scale_factor = r_inner / r_outer
+    module_inner = module * scale_factor
+    
+    dedendum = module * gearMath.DEDENDUM_FACTOR
+    base_thickness = parameters.get("height", 3 * module)
+
+    # 1. Base Disk (Created FIRST)
+    sk_base = util.createSketch(body, 'BaseDisk')
+    sk_base.MapMode = 'Deactivated'
+    c_out = sk_base.addGeometry(Part.Circle(App.Vector(0,0,0), App.Vector(0,0,1), r_outer), False)
+    sk_base.addConstraint(Sketcher.Constraint('Diameter', c_out, r_outer * 2))
+    # Place base disk top at -Dedendum (bottom of teeth)
+    sk_base.Placement = App.Placement(App.Vector(0, 0, -dedendum), App.Rotation(0,0,0))
+    
+    pad_base = body.newObject('PartDesign::Pad', 'Base')
+    pad_base.Profile = sk_base
+    pad_base.Length = base_thickness
+    pad_base.Reversed = True # Extrude downwards from -dedendum
+    body.Tip = pad_base
+
+    # 2. Tooth Profiles
+    rot_placement = App.Rotation(90, 0, 90)
+    
+    # Spiral Twist
+    spiral_angle = parameters.get("spiral_angle", 0.0)
+    twist_angle_deg = 0.0
+    if abs(spiral_angle) > 0.001:
+        r_mean = (r_outer + r_inner) / 2.0
+        twist_arc = face_width * math.tan(spiral_angle * util.DEG_TO_RAD)
+        twist_angle_rad = twist_arc / r_mean
+        twist_angle_deg = twist_angle_rad * util.RAD_TO_DEG
+    
+    # Outer Profile (No Twist)
+    params_out = parameters.copy()
+    sk_tooth_out = util.createSketch(body, 'ToothProfile_Outer')
+    gearMath.generateRackToothProfile(sk_tooth_out, params_out)
+    sk_tooth_out.MapMode = 'Deactivated'
+    sk_tooth_out.Placement = App.Placement(App.Vector(r_outer, 0, 0), rot_placement)
+    
+    # Inner Profile (Twisted)
+    params_in = parameters.copy()
+    params_in["module"] = module_inner
+    sk_tooth_in = util.createSketch(body, 'ToothProfile_Inner')
+    gearMath.generateRackToothProfile(sk_tooth_in, params_in)
+    sk_tooth_in.MapMode = 'Deactivated'
+    
+    # Calculate Twisted Placement
+    # Apply Z-rotation manually to Position and Rotation
+    rot_z = App.Rotation(App.Vector(0,0,1), twist_angle_deg)
+    final_pos = rot_z.multVec(App.Vector(r_inner, 0, 0))
+    final_rot = rot_z.multiply(rot_placement)
+    
+    sk_tooth_in.Placement = App.Placement(final_pos, final_rot)
+    
+    # 3. Tooth Loft
+    tooth_loft = body.newObject('PartDesign::AdditiveLoft', 'Tooth')
+    tooth_loft.Profile = sk_tooth_out
+    tooth_loft.Sections = [sk_tooth_in]
+    tooth_loft.Ruled = True
+    body.Tip = tooth_loft
+    
+    # 4. Pattern
+    # Use sk_base as the axis reference (Normal Axis = Z Axis)
+    polar = util.createPolar(body, tooth_loft, sk_base, num_teeth, 'Teeth')
+    polar.Originals = [tooth_loft]
+    body.Tip = polar
+    
+    # 5. Bore
+    if parameters.get("bore_type", "none") != "none":
+         z_top = dedendum + module + 10.0
+         top_place = App.Placement(App.Vector(0, 0, z_top), App.Rotation(0,0,0))
+         util.createBore(body, parameters, z_top + base_thickness + dedendum + 10.0, placement=top_place, reversed=False)
+
+    doc.recompute()
+    if App.GuiUp:
+        try: FreeCADGui.SendMsgToActiveView("ViewFit")
+        except Exception: pass
 
 class CrownGearCreateObject():
     def GetResources(self):
@@ -105,7 +211,7 @@ class CrownGear():
     def recompute(self):
         if self.Dirty:
             try:
-                gearMath.generateCrownGearPart(App.ActiveDocument, self.GetParameters())
+                generateCrownGearPart(App.ActiveDocument, self.GetParameters())
                 self.Dirty = False
                 App.ActiveDocument.recompute()
             except Exception as e:

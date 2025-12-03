@@ -10,6 +10,9 @@ License LGPL V2.1
 import FreeCAD as App
 import FreeCADGui
 import gearMath
+import util
+import Part
+import Sketcher
 import os
 import math
 
@@ -19,6 +22,140 @@ global mainIcon
 mainIcon = os.path.join(smWB_icons_path, 'wormGear.svg') 
 
 def QT_TRANSLATE_NOOP(scope, text): return text
+
+# ============================================================================
+# GENERATION LOGIC (Moved from gearMath.py)
+# ============================================================================
+
+def validateWormParameters(parameters):
+    if parameters["module"] < gearMath.MIN_MODULE: raise gearMath.GearParameterError(f"Module < {gearMath.MIN_MODULE}")
+    if parameters["worm_diameter"] <= 0: raise gearMath.GearParameterError("Worm Diameter must be positive")
+    if parameters["length"] <= 0: raise gearMath.GearParameterError("Length must be positive")
+
+def generateWormGearPart(doc, parameters):
+    validateWormParameters(parameters)
+    body_name = parameters.get("body_name", "WormGear")
+    body = util.readyPart(doc, body_name)
+
+    module = parameters["module"]
+    num_threads = parameters["num_threads"] # z1
+    worm_dia = parameters["worm_diameter"] # Pitch Diameter
+    length = parameters["length"]
+    helix_len = parameters.get("helix_length", length)
+    center_helix = parameters.get("center_helix", True)
+    
+    if helix_len > length: helix_len = length
+    
+    pressure_angle = parameters["pressure_angle"]
+    right_handed = parameters["right_handed"]
+    
+    # Calculate Z-Offset for centering
+    z_offset = 0.0
+    if center_helix:
+        z_offset = (length - helix_len) / 2.0
+    
+    # Geometry Constants
+    addendum = module * gearMath.ADDENDUM_FACTOR
+    dedendum = module * gearMath.DEDENDUM_FACTOR
+    whole_depth = addendum + dedendum
+    
+    # User Request: WormDiameter parameter should be the Cylinder (Root) Diameter
+    root_dia = worm_dia 
+    
+    pitch = math.pi * module
+    lead = pitch * num_threads
+    
+    # 1. Base Cylinder (Root)
+    sk_base = util.createSketch(body, 'RootShaft')
+    sk_base.MapMode = 'Deactivated'
+    c_base = sk_base.addGeometry(Part.Circle(App.Vector(0,0,0), App.Vector(0,0,1), root_dia/2), False)
+    sk_base.addConstraint(Sketcher.Constraint('Diameter', c_base, root_dia))
+    
+    pad_base = body.newObject('PartDesign::Pad', 'Base')
+    pad_base.Profile = sk_base
+    pad_base.Length = length
+    body.Tip = pad_base
+    
+    # 2. Thread Profile
+    # Standard FreeCAD Workflow: Attach Sketch to XZ Plane, Offset by Radius.
+    
+    sk_profile = util.createSketch(body, 'ThreadProfile')
+    
+    # Find XZ Plane
+    xz_plane = None
+    if hasattr(body, 'Origin') and body.Origin:
+        for child in body.Origin.Group:
+            if 'XZ' in child.Name or 'XZ' in child.Label:
+                xz_plane = child
+                break
+        # Fallback
+        if not xz_plane and len(body.Origin.Group) > 1:
+             xz_plane = body.Origin.Group[1]
+
+    if xz_plane:
+        sk_profile.AttachmentSupport = [(xz_plane, '')]
+        sk_profile.MapMode = 'ObjectXY' # Align sketch local system with plane
+        # sk_profile.AttachmentOffset removed. Geometry will be offset instead.
+    else:
+        # Fallback: Manual
+        sk_profile.MapMode = 'Deactivated'
+        # Placement at Origin, Rotated to XZ orientation
+        sk_profile.Placement = App.Placement(App.Vector(0, 0, 0), App.Rotation(App.Vector(1,0,0), 90))
+
+    # Coordinates: (Radial, Axial) -> (Sketch X, Sketch Y) on XZ Plane
+    tan_a = math.tan(pressure_angle * util.DEG_TO_RAD)
+    
+    # Axial Widths (Half-widths)
+    # At Root (Radial=0): Root is WIDER than pitch line.
+    hw_root = (pitch / 4.0) + (dedendum * tan_a)
+    
+    # At Tip (Radial=whole_depth): Tip is NARROWER than pitch line.
+    hw_tip = (pitch / 4.0) - (addendum * tan_a)
+    if hw_tip < 0: hw_tip = 0.01
+    
+    # Offset geometry by Root Radius in X (Radial)
+    r_offset = root_dia / 2.0
+    
+    # P0: (0, hw_root)  -> X=r_offset (Radial start), Y=hw (Axial +)
+    # Apply Z-Offset to Y component (Axial position)
+    p0 = App.Vector(r_offset, hw_root + z_offset, 0)
+    p1 = App.Vector(r_offset + whole_depth, hw_tip + z_offset, 0)
+    p2 = App.Vector(r_offset + whole_depth, -hw_tip + z_offset, 0)
+    p3 = App.Vector(r_offset, -hw_root + z_offset, 0)
+    
+    pts = [p0, p1, p2, p3, p0]
+    
+    for i in range(4):
+        line = Part.LineSegment(pts[i], pts[i+1])
+        sk_profile.addGeometry(line, False)
+        
+    # 3. Helix
+    helix = body.newObject('PartDesign::AdditiveHelix', 'WormThread')
+    helix.Profile = sk_profile
+    helix.Pitch = lead 
+    helix.Height = helix_len
+    helix.Reversed = False
+    helix.LeftHanded = not right_handed
+    
+    # CORRECT AXIS LINK: Use Sketch V-Axis (Global Z)
+    helix.ReferenceAxis = (sk_profile, ['V_Axis'])
+    body.Tip = helix
+
+    # 4. Pattern (Multi-Start)
+    if num_threads > 1:
+        polar = util.createPolar(body, helix, None, num_threads, 'Threads')
+        # Fix axis
+        polar.Axis = (sk_base, ['N_Axis'])
+        body.Tip = polar
+
+    # 5. Bore
+    if parameters.get("bore_type", "none") != "none":
+         util.createBore(body, parameters, length + 10.0)
+
+    doc.recompute()
+    if App.GuiUp:
+        try: FreeCADGui.SendMsgToActiveView("ViewFit")
+        except Exception: pass
 
 class WormGearCreateObject():
     def GetResources(self):
@@ -118,7 +255,7 @@ class WormGear():
     def recompute(self):
         if self.Dirty:
             try:
-                gearMath.generateWormGearPart(App.ActiveDocument, self.GetParameters())
+                generateWormGearPart(App.ActiveDocument, self.GetParameters())
                 self.Dirty = False
                 App.ActiveDocument.recompute()
             except Exception as e:

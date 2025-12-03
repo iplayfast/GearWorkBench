@@ -9,13 +9,15 @@ License LGPL V2.1
 """
 from __future__ import division
 
-import os
-import FreeCADGui
 import FreeCAD as App
+import FreeCADGui
 import gearMath
-from PySide import QtCore
+import util
+import Part
+import Sketcher
+import os
+import math
 
-# Set up icon paths
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, 'icons')
 global mainIcon
@@ -32,6 +34,123 @@ version = 'Nov 30, 2025'
 def QT_TRANSLATE_NOOP(scope, text):
     return text
 
+# ============================================================================
+# GENERATION LOGIC (Moved from gearMath.py)
+# ============================================================================
+
+def validateCycloidParameters(parameters):
+    if parameters["module"] < gearMath.MIN_MODULE: raise gearMath.GearParameterError(f"Module < {gearMath.MIN_MODULE}")
+    if parameters["num_teeth"] < 3: raise gearMath.GearParameterError("Teeth must be >= 3")
+    if parameters["height"] <= 0: raise gearMath.GearParameterError("Height must be positive")
+
+def generateCycloidToothProfile(sketch, parameters):
+    module = parameters["module"]
+    num_teeth = parameters["num_teeth"]
+    addendum = module * parameters["addendum_factor"]
+    dedendum = module * parameters["dedendum_factor"]
+    
+    R = (module * num_teeth) / 2.0 
+    Ra = R + addendum 
+    Rf = R - dedendum 
+    r_roll = 2.5 * module 
+    half_tooth_angle = math.pi / (2.0 * num_teeth)
+    
+    # 1. Epicycloid (Tip)
+    epi_pts = []
+    steps = 7
+    for i in range(steps + 1):
+        t = i * (0.5 / steps)
+        cx = (R + r_roll) * math.cos(t) - r_roll * math.cos((R + r_roll)/r_roll * t)
+        cy = (R + r_roll) * math.sin(t) - r_roll * math.sin((R + r_roll)/r_roll * t)
+        if math.sqrt(cx*cx + cy*cy) > Ra: break
+        epi_pts.append(App.Vector(cx, cy, 0))
+    
+    rot_bias = (math.pi / 2.0) - half_tooth_angle
+    right_addendum_geo = []
+    for p in epi_pts:
+        xn = p.x * math.cos(rot_bias) - p.y * math.sin(rot_bias)
+        yn = p.x * math.sin(rot_bias) + p.y * math.cos(rot_bias)
+        right_addendum_geo.append(App.Vector(xn, yn, 0))
+        
+    # 2. Hypocycloid (Root)
+    hypo_pts = []
+    for i in range(steps + 1):
+        t = i * (0.5 / steps)
+        cx = (R - r_roll) * math.cos(t) + r_roll * math.cos((R - r_roll)/r_roll * t)
+        cy = -( (R - r_roll) * math.sin(t) - r_roll * math.sin((R - r_roll)/r_roll * t) )
+        if math.sqrt(cx*cx + cy*cy) < Rf: break
+        hypo_pts.append(App.Vector(cx, cy, 0))
+
+    right_dedendum_geo = []
+    for p in hypo_pts:
+        xn = p.x * math.cos(rot_bias) - p.y * math.sin(rot_bias)
+        yn = p.x * math.sin(rot_bias) + p.y * math.cos(rot_bias)
+        right_dedendum_geo.append(App.Vector(xn, yn, 0))
+
+    right_flank_full = list(reversed(right_dedendum_geo)) + right_addendum_geo[1:] 
+    left_flank_full = util.mirrorPointsX(right_flank_full)
+    
+    geo_list = []
+    
+    bspline_right = Part.BSplineCurve()
+    bspline_right.interpolate(right_flank_full)
+    geo_list.append(sketch.addGeometry(bspline_right, False))
+    
+    p_tip_right = right_flank_full[-1]
+    p_tip_left = left_flank_full[0]
+    p_tip_mid = App.Vector(0, Ra, 0)
+    tip_arc = Part.Arc(p_tip_right, p_tip_mid, p_tip_left)
+    geo_list.append(sketch.addGeometry(tip_arc, False))
+    
+    bspline_left = Part.BSplineCurve()
+    bspline_left.interpolate(left_flank_full)
+    geo_list.append(sketch.addGeometry(bspline_left, False))
+    
+    p_root_left = left_flank_full[-1]
+    p_root_right = right_flank_full[0]
+    root_line = Part.LineSegment(p_root_left, p_root_right)
+    geo_list.append(sketch.addGeometry(root_line, False))
+    
+    util.finalizeSketchGeometry(sketch, geo_list)
+
+def generateCycloidGearPart(doc, parameters):
+    validateCycloidParameters(parameters)
+    
+    body_name = parameters.get("body_name", "CycloidGear")
+    body = util.readyPart(doc, body_name)
+    
+    module = parameters["module"]
+    num_teeth = parameters["num_teeth"]
+    height = parameters["height"]
+    dedendum_factor = parameters["dedendum_factor"]
+    
+    Rf = (module * num_teeth) / 2.0 - (module * dedendum_factor)
+    
+    sketch = util.createSketch(body, 'ToothProfile')
+    generateCycloidToothProfile(sketch, parameters)
+    tooth_pad = util.createPad(body, sketch, height, 'Tooth')
+    
+    polar = util.createPolar(body, tooth_pad, sketch, num_teeth, 'Teeth')
+    polar.Originals = [tooth_pad]
+    tooth_pad.Visibility = False
+    polar.Visibility = True
+    body.Tip = polar
+    
+    ded_sketch = util.createSketch(body, 'DedendumCircle')
+    circle = ded_sketch.addGeometry(Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), Rf + 0.01), False)
+    ded_sketch.addConstraint(Sketcher.Constraint('Coincident', circle, 3, -1, 1))
+    ded_sketch.addConstraint(Sketcher.Constraint('Diameter', circle, (Rf + 0.01)*2))
+    
+    ded_pad = util.createPad(body, ded_sketch, height, 'DedendumCircle')
+    body.Tip = ded_pad
+    
+    if parameters.get("bore_type", "none") != "none":
+        util.createBore(body, parameters, height)
+        
+    doc.recompute()
+    if App.GuiUp:
+        try: FreeCADGui.SendMsgToActiveView("ViewFit")
+        except Exception: pass
 
 class CycloidGearCreateObject():
     """Command to create a new cycloid gear object."""
@@ -143,8 +262,7 @@ class CycloidGear():
         if self.Dirty:
             try:
                 parameters = self.GetParameters()
-                gearMath.validateCycloidParameters(parameters)
-                gearMath.generateCycloidGearPart(App.ActiveDocument, parameters)
+                generateCycloidGearPart(App.ActiveDocument, parameters)
                 self.Dirty = False
                 App.ActiveDocument.recompute()
                 # App.Console.PrintMessage("Cycloid gear generated successfully\n")

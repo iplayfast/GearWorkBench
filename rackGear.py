@@ -9,14 +9,15 @@ License LGPL V2.1
 """
 from __future__ import division
 
+import FreeCAD as App
+import FreeCADGui
+import gearMath
+import util
+import Part
+import Sketcher
 import os
 import math
-import FreeCADGui
-import FreeCAD as App
-import gearMath
-from PySide import QtCore
 
-# Set up icon paths
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, 'icons')
 global mainIcon
@@ -33,6 +34,102 @@ version = 'Nov 30, 2025'
 def QT_TRANSLATE_NOOP(scope, text):
     return text
 
+# ============================================================================
+# GENERATION LOGIC (Moved from gearMath.py)
+# ============================================================================
+
+def validateRackParameters(parameters):
+    if parameters["module"] < gearMath.MIN_MODULE: raise gearMath.GearParameterError(f"Module < {gearMath.MIN_MODULE}")
+    if parameters["num_teeth"] < 1: raise gearMath.GearParameterError("Teeth must be >= 1")
+    if parameters["height"] <= 0: raise gearMath.GearParameterError("Height must be positive")
+    if parameters["base_thickness"] <= 0: raise gearMath.GearParameterError("Base thickness must be positive")
+
+def generateRackToothProfile(sketch, parameters):
+    module = parameters["module"]
+    pressure_angle = parameters["pressure_angle"]
+    
+    addendum = module * gearMath.ADDENDUM_FACTOR
+    dedendum = module * gearMath.DEDENDUM_FACTOR
+    tan_alpha = math.tan(pressure_angle * util.DEG_TO_RAD)
+    half_pitch_width = (math.pi * module) / 4.0
+    
+    y_top = addendum
+    x_top = half_pitch_width - (addendum * tan_alpha)
+    y_bot = -dedendum
+    x_bot = half_pitch_width + (dedendum * tan_alpha)
+    
+    p_tl = App.Vector(-x_top, y_top, 0)
+    p_tr = App.Vector(x_top, y_top, 0)
+    p_br = App.Vector(x_bot, y_bot, 0)
+    p_bl = App.Vector(-x_bot, y_bot, 0)
+    
+    points = [p_tl, p_tr, p_br, p_bl, p_tl]
+    for i in range(4):
+        line = Part.LineSegment(points[i], points[i+1])
+        idx = sketch.addGeometry(line, False)
+        sketch.addConstraint(Sketcher.Constraint('Block', idx))
+    for i in range(4):
+        sketch.addConstraint(Sketcher.Constraint('Coincident', i, 2, (i+1)%4, 1))
+
+def generateRackPart(doc, parameters):
+    validateRackParameters(parameters)
+    
+    body_name = parameters.get("body_name", "RackGear")
+    body = util.readyPart(doc, body_name)
+    
+    module = parameters["module"]
+    num_teeth = parameters["num_teeth"]
+    height = parameters["height"]
+    base_thickness = parameters["base_thickness"]
+    
+    pitch = math.pi * module
+    dedendum = module * gearMath.DEDENDUM_FACTOR
+
+    tooth_sketch = util.createSketch(body, 'ToothProfile')
+    generateRackToothProfile(tooth_sketch, parameters)
+    tooth_pad = util.createPad(body, tooth_sketch, height, 'Tooth')
+    
+    pattern = body.newObject('PartDesign::LinearPattern', 'TeethPattern')
+    pattern.Originals = [tooth_pad]
+    pattern.Direction = (tooth_sketch, ['H_Axis'])
+    pattern.Occurrences = num_teeth
+    if num_teeth > 1:
+        pattern.Length = (num_teeth - 1) * pitch
+    else:
+        pattern.Length = 0
+        
+    tooth_pad.Visibility = False
+    pattern.Visibility = True
+    body.Tip = pattern
+    
+    start_x = -pitch / 2.0
+    end_x = (num_teeth - 1) * pitch + pitch / 2.0
+    base_sketch = util.createSketch(body, 'BaseProfile')
+    y_root = -dedendum
+    y_base = -dedendum - base_thickness
+    
+    p_tl = App.Vector(start_x, y_root, 0)
+    p_tr = App.Vector(end_x, y_root, 0)
+    p_br = App.Vector(end_x, y_base, 0)
+    p_bl = App.Vector(start_x, y_base, 0)
+    
+    points = [p_tl, p_tr, p_br, p_bl, p_tl]
+    for i in range(4):
+        line = Part.LineSegment(points[i], points[i+1])
+        idx = base_sketch.addGeometry(line, False)
+        base_sketch.addConstraint(Sketcher.Constraint('Block', idx))
+    for i in range(4):
+        base_sketch.addConstraint(Sketcher.Constraint('Coincident', i, 2, (i+1)%4, 1))
+        
+    base_pad = util.createPad(body, base_sketch, height, 'Base')
+    pattern.Visibility = False
+    base_pad.Visibility = True
+    body.Tip = base_pad
+    
+    doc.recompute()
+    if App.GuiUp:
+        try: FreeCADGui.SendMsgToActiveView("ViewFit")
+        except Exception: pass
 
 class RackGearCreateObject():
     """Command to create a new rack gear object."""
@@ -161,8 +258,7 @@ class RackGear():
         if self.Dirty:
             try:
                 parameters = self.GetParameters()
-                gearMath.validateRackParameters(parameters)
-                gearMath.generateRackPart(App.ActiveDocument, parameters)
+                generateRackPart(App.ActiveDocument, parameters)
                 self.Dirty = False
                 App.ActiveDocument.recompute()
                 # App.Console.PrintMessage("Rack gear generated successfully\n")

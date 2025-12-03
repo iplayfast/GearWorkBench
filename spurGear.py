@@ -7,32 +7,78 @@ Copyright 2025, Chris Bruner
 Version v0.1.3
 License LGPL V2.1
 """
-from __future__ import division
-
-import os
-import FreeCADGui
 import FreeCAD as App
+import FreeCADGui
 import gearMath
-from PySide import QtCore
+import util
+import Part
+import Sketcher
+import os
+import math
 
-# Set up icon paths
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, 'icons')
 global mainIcon
-mainIcon = os.path.join(smWB_icons_path, 'spurGear.svg')
-
-# Debug: print icon path
-# App.Console.PrintMessage(f"Spur Gear icon path: {mainIcon}\n")
-if not os.path.exists(mainIcon):
-    App.Console.PrintWarning(f"Spur Gear icon not found at: {mainIcon}\n")
+mainIcon = os.path.join(smWB_icons_path, 'spurGear.svg') 
 
 version = 'Nov 30, 2025'
 
+def QT_TRANSLATE_NOOP(scope, text): return text
 
-def QT_TRANSLATE_NOOP(scope, text):
-    """Qt translation placeholder."""
-    return text
+# ============================================================================
+# GENERATION LOGIC (Moved from gearMath.py)
+# ============================================================================
 
+def validateSpurParameters(parameters):
+    if parameters["module"] < gearMath.MIN_MODULE: raise gearMath.GearParameterError(f"Module < {gearMath.MIN_MODULE}")
+    if parameters["num_teeth"] < gearMath.MIN_TEETH: raise gearMath.GearParameterError(f"Teeth < {gearMath.MIN_TEETH}")
+    if parameters["height"] <= 0: raise gearMath.GearParameterError("Height must be positive")
+
+def generateSpurGearPart(doc, parameters):
+    validateSpurParameters(parameters)
+    
+    body_name = parameters.get("body_name", "SpurGear")
+    body = util.readyPart(doc, body_name)
+    
+    module = parameters["module"]
+    num_teeth = parameters["num_teeth"]
+    height = parameters["height"]
+    profile_shift = parameters.get("profile_shift", 0.0)
+    bore_type = parameters.get("bore_type", "none")
+    
+    dw = module * num_teeth
+    df = dw - 2 * module * (gearMath.DEDENDUM_FACTOR - profile_shift)
+
+    # 1. Tooth Profile
+    sketch = util.createSketch(body, 'ToothProfile')
+    gearMath.generateToothProfile(sketch, parameters)
+    
+    tooth_pad = util.createPad(body, sketch, height, 'Tooth')
+    
+    # 2. Polar Pattern
+    polar = util.createPolar(body, tooth_pad, sketch, num_teeth, 'Teeth')
+    polar.Originals = [tooth_pad]
+    tooth_pad.Visibility = False
+    polar.Visibility = True
+    body.Tip = polar
+    
+    # 3. Dedendum Circle (Fills the center)
+    dedendum_sketch = util.createSketch(body, 'DedendumCircle')
+    circle = dedendum_sketch.addGeometry(Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), df / 2.0 + 0.01), False)
+    dedendum_sketch.addConstraint(Sketcher.Constraint('Coincident', circle, 3, -1, 1))
+    dedendum_sketch.addConstraint(Sketcher.Constraint('Diameter', circle, df + 0.02))
+    
+    dedendum_pad = util.createPad(body, dedendum_sketch, height, 'DedendumCircle')
+    body.Tip = dedendum_pad
+
+    # 4. Bore
+    if bore_type != "none":
+        gearMath.generateBore(body, parameters, height)
+        
+    doc.recompute()
+    if App.GuiUp:
+        try: FreeCADGui.SendMsgToActiveView("ViewFit")
+        except Exception: pass
 
 class SpurGearCreateObject():
     """Command to create a new spur gear object."""
@@ -276,11 +322,9 @@ class SpurGear():
         if self.Dirty:
             try:
                 parameters = self.GetParameters()
-                gearMath.validateSpurParameters(parameters)
-                gearMath.generateSpurGearPart(App.ActiveDocument, parameters)
+                generateSpurGearPart(App.ActiveDocument, parameters)
                 self.Dirty = False
                 App.ActiveDocument.recompute()
-                # App.Console.PrintMessage("Spur gear generated successfully\n")
             except gearMath.GearParameterError as e:
                 App.Console.PrintError(f"Spur Gear Parameter Error: {str(e)}\n")
                 App.Console.PrintError("Please adjust the parameters and try again.\n")
