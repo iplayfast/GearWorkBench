@@ -17,6 +17,7 @@ import Part
 import Sketcher
 import os
 import math
+from PySide import QtCore
 
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, 'icons')
