@@ -555,8 +555,15 @@ def sketchArc(sketch, x, y, diameter, startAngle, endAngle, Name="", isConstruct
     if x == 0 and y == 0:
         sketch.addConstraint(Sketcher.Constraint('Coincident', geo_index, 3, -1, 1))
     else:
-        sketch.addConstraint(Sketcher.Constraint('DistanceX', geo_index, 3, -1, 1, x))
-        sketch.addConstraint(Sketcher.Constraint('DistanceY', geo_index, 3, -1, 1, y))
+        if x == 0:
+            sketch.addConstraint(Sketcher.Constraint('PointOnObject', geo_index, 3, -2)) # On Y Axis
+        else:
+            sketch.addConstraint(Sketcher.Constraint('DistanceX', geo_index, 3, -1, 1, x))
+            
+        if y == 0:
+            sketch.addConstraint(Sketcher.Constraint('PointOnObject', geo_index, 3, -1)) # On X Axis
+        else:
+            sketch.addConstraint(Sketcher.Constraint('DistanceY', geo_index, 3, -1, 1, y))
 
     rad_cst_index = sketch.addConstraint(Sketcher.Constraint('Diameter', geo_index, diameter))
     

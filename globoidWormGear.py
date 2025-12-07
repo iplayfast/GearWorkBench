@@ -425,84 +425,184 @@ def generateGloboidWormGearPart(doc, parameters):
     body.Tip = rev
     
     # 2. THREAD GENERATION (B-Rep Loft)
-    # Calculate total rotation of worm as gear wraps around it
-    worm_rotation_angle = arc_angle * (num_gear_teeth / num_threads)
-    loft_steps = 100
-
-    # Thread profile geometry (trapezoidal cross-section)
-    tan_pressure = math.tan(pressure_angle * util.DEG_TO_RAD)
-    # Half-width at pitch line, reduced slightly for clearance
-    half_width_pitch = (math.pi * module) / 4.0 - (0.05 * module)
-
-    # Thread profile coordinates (subtractive cut pattern)
-    # Radial position (negative = inside worm cylinder)
-    radial_root = -dedendum  # Root of thread (deepest cut)
-    width_root = half_width_pitch + (dedendum * tan_pressure)  # Width at root (wider)
-    radial_tip = addendum  # Tip of thread (shallow cut)
-    width_tip = half_width_pitch - (addendum * tan_pressure)  # Width at tip (narrower)
-
-    # Thread profile polygon (closed trapezoid)
-    thread_profile_pts = [
-        App.Vector(radial_root, -width_root, 0),
-        App.Vector(radial_tip, -width_tip, 0),
-        App.Vector(radial_tip, width_tip, 0),
-        App.Vector(radial_root, width_root, 0),
-        App.Vector(radial_root, -width_root, 0)
-    ]
+    # Create Thread Profile Sketch
+    sk_thread_profile = util.createSketch(body, 'ThreadProfile')
+    sk_thread_profile.MapMode = 'Deactivated' # Sketch is standalone, its placement is handled by transformation in loop
     
-    # Generate thread profile at multiple positions along the arc
+    # Calculate thread profile geometry (trapezoidal cross-section - the 'gap')
+    tan_pressure = math.tan(pressure_angle * util.DEG_TO_RAD)
+    
+    # Half-width at pitch line, reduced slightly for clearance
+    half_width_pitch_line = (math.pi * module) / 4.0 - (0.05 * module)
+
+    # Parametric values for the trapezoid in sketch space
+    # In this sketch: X-axis = Height/Depth, Y-axis = Width (Chris's interpretation)
+    profile_height = dedendum + addendum
+    
+    # The trapezoid will start at X=0 in the sketch for simplicity, 
+    # its final radial position handled by transformations.
+    offset_x = 0 
+
+    # Half-width of the gap at the root (narrower)
+    width_root = half_width_pitch_line - (dedendum * tan_pressure) 
+    # Half-width of the gap at the tip (wider)
+    width_tip = half_width_pitch_line + (addendum * tan_pressure) 
+
+    # Define the 4 points of the trapezoid (closed profile)
+    # Points ordered so both vertical lines go from -Y to +Y (consistent direction)
+    # P1 = Root, -Y    P2 = Root, +Y    P3 = Tip, +Y    P4 = Tip, -Y
+    p1 = App.Vector(offset_x, -width_root, 0)                  # Root line start (-Y)
+    p2 = App.Vector(offset_x, width_root, 0)                   # Root line end (+Y)
+    p3 = App.Vector(offset_x + profile_height, width_tip, 0)   # Tip, +Y
+    p4 = App.Vector(offset_x + profile_height, -width_tip, 0)  # Tip, -Y
+
+    # Add lines to sketch - note top_line goes from p4 to p3 (same -Y to +Y direction as bottom)
+    idx_bottom_line = sk_thread_profile.addGeometry(Part.LineSegment(p1, p2), False)   # Geo 0: Root line (-Y to +Y)
+    idx_right_flank = sk_thread_profile.addGeometry(Part.LineSegment(p2, p3), False)   # Geo 1: Right flank
+    idx_top_line = sk_thread_profile.addGeometry(Part.LineSegment(p4, p3), False)      # Geo 2: Tip line (-Y to +Y) FIXED
+    idx_left_flank = sk_thread_profile.addGeometry(Part.LineSegment(p4, p1), False)    # Geo 3: Left flank
+    
+    # CONSTRAINTS for ThreadProfile sketch
+    
+    # 1. Coincident Connections (Close the loop)
+    # bottom_line: p1->p2, right_flank: p2->p3, top_line: p4->p3, left_flank: p4->p1
+    sk_thread_profile.addConstraint(Sketcher.Constraint('Coincident', idx_bottom_line, 2, idx_right_flank, 1)) # P2: bottom end = right start
+    sk_thread_profile.addConstraint(Sketcher.Constraint('Coincident', idx_right_flank, 2, idx_top_line, 2))   # P3: right end = top end
+    sk_thread_profile.addConstraint(Sketcher.Constraint('Coincident', idx_top_line, 1, idx_left_flank, 1))    # P4: top start = left start
+    sk_thread_profile.addConstraint(Sketcher.Constraint('Coincident', idx_left_flank, 2, idx_bottom_line, 1)) # P1: left end = bottom start
+    
+    # 2. Symmetry Constraints
+    # Center the 'bottom_line' and 'top_line' symmetrically around the X-axis (horizontal axis)
+    # Reference -1 = X-axis (NOT -1,1 which is Origin point!)
+    sk_thread_profile.addConstraint(Sketcher.Constraint('Symmetric', idx_bottom_line, 1, idx_bottom_line, 2, -1))
+    sk_thread_profile.addConstraint(Sketcher.Constraint('Symmetric', idx_top_line, 1, idx_top_line, 2, -1)) 
+
+    # 3. Dimensional Constraints
+    # X-Position of bottom line (anchors the trapezoid position)
+    sk_thread_profile.addConstraint(Sketcher.Constraint('DistanceX', -1, 1, idx_bottom_line, 1, offset_x))
+    # Height of the trapezoid (distance between bottom and top lines)
+    sk_thread_profile.addConstraint(Sketcher.Constraint('DistanceX', idx_bottom_line, 1, idx_top_line, 1, profile_height))
+
+    # Y-Dimensions (Widths)
+    # Length of the 'bottom_line' line (root width)
+    sk_thread_profile.addConstraint(Sketcher.Constraint('DistanceY', idx_bottom_line, 1, idx_bottom_line, 2, width_root * 2))
+    # Length of the 'top_line' line (tip width)
+    sk_thread_profile.addConstraint(Sketcher.Constraint('DistanceY', idx_top_line, 1, idx_top_line, 2, width_tip * 2))
+
+    doc.recompute()
+
+    # Thread helix: one complete thread wraps around the worm over a distance of (pitch * num_threads)
+    # Pitch = pi * module for a worm
+    thread_pitch = math.pi * module
+
+    # For the worm_length, how many degrees does the thread rotate?
+    # One full wrap (360 deg) covers distance = thread_pitch
+    # So for worm_length: rotation = 360 * worm_length / thread_pitch
+    effective_length = worm_length if worm_length > 0.01 else (2 * tooth_half_length)
+    worm_rotation_angle = 360.0 * effective_length / thread_pitch
+
+    # Calculate loft parameters
+    # Number of cross-sections for loft (more = smoother thread)
+    # Need enough steps to handle the rotation smoothly
+    # At least 10 steps per 360 degrees of rotation
+    min_steps_per_rotation = 10
+    rotations = worm_rotation_angle / 360.0
+    loft_steps = max(20, int(rotations * min_steps_per_rotation * 4))
+
+    App.Console.PrintMessage(f"Thread params: pitch={thread_pitch:.2f}, length={effective_length:.2f}, rotation={worm_rotation_angle:.1f} deg, loft_steps={loft_steps}\n")
+    App.Console.PrintMessage(f"Geometry: outer_throat_radius={outer_throat_radius:.2f}, arc_radius={arc_radius:.2f}, center_distance={center_distance:.2f}\n")
+    App.Console.PrintMessage(f"Profile: height={profile_height:.2f}, width_root={width_root:.2f}, width_tip={width_tip:.2f}\n")
+
+    # Now extract the geometry from the sketch
+    # We need to get the profile points in the correct order for lofting
+    # The sketch has 4 points forming a trapezoid, but Wire.Vertexes may not be in perimeter order
+
+    # Get the 4 corner points from the sketch geometry directly
+    # Based on how we created the sketch:
+    # p1 = (0, -width_root)  - root, bottom
+    # p2 = (0, +width_root)  - root, top
+    # p3 = (profile_height, +width_tip)  - tip, top
+    # p4 = (profile_height, -width_tip)  - tip, bottom
+
+    # For a proper closed loop going clockwise: p1 -> p4 -> p3 -> p2 -> p1
+    # Or counter-clockwise: p1 -> p2 -> p3 -> p4 -> p1
+
+    # Define the points in order around the perimeter (clockwise when viewed from +X)
+    # This ensures the loft connects corresponding points correctly
+    # Going: root-bottom -> root-top -> tip-top -> tip-bottom
+    profile_points = [
+        App.Vector(0, -width_root, 0),            # root, -Y side
+        App.Vector(profile_height, -width_tip, 0), # tip, -Y side
+        App.Vector(profile_height, width_tip, 0),  # tip, +Y side
+        App.Vector(0, width_root, 0),              # root, +Y side
+    ]
+
+    App.Console.PrintMessage(f"Thread profile points (ordered):\n")
+    for i, p in enumerate(profile_points):
+        App.Console.PrintMessage(f"  P{i}: ({p.x:.2f}, {p.y:.2f})\n")
+
+    # For a globoid worm:
+    # - Worm axis is along Y (length direction)
+    # - Thread wraps helically around Y-axis
+    # - Profile is perpendicular to helix path
+    # - Worm throat is at X (radial direction)
+
+    # Generate thread profile at multiple positions along the worm
     wires = []
     for i in range(loft_steps + 1):
-        # Normalized parameter from -0.5 to +0.5 along the arc
-        u_normalized = (i / loft_steps) - 0.5
-        # Worm rotation angle (around its axis)
-        worm_angle_deg = u_normalized * worm_rotation_angle
-        worm_angle_rad = worm_angle_deg * util.DEG_TO_RAD
-        # Gear arc angle (position around gear)
-        gear_angle_deg = u_normalized * arc_angle
-        gear_angle_rad = gear_angle_deg * util.DEG_TO_RAD
+        # Parameter from -0.5 to +0.5 along the worm length
+        t = (i / loft_steps) - 0.5
+
+        # Y position along worm axis
+        y_pos = t * worm_length if worm_length > 0.01 else t * (2 * tooth_half_length)
+
+        # Helix angle: worm rotates as we move along Y
+        # Total rotation over worm_length is worm_rotation_angle
+        helix_angle_deg = t * worm_rotation_angle
+        helix_angle_rad = helix_angle_deg * util.DEG_TO_RAD
+
+        # Helix rotation around Y-axis (same for all points in this cross-section)
+        cos_h = math.cos(helix_angle_rad)
+        sin_h = math.sin(helix_angle_rad)
 
         pts_transformed = []
-        for p in thread_profile_pts:
-            # Transform: Gear Frame (Z-Axis) -> Worm Frame (Y-Axis)
-            
-            # Step 1: Position at gear pitch circle (X-axis offset)
-            # Input p.x is radial, p.y is width (axial)
-            # Map to Gear Frame (Axis Z): 
-            # X = -(Radius + p.x)  (Inward facing)
-            # Y = 0                (Tangential)
-            # Z = p.y              (Axial/Width)
-            p_gear_x = -(gear_pitch_radius + p.x)
-            p_gear_y = 0.0
-            p_gear_z = p.y # Width maps to Z
+        for p in profile_points:
+            # Profile point coordinates:
+            # p.x = radial depth (0 at root/narrow, profile_height at tip/wide)
+            # p.y = width along thread direction (symmetric about 0)
 
-            # Step 2: Rotate around Gear Axis (Z-axis)
-            # Rotates X and Y. Z is invariant.
-            cos_gear = math.cos(gear_angle_rad)
-            sin_gear = math.sin(gear_angle_rad)
-            
-            px_rot = p_gear_x * cos_gear - p_gear_y * sin_gear # p_gear_y is 0
-            py_rot = p_gear_x * sin_gear + p_gear_y * cos_gear
-            pz_rot = p_gear_z
+            # The profile width (p.y) runs along the worm axis (Y direction)
+            # It does NOT rotate with the helix - stays parallel to Y-axis
+            actual_y = y_pos + p.y
 
-            # Step 3: Translate by center distance (along X)
-            # Moves Gear Center to (CD, 0, 0)
-            px_trans = px_rot + center_distance
-            py_trans = py_rot
-            pz_trans = pz_rot
+            # For globoid worm, the radius varies along Y (hourglass shape)
+            # Each point must use the radius at ITS actual Y position
+            if abs(actual_y) <= arc_radius * 0.999:  # Within the arc region
+                local_radius = center_distance - math.sqrt(arc_radius**2 - actual_y**2)
+            else:
+                # Outside arc region - use the shoulder radius
+                local_radius = shoulder_radius
 
-            # Step 4: Rotate Worm around its Axis (Y-axis)
-            # We transform the static space into the rotating worm frame
-            # Rotation around Y mixes X and Z.
-            cos_worm = math.cos(-worm_angle_rad)
-            sin_worm = math.sin(-worm_angle_rad)
-            
-            px_final = px_trans * cos_worm - pz_trans * sin_worm
-            pz_final = px_trans * sin_worm + pz_trans * cos_worm
-            py_final = py_trans # Y (Axial) is invariant in Y-rotation
+            # The thread tool cuts INTO the cylinder surface
+            # p.x=0 is the narrow end (root of gap) - at the bottom of the groove (below surface)
+            # p.x=profile_height is the wide end (tip of gap) - at the surface
+            # But for boolean cut to work, the tool must extend OUTSIDE the cylinder
+            # So we add clearance: root goes below surface, tip goes above surface
+            clearance = profile_height * 0.5  # Extra height above surface
+            radial_pos = local_radius - profile_height + p.x + clearance
 
-            pts_transformed.append(App.Vector(px_final, py_final, pz_final))
+            # Position in worm frame (Y-axis is worm axis)
+            # Only the radial position rotates around Y-axis by helix angle
+            # The Y position (axial) stays fixed - profile width is parallel to axis
+            px = radial_pos * cos_h
+            pz = radial_pos * sin_h
+            py = actual_y
 
+            pts_transformed.append(App.Vector(px, py, pz))
+
+        # Close the polygon by adding the first point at the end
+        if pts_transformed:
+            pts_transformed.append(pts_transformed[0])
         wires.append(Part.makePolygon(pts_transformed))
         
     # Loft thread profile across all wire sections
@@ -516,29 +616,48 @@ def generateGloboidWormGearPart(doc, parameters):
     thread_obj.Shape = thread_solid
     thread_obj.Visibility = False
     
-    # 3. INTEGRATION - Use PartDesign::Boolean for Subtractive Feature
-    # Bring thread into body via binder
-    binder_name = f"{body_name}_ThreadBinder" # Renamed binder to be more specific
-    binder_obj = None
+    # 3. INTEGRATION - Use Part boolean cut, then bring result back into body
+    # Get the cylinder shape from the revolution
+    doc.recompute()
+    cylinder_shape = rev.Shape.copy()
+    thread_shape = thread_solid.copy()
+
+    # Perform boolean cut: cylinder - thread
+    try:
+        result_shape = cylinder_shape.cut(thread_shape)
+    except Exception as e:
+        App.Console.PrintError(f"Boolean cut failed: {e}\n")
+        result_shape = cylinder_shape  # Fallback to just the cylinder
+
+    # Create a Part::Feature to hold the boolean result temporarily
+    result_name = f"{body_name}_Result"
+    result_obj = doc.getObject(result_name)
+    if not result_obj:
+        result_obj = doc.addObject("Part::Feature", result_name)
+    result_obj.Shape = result_shape
+
+    # Now bring the result back into the PartDesign Body using a SubShapeBinder
+    # This allows PartDesign features (sketches, pads, pockets) to be added
+    binder_name = f"{body_name}_FinalShape"
+    final_binder = None
     for obj in body.Group:
         if obj.Name == binder_name:
-            binder_obj = obj
+            final_binder = obj
             break
 
-    if not binder_obj:
-        binder_obj = body.newObject("PartDesign::SubShapeBinder", binder_name)
+    if not final_binder:
+        final_binder = body.newObject("PartDesign::SubShapeBinder", binder_name)
 
-    binder_obj.Support = [(thread_obj, '')]
-    binder_obj.Visibility = False
+    final_binder.Support = [(result_obj, '')]
+    body.Tip = final_binder
 
-    # Create a PartDesign::Boolean feature to cut the thread
-    boolean_feature_name = f"{body_name}_ThreadCut"
-    boolean_feature = body.newObject("PartDesign::Boolean", boolean_feature_name)
-    boolean_feature.Base = rev # The cylinder is the base
-    boolean_feature.Tool = binder_obj # The thread is the tool
-    boolean_feature.Type = "Cut" # Perform a cut operation
-    
-    body.Tip = boolean_feature # Set the Boolean feature as the new tip of the body
+    # Hide the intermediate objects
+    thread_obj.Visibility = False
+    result_obj.ViewObject.Visibility = False
+    rev.ViewObject.Visibility = False
+
+    # Show the body (which now contains the final shape via binder)
+    body.ViewObject.Visibility = True
 
     # 4. BORE
     if bore_type != "none":

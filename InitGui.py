@@ -31,6 +31,7 @@ import cycloidRack  # Import cycloid rack module
 import bevelGear # Import bevel gear module
 import crownGear # Import crown gear module
 import wormGear # Import worm gear module
+import globoidWormGear # Import globoid worm gear module
 
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, 'icons')
@@ -58,7 +59,8 @@ class GearWorkbenchWB(Workbench):
                            "CycloidRackCreateObject",
                            "BevelGearCreateObject",
                            "CrownGearCreateObject",
-                           "WormGearCreateObject"
+                           "WormGearCreateObject",
+                           "GloboidWormGearCreateObject"
                            ]
 
             # Verify command is available
