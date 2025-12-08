@@ -80,6 +80,13 @@ class GloboidWormGear():
         obj.addProperty("App::PropertyLength", "KeywayWidth", "Bore", QT_TRANSLATE_NOOP("App::Property", "Width of keyway (DIN 6885)")).KeywayWidth = 2.0
         obj.addProperty("App::PropertyLength", "KeywayDepth", "Bore", QT_TRANSLATE_NOOP("App::Property", "Depth of keyway")).KeywayDepth = 1.0
 
+        # Mating Gear
+        obj.addProperty("App::PropertyBool", "CreateMatingGear", "MatingGear", QT_TRANSLATE_NOOP("App::Property", "Create the mating worm wheel")).CreateMatingGear = True
+        obj.addProperty("App::PropertyLength", "GearHeight", "MatingGear", QT_TRANSLATE_NOOP("App::Property", "Height/thickness of mating gear")).GearHeight = 10.0
+        obj.addProperty("App::PropertyEnumeration", "GearBoreType", "MatingGear", QT_TRANSLATE_NOOP("App::Property", "Bore type for mating gear"))
+        obj.GearBoreType = ["none", "circular", "square", "hexagonal", "keyway"]
+        obj.addProperty("App::PropertyLength", "GearBoreDiameter", "MatingGear", QT_TRANSLATE_NOOP("App::Property", "Bore diameter for mating gear")).GearBoreDiameter = 8.0
+
         self.Type = 'GloboidWormGear'
         self.Object = obj
         obj.Proxy = self
@@ -105,7 +112,12 @@ class GloboidWormGear():
             "square_corner_radius": float(self.Object.SquareCornerRadius.Value),
             "hex_corner_radius": float(self.Object.HexCornerRadius.Value),
             "keyway_width": float(self.Object.KeywayWidth.Value),
-            "keyway_depth": float(self.Object.KeywayDepth.Value)
+            "keyway_depth": float(self.Object.KeywayDepth.Value),
+            # Mating gear parameters
+            "create_mating_gear": bool(self.Object.CreateMatingGear),
+            "gear_height": float(self.Object.GearHeight.Value),
+            "gear_bore_type": str(self.Object.GearBoreType),
+            "gear_bore_diameter": float(self.Object.GearBoreDiameter.Value),
         }
 
     def force_Recompute(self):
@@ -203,6 +215,25 @@ def generateGloboidWormGearPart(doc, parameters):
     body_name = parameters.get("body_name", "GloboidWorm")
     body = util.readyPart(doc, body_name)
 
+    # Clear the BaseFeature if set (from previous generation)
+    if hasattr(body, 'BaseFeature') and body.BaseFeature:
+        body.BaseFeature = None
+
+    # Clean up old intermediate objects from previous generation attempts
+    old_objects = [
+        f"{body_name}_ToolBody",
+        f"{body_name}_ThreadCut",
+        f"{body_name}_CutResult",
+        f"{body_name}_ThreadTool",
+    ]
+    for obj_name in old_objects:
+        old_obj = doc.getObject(obj_name)
+        if old_obj:
+            try:
+                doc.removeObject(obj_name)
+            except Exception:
+                pass
+
     # Extract parameters
     module = parameters["module"]
     num_threads = parameters["num_threads"]
@@ -232,11 +263,34 @@ def generateGloboidWormGearPart(doc, parameters):
     # Arc radius for globoid curve (centered at gear center)
     arc_radius = center_distance - outer_throat_radius
 
+    # Validate arc_radius is positive
+    if arc_radius <= 0:
+        raise gearMath.GearParameterError(
+            f"Invalid geometry: arc_radius ({arc_radius:.2f}) must be positive. "
+            f"Try increasing module or gear teeth, or decreasing worm diameter."
+        )
+
+    # Maximum worm length is limited by arc geometry (cannot exceed 2 * arc_radius)
+    max_worm_length = arc_radius * 2.0 * 0.98  # 98% of max to avoid edge cases
+
     # Determine threaded section span
     if worm_length > 0.01:
+        # If specified worm_length exceeds max, warn and clamp
+        effective_worm_length = worm_length
+        if worm_length > max_worm_length:
+            App.Console.PrintWarning(
+                f"Worm length ({worm_length:.2f}mm) exceeds max ({max_worm_length:.2f}mm) for current geometry.\n"
+            )
+            App.Console.PrintWarning(
+                f"  To increase max length: increase GearTeeth or decrease WormDiameter.\n"
+            )
+            App.Console.PrintWarning(
+                f"  Using effective worm length: {max_worm_length:.2f}mm\n"
+            )
+            effective_worm_length = max_worm_length
+
         # Calculate angle from specified length
-        # Clamp to avoid domain error in asin
-        tooth_half_length = min(worm_length / 2.0, arc_radius - 0.001)
+        tooth_half_length = effective_worm_length / 2.0
         half_angle_rad = math.asin(tooth_half_length / arc_radius)
         # Update effective arc_angle for thread generation
         arc_angle = (half_angle_rad * 2.0) / util.DEG_TO_RAD
@@ -244,6 +298,7 @@ def generateGloboidWormGearPart(doc, parameters):
         # Calculate length from arc angle
         half_angle_rad = (arc_angle / 2.0) * util.DEG_TO_RAD
         tooth_half_length = arc_radius * math.sin(half_angle_rad)
+        effective_worm_length = tooth_half_length * 2.0
 
     # Total half-length (including shoulders if any)
     total_half_length = max(cylinder_length / 2.0, tooth_half_length + 0.01)
@@ -262,16 +317,34 @@ def generateGloboidWormGearPart(doc, parameters):
 
     # Create base sketch for revolution - Explicit Profile
     sk_base = util.createSketch(body, 'GloboidCylinder')
-    sk_base.MapMode = 'Deactivated'
+    
+    # Find XZ Plane for Z-axis orientation
+    xz_plane = None
+    if hasattr(body, 'Origin') and body.Origin:
+        for child in body.Origin.Group:
+            if 'XZ' in child.Name or 'XZ' in child.Label:
+                xz_plane = child
+                break
+        # Fallback
+        if not xz_plane and len(body.Origin.Group) > 1:
+             xz_plane = body.Origin.Group[1]
+
+    if xz_plane:
+        sk_base.AttachmentSupport = [(xz_plane, '')]
+        sk_base.MapMode = 'FlatFace'
+    else:
+        # Fallback: Manual Placement (Rotate 90 deg around X to align Y with Global Z)
+        sk_base.MapMode = 'Deactivated'
+        sk_base.Placement = App.Placement(App.Vector(0, 0, 0), App.Rotation(App.Vector(1,0,0), 90))
 
     # Dimensions
     half_cylinder_length = cylinder_length / 2.0
-    half_worm_length = worm_length / 2.0 if worm_length > 0.01 else tooth_half_length
+    half_worm_length = effective_worm_length / 2.0  # Use already-clamped effective length
     rect_outer_radius = outer_throat_radius
-    
-    # Calculate Arc Geometry (same as before)
+
+    # Calculate Arc Geometry
     arc_center = App.Vector(-center_distance, 0.0, 0)
-    angle_span = 2.0 * math.asin(half_worm_length / arc_radius)
+    angle_span = 2.0 * half_angle_rad  # Already calculated from effective_worm_length
     # Angles for Part.ArcOfCircle (counter-clockwise from X-axis)
     # We want a curve to the left. Center is at -CD.
     # The arc bulges towards +X.
@@ -401,10 +474,10 @@ def generateGloboidWormGearPart(doc, parameters):
     # Constrain Arc Center Distance
     cst_cd = sk_base.addConstraint(Sketcher.Constraint('DistanceX', idx_arc, 3, idx_right, 1, center_distance))
     
-    # Worm Length (Vertical Span of Arc)
-    cst_worm_len = sk_base.addConstraint(Sketcher.Constraint('DistanceY', idx_arc, 1, idx_arc, 2, worm_length))
-    # Or link to WormLength property if logical
-    if worm_length > 0.01:
+    # Worm Length (Vertical Span of Arc) - use effective_worm_length which is clamped to valid range
+    cst_worm_len = sk_base.addConstraint(Sketcher.Constraint('DistanceY', idx_arc, 1, idx_arc, 2, effective_worm_length))
+    # Only link to property if worm_length wasn't clamped (otherwise expression would override our clamping)
+    if worm_length > 0.01 and worm_length <= max_worm_length:
         sk_base.setExpression(f'Constraints[{cst_worm_len}]', 'GloboidWormGearParameters.WormLength')
     
     # Vertical Alignment for Arc Endpoints (Ensures symmetry about X-axis without overconstraining)
@@ -417,13 +490,36 @@ def generateGloboidWormGearPart(doc, parameters):
 
     doc.recompute()
 
-    # Revolve around Z-axis (Vertical axis of Sketch on XZ Plane)
-    rev = body.newObject('PartDesign::Revolution', 'GloboidCylinderBody')
-    rev.Profile = sk_base
-    rev.ReferenceAxis = (sk_base, ['V_Axis'])  # Vertical Axis = Z
-    rev.Angle = 360
-    body.Tip = rev
-    
+    # Check if sketch solved successfully
+    if sk_base.Shape.isNull():
+        App.Console.PrintError(f"GloboidCylinder sketch failed to solve. Geometry params:\n")
+        App.Console.PrintError(f"  arc_radius={arc_radius:.2f}, effective_worm_length={effective_worm_length:.2f}\n")
+        App.Console.PrintError(f"  half_angle_rad={half_angle_rad:.4f}, angle_span={angle_span:.4f}\n")
+        App.Console.PrintError(f"  center_distance={center_distance:.2f}, outer_throat_radius={outer_throat_radius:.2f}\n")
+        raise gearMath.GearParameterError("Sketch failed to solve - check parameter combination")
+
+    # 1. REVOLUTION - Create using Part module (outside the body)
+    # We'll do the boolean cut in Part space, then import the result as BaseFeature
+    # This is cleaner than mixing PartDesign and Part operations
+
+    # First, create the revolution shape from the sketch
+    # Get the sketch wire/face
+    sk_base_shape = sk_base.Shape
+
+    # Create revolution using Part module
+    # Revolve around Z-axis (vertical axis in XZ plane sketch)
+    rev_axis = App.Vector(0, 0, 1)
+    rev_center = App.Vector(0, 0, 0)
+
+    # Make a face from the sketch wire and revolve it
+    try:
+        sketch_face = Part.Face(sk_base_shape)
+        rev_shape = sketch_face.revolve(rev_center, rev_axis, 360)
+    except Exception as e:
+        App.Console.PrintError(f"Revolution failed: {e}\n")
+        App.Console.PrintError(f"Sketch wire count: {len(sk_base_shape.Wires)}, Edge count: {len(sk_base_shape.Edges)}\n")
+        raise gearMath.GearParameterError(f"Cannot create revolution: {e}")
+
     # 2. THREAD GENERATION (B-Rep Loft)
     # Create Thread Profile Sketch
     sk_thread_profile = util.createSketch(body, 'ThreadProfile')
@@ -497,9 +593,8 @@ def generateGloboidWormGearPart(doc, parameters):
 
     # For the worm_length, how many degrees does the thread rotate?
     # One full wrap (360 deg) covers distance = thread_pitch
-    # So for worm_length: rotation = 360 * worm_length / thread_pitch
-    effective_length = worm_length if worm_length > 0.01 else (2 * tooth_half_length)
-    worm_rotation_angle = 360.0 * effective_length / thread_pitch
+    # Use effective_worm_length (already clamped to valid range)
+    worm_rotation_angle = 360.0 * effective_worm_length / thread_pitch
 
     # Calculate loft parameters
     # Number of cross-sections for loft (more = smoother thread)
@@ -509,9 +604,9 @@ def generateGloboidWormGearPart(doc, parameters):
     rotations = worm_rotation_angle / 360.0
     loft_steps = max(20, int(rotations * min_steps_per_rotation * 4))
 
-    App.Console.PrintMessage(f"Thread params: pitch={thread_pitch:.2f}, length={effective_length:.2f}, rotation={worm_rotation_angle:.1f} deg, loft_steps={loft_steps}\n")
-    App.Console.PrintMessage(f"Geometry: outer_throat_radius={outer_throat_radius:.2f}, arc_radius={arc_radius:.2f}, center_distance={center_distance:.2f}\n")
-    App.Console.PrintMessage(f"Profile: height={profile_height:.2f}, width_root={width_root:.2f}, width_tip={width_tip:.2f}\n")
+    App.Console.PrintMessage(f"Thread params: pitch={thread_pitch:.2f}, length={effective_worm_length:.2f}, rotation={worm_rotation_angle:.1f} deg, loft_steps={loft_steps}\\n")
+    App.Console.PrintMessage(f"Geometry: outer_throat_radius={outer_throat_radius:.2f}, arc_radius={arc_radius:.2f}, center_distance={center_distance:.2f}\\n")
+    App.Console.PrintMessage(f"Profile: height={profile_height:.2f}, width_root={width_root:.2f}, width_tip={width_tip:.2f}\\n")
 
     # Now extract the geometry from the sketch
     # We need to get the profile points in the correct order for lofting
@@ -537,15 +632,18 @@ def generateGloboidWormGearPart(doc, parameters):
         App.Vector(0, width_root, 0),              # root, +Y side
     ]
 
-    App.Console.PrintMessage(f"Thread profile points (ordered):\n")
+    App.Console.PrintMessage(f"Thread profile points (ordered):\\n")
     for i, p in enumerate(profile_points):
-        App.Console.PrintMessage(f"  P{i}: ({p.x:.2f}, {p.y:.2f})\n")
+        App.Console.PrintMessage(f"  P{i}: ({p.x:.2f}, {p.y:.2f})\\n")
 
     # For a globoid worm:
-    # - Worm axis is along Y (length direction)
-    # - Thread wraps helically around Y-axis
+    # - Worm axis is now along Z (length direction)
+    # - Thread wraps helically around Z-axis
     # - Profile is perpendicular to helix path
     # - Worm throat is at X (radial direction)
+
+    # Handedness direction factor
+    direction_factor = 1.0 if right_handed else -1.0
 
     # Generate thread profile at multiple positions along the worm
     wires = []
@@ -553,15 +651,16 @@ def generateGloboidWormGearPart(doc, parameters):
         # Parameter from -0.5 to +0.5 along the worm length
         t = (i / loft_steps) - 0.5
 
-        # Y position along worm axis
-        y_pos = t * worm_length if worm_length > 0.01 else t * (2 * tooth_half_length)
+        # Z position along worm axis (use effective_worm_length which is already clamped)
+        z_pos = t * effective_worm_length
 
-        # Helix angle: worm rotates as we move along Y
+        # Helix angle: worm rotates as we move along Z
         # Total rotation over worm_length is worm_rotation_angle
-        helix_angle_deg = t * worm_rotation_angle
+        # Apply direction factor for handedness
+        helix_angle_deg = t * worm_rotation_angle * direction_factor
         helix_angle_rad = helix_angle_deg * util.DEG_TO_RAD
 
-        # Helix rotation around Y-axis (same for all points in this cross-section)
+        # Helix rotation around Z-axis (same for all points in this cross-section)
         cos_h = math.cos(helix_angle_rad)
         sin_h = math.sin(helix_angle_rad)
 
@@ -571,14 +670,14 @@ def generateGloboidWormGearPart(doc, parameters):
             # p.x = radial depth (0 at root/narrow, profile_height at tip/wide)
             # p.y = width along thread direction (symmetric about 0)
 
-            # The profile width (p.y) runs along the worm axis (Y direction)
-            # It does NOT rotate with the helix - stays parallel to Y-axis
-            actual_y = y_pos + p.y
+            # The profile width (p.y) runs along the worm axis (Z direction)
+            # It does NOT rotate with the helix - stays parallel to Z-axis
+            actual_z = z_pos + p.y
 
-            # For globoid worm, the radius varies along Y (hourglass shape)
-            # Each point must use the radius at ITS actual Y position
-            if abs(actual_y) <= arc_radius * 0.999:  # Within the arc region
-                local_radius = center_distance - math.sqrt(arc_radius**2 - actual_y**2)
+            # For globoid worm, the radius varies along Z (hourglass shape)
+            # Each point must use the radius at ITS actual Z position
+            if abs(actual_z) <= arc_radius * 0.999:  # Within the arc region
+                local_radius = center_distance - math.sqrt(arc_radius**2 - actual_z**2)
             else:
                 # Outside arc region - use the shoulder radius
                 local_radius = shoulder_radius
@@ -588,15 +687,17 @@ def generateGloboidWormGearPart(doc, parameters):
             # p.x=profile_height is the wide end (tip of gap) - at the surface
             # But for boolean cut to work, the tool must extend OUTSIDE the cylinder
             # So we add clearance: root goes below surface, tip goes above surface
-            clearance = profile_height * 0.5  # Extra height above surface
+            # REDUCED CLEARANCE: Large clearance shifts the tool out, making the cut narrower at surface (flat teeth)
+            clearance = module * 0.1 
             radial_pos = local_radius - profile_height + p.x + clearance
 
-            # Position in worm frame (Y-axis is worm axis)
-            # Only the radial position rotates around Y-axis by helix angle
-            # The Y position (axial) stays fixed - profile width is parallel to axis
+            # Position in worm frame (Z-axis is worm axis)
+            # Only the radial position rotates around Z-axis by helix angle
+            # The Z position (axial) stays fixed - profile width is parallel to axis
+            # Rotation in XY plane:
             px = radial_pos * cos_h
-            pz = radial_pos * sin_h
-            py = actual_y
+            py = radial_pos * sin_h
+            pz = actual_z
 
             pts_transformed.append(App.Vector(px, py, pz))
 
@@ -608,7 +709,8 @@ def generateGloboidWormGearPart(doc, parameters):
     # Loft thread profile across all wire sections
     thread_solid = Part.makeLoft(wires, solid=True, ruled=False)
     
-    # Container for Thread
+    # Container for Thread Tool (Part::Feature, OUTSIDE BODY)
+    # This is the "Tool" for the Boolean Cut
     thread_name = f"{body_name}_ThreadTool"
     thread_obj = doc.getObject(thread_name)
     if not thread_obj:
@@ -616,47 +718,34 @@ def generateGloboidWormGearPart(doc, parameters):
     thread_obj.Shape = thread_solid
     thread_obj.Visibility = False
     
-    # 3. INTEGRATION - Use Part boolean cut, then bring result back into body
-    # Get the cylinder shape from the revolution
-    doc.recompute()
-    cylinder_shape = rev.Shape.copy()
-    thread_shape = thread_solid.copy()
+    # 3. INTEGRATION - Use Part.Shape.cut() and set as BaseFeature
+    # All geometry is built in Part space, then imported as BaseFeature
+    # This gives a clean PartDesign body where subsequent features work properly
 
-    # Perform boolean cut: cylinder - thread
+    # Perform boolean cut using Part module
     try:
-        result_shape = cylinder_shape.cut(thread_shape)
+        cut_shape = rev_shape.cut(thread_solid)
     except Exception as e:
         App.Console.PrintError(f"Boolean cut failed: {e}\n")
-        result_shape = cylinder_shape  # Fallback to just the cylinder
+        cut_shape = rev_shape  # Fallback to uncut shape
 
-    # Create a Part::Feature to hold the boolean result temporarily
-    result_name = f"{body_name}_Result"
-    result_obj = doc.getObject(result_name)
-    if not result_obj:
-        result_obj = doc.addObject("Part::Feature", result_name)
-    result_obj.Shape = result_shape
+    # Store the cut result in a Part::Feature (outside the body)
+    cut_result_name = f"{body_name}_CutResult"
+    cut_result = doc.getObject(cut_result_name)
+    if not cut_result:
+        cut_result = doc.addObject("Part::Feature", cut_result_name)
+    cut_result.Shape = cut_shape
+    cut_result.Visibility = False
 
-    # Now bring the result back into the PartDesign Body using a SubShapeBinder
-    # This allows PartDesign features (sketches, pads, pockets) to be added
-    binder_name = f"{body_name}_FinalShape"
-    final_binder = None
-    for obj in body.Group:
-        if obj.Name == binder_name:
-            final_binder = obj
-            break
+    # Set the cut result as the BaseFeature of the body
+    # BaseFeature is the starting point for PartDesign operations
+    # With no other features, it IS the body's shape and Tip is None
+    body.BaseFeature = cut_result
 
-    if not final_binder:
-        final_binder = body.newObject("PartDesign::SubShapeBinder", binder_name)
-
-    final_binder.Support = [(result_obj, '')]
-    body.Tip = final_binder
-
-    # Hide the intermediate objects
+    # Hide thread tool
     thread_obj.Visibility = False
-    result_obj.ViewObject.Visibility = False
-    rev.ViewObject.Visibility = False
 
-    # Show the body (which now contains the final shape via binder)
+    # Show the body
     body.ViewObject.Visibility = True
 
     # 4. BORE
@@ -664,7 +753,9 @@ def generateGloboidWormGearPart(doc, parameters):
         # Note: bore may not work properly with Part::Feature in body
         # but we'll try
         try:
-            util.createBore(body, parameters, cylinder_length)
+            # Bore starts at top (Z = Length/2) and cuts down (Reversed=False for standard pocket behavior against normal)
+            bore_placement = App.Placement(App.Vector(0, 0, cylinder_length / 2.0), App.Rotation())
+            util.createBore(body, parameters, cylinder_length, placement=bore_placement, reversed=False)
         except Exception as e:
             App.Console.PrintWarning(f"Could not add bore: {e}\n")
 
