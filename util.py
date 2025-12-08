@@ -304,7 +304,7 @@ def createSketch(body, name=''):
     return sketch
 
 
-def createPad(body, sketch, height, name=''):
+def createPad(body, sketch, height, name='', midplane=False):
     """Create a pad feature from a sketch.
 
     Args:
@@ -312,6 +312,7 @@ def createPad(body, sketch, height, name=''):
         sketch: Sketch to pad
         height: Pad height
         name: Base name for the pad (will append 'Pad')
+        midplane: If True, extrude symmetrically from sketch plane
 
     Returns:
         Created pad object
@@ -319,8 +320,10 @@ def createPad(body, sketch, height, name=''):
     name = name + 'Pad'
     pad = body.Document.addObject("PartDesign::Pad", name)
     body.addObject(pad)
-    pad.Length = height
     pad.Profile = sketch
+    pad.Midplane = midplane  # Set before Length
+    pad.Length = height
+    sketch.Visibility = False
     return pad
 
 
@@ -379,8 +382,6 @@ def createBore(body, parameters, height, placement=None, reversed=True):
     bore_type = parameters.get("bore_type", "none")
     bore_diameter = parameters.get("bore_diameter", 0.0)
 
-    App.Console.PrintMessage(f"createBore called: type={bore_type}, diameter={bore_diameter}, height={height}\n")
-
     if bore_type == "circular":
         _createCircularBore(body, bore_diameter, height, placement, reversed)
     elif bore_type == "square":
@@ -388,7 +389,6 @@ def createBore(body, parameters, height, placement=None, reversed=True):
     elif bore_type == "hexagonal":
         _createHexBore(body, bore_diameter, parameters.get("hex_corner_radius", 0.5), height, placement, reversed)
     elif bore_type == "keyway":
-        App.Console.PrintMessage(f"Calling _createKeywayBore...\n")
         _createKeywayBore(body, bore_diameter, parameters.get("keyway_width", 2.0), parameters.get("keyway_depth", 1.0), height, placement, reversed)
 
 def _applyPlacement(sketch, placement):
@@ -397,19 +397,13 @@ def _applyPlacement(sketch, placement):
         sketch.Placement = placement
 
 def _createCircularBore(body, diameter, height, placement, reversed):
-    App.Console.PrintMessage(f"_createCircularBore: Creating sketch...\n")
     sketch = createSketch(body, 'CircularBore')
-    App.Console.PrintMessage(f"_createCircularBore: Sketch type: {type(sketch)}\n")
     _applyPlacement(sketch, placement)
-    App.Console.PrintMessage(f"_createCircularBore: Adding geometry...\n")
     circle = sketch.addGeometry(Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), diameter / 2), False)
     sketch.addConstraint(Sketcher.Constraint('Coincident', circle, 3, -1, 1))
     sketch.addConstraint(Sketcher.Constraint('Diameter', circle, diameter))
-    App.Console.PrintMessage(f"_createCircularBore: Creating pocket...\n")
     pocket = createPocket(body, sketch, height, 'Bore', reversed)
-    App.Console.PrintMessage(f"_createCircularBore: Setting tip...\n")
     body.Tip = pocket
-    App.Console.PrintMessage(f"_createCircularBore: Done\n")
 
 def _createSquareBore(body, size, corner_radius, height, placement, reversed):
     sketch = createSketch(body, 'SquareBore')
@@ -435,15 +429,10 @@ def _createHexBore(body, diameter, corner_radius, height, placement, reversed):
 
 def _createKeywayBore(body, bore_diameter, keyway_width, keyway_depth, height, placement, reversed):
     # Keyway consists of a circular bore + a keyway slot
-    App.Console.PrintMessage(f"_createKeywayBore: Starting circular bore...\n")
     _createCircularBore(body, bore_diameter, height, placement, reversed)
-    App.Console.PrintMessage(f"_createKeywayBore: Circular bore done, creating keyway sketch...\n")
 
     sketch = createSketch(body, 'Keyway')
-    App.Console.PrintMessage(f"_createKeywayBore: Sketch created: {sketch}, type: {type(sketch)}\n")
-
     _applyPlacement(sketch, placement)
-    App.Console.PrintMessage(f"_createKeywayBore: Placement applied\n")
 
     # Keyway rectangle: centered on X-axis, extending from bore edge outward
     w = keyway_width / 2.0
@@ -457,24 +446,15 @@ def _createKeywayBore(body, bore_diameter, keyway_width, keyway_depth, height, p
         App.Vector(w, r + keyway_depth, 0),   # Outer edge, right
         App.Vector(-w, r + keyway_depth, 0),  # Outer edge, left
     ]
-    App.Console.PrintMessage(f"Keyway: w={w}, r={r}, depth={keyway_depth}, height={height}\n")
-    App.Console.PrintMessage(f"Keyway points: {points}\n")
 
     addPolygonToSketch(sketch, points, closed=True)
-    App.Console.PrintMessage(f"_createKeywayBore: Polygon added to sketch\n")
 
     # Recompute to ensure sketch is valid
     body.Document.recompute()
 
-    App.Console.PrintMessage(f"Keyway sketch edges: {len(sketch.Shape.Edges) if not sketch.Shape.isNull() else 'NULL'}\n")
-
     # Keyway pocket cuts through the full height (same as bore)
-    try:
-        pocket = createPocket(body, sketch, height, 'Keyway', reversed)
-        body.Tip = pocket
-        App.Console.PrintMessage(f"Keyway pocket created: {pocket.Name}\n")
-    except Exception as e:
-        App.Console.PrintError(f"Keyway pocket failed: {e}\n")
+    pocket = createPocket(body, sketch, height, 'Keyway', reversed)
+    body.Tip = pocket
 def _constrainSketchPoint(sketch, geo_index, point_index, point_vector):
     """
     Helper function to apply X and Y position constraints to a specific point 
