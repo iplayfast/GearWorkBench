@@ -970,20 +970,22 @@ def rotatePoint(x, y, angle_rad):
 # ============================================================================
 
 def readyPart(doc, name):
-    """Create a body if not present, or clean it if it exists.
+    """Create a body if not present, or remove and recreate it if it exists.
 
     Args:
         doc: FreeCAD document
         name: Name of the body
 
     Returns:
-        Body object (new or cleaned)
+        Body object (new or recreated with fresh Origin)
     """
     part = doc.getObject(name)
     if part:
+        # Remove the old body completely and create a fresh one
+        # This ensures Origin planes are properly initialized
         part.removeObjectsFromDocument()
-    else:
-        part = doc.addObject('PartDesign::Body', name)
+        doc.removeObject(name)
+    part = doc.addObject('PartDesign::Body', name)
     return part
 
 

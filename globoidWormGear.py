@@ -15,6 +15,7 @@ import Part
 import Sketcher
 import os
 import math
+import spurGear
 from PySide import QtCore
 
 smWBpath = os.path.dirname(gearMath.__file__)
@@ -571,7 +572,7 @@ def generateGloboidWormGearPart(doc, parameters):
     # Center the 'bottom_line' and 'top_line' symmetrically around the X-axis (horizontal axis)
     # Reference -1 = X-axis (NOT -1,1 which is Origin point!)
     sk_thread_profile.addConstraint(Sketcher.Constraint('Symmetric', idx_bottom_line, 1, idx_bottom_line, 2, -1))
-    sk_thread_profile.addConstraint(Sketcher.Constraint('Symmetric', idx_top_line, 1, idx_top_line, 2, -1))
+    sk_thread_profile.addConstraint(Sketcher.Constraint('Symmetric', idx_top_line, 1, idx_top_line, 2, -1)) 
 
     # 3. Dimensional Constraints
     # X-Position of bottom line (anchors the trapezoid position)
@@ -782,11 +783,9 @@ def generateGloboidWormGearPart(doc, parameters):
 def generateMatingGear(doc, parameters, center_distance, worm_outer_radius):
     """Generate the mating worm wheel (gear) for the globoid worm.
 
-    Creates a parametric worm wheel using PartDesign features:
-    1. Throated gear blank (Sketch + Revolution) - Concave face to match worm
-    2. Tooth slot sketch with trapezoidal profile
-    3. Pocket for the slot
-    4. Polar pattern for all teeth
+    Creates a Throated Spur Gear:
+    1. Generates standard involute spur gear geometry (Teeth + Cylinder).
+    2. Cuts a concave 'throat' matching the worm's profile using a Groove.
 
     Args:
         doc: FreeCAD document
@@ -796,6 +795,12 @@ def generateMatingGear(doc, parameters, center_distance, worm_outer_radius):
     """
     body_name = parameters.get("body_name", "GloboidWorm")
     gear_body_name = f"{body_name}_WormWheel"
+
+    # Extract parameters needed for the spur gear
+    module = parameters["module"]
+    num_teeth = parameters["gear_teeth"]
+    height = parameters["gear_height"]
+    pressure_angle = parameters["pressure_angle"]
 
     # Clean up existing gear body and related objects
     gear_body = doc.getObject(gear_body_name)
@@ -809,222 +814,139 @@ def generateMatingGear(doc, parameters, center_distance, worm_outer_radius):
         if obj:
             doc.removeObject(f"{gear_body_name}{suffix}")
 
-    gear_body = doc.addObject('PartDesign::Body', gear_body_name)
+    # Build parameters for spur gear generation
+    spur_params = {
+        "module": module,
+        "num_teeth": num_teeth,
+        "pressure_angle": pressure_angle,
+        "profile_shift": 0.0,
+        "height": height,
+        "body_name": gear_body_name,
+        "bore_type": "none",  # We'll add bore after the groove
+        "bore_diameter": 0.0,
+        "square_corner_radius": 0.5,
+        "hex_corner_radius": 0.5,
+        "keyway_width": 2.0,
+        "keyway_depth": 1.0,
+    }
 
-    # Extract parameters
-    module = parameters["module"]
-    num_teeth = parameters["gear_teeth"]
-    pressure_angle = parameters["pressure_angle"]
-    gear_height = parameters.get("gear_height", 10.0)
-    
-    # Calculate gear dimensions
-    addendum = module * gearMath.ADDENDUM_FACTOR
-    dedendum = module * gearMath.DEDENDUM_FACTOR
+    spurGear.generateSpurGearPart(doc, spur_params)
+    gear_body = doc.getObject(gear_body_name)
 
-    gear_pitch_radius = (module * num_teeth) / 2.0
-    # Throat radius (smallest radius of gear)
-    gear_throat_radius = gear_pitch_radius + addendum
-    gear_root_radius = gear_pitch_radius - dedendum
-
-    half_height = gear_height / 2.0
-    tooth_angle_deg = 360.0 / num_teeth
-
-    # =========================================================================
-    # STEP 1: Create Throated Gear Blank (Sketch + Revolution)
-    # =========================================================================
-    sk_blank = gear_body.newObject('Sketcher::SketchObject', 'GearBlankSketch')
-
-    # Sketch on XZ plane (Local) -> Revolve around Z (Local)
-    # In Local Frame: Z is Axis. X is Radial.
-    xy_plane = None # Actually we want XZ plane of the Body
-    if hasattr(gear_body, 'Origin') and gear_body.Origin:
-        for child in gear_body.Origin.Group:
-            if 'XZ' in child.Name or 'XZ' in child.Label:
-                xy_plane = child
-                break
-    
-    if xy_plane:
-        sk_blank.AttachmentSupport = [(xy_plane, '')]
-        sk_blank.MapMode = 'FlatFace'
-    else:
-        # Fallback placement
-        sk_blank.MapMode = 'Deactivated'
-        sk_blank.Placement = App.Placement(App.Vector(0,0,0), App.Rotation(App.Vector(1,0,0), 90))
-
-    # Calculate Arc for Throat
-    # Center of curvature is the Worm Axis (at X = center_distance)
-    r_curvature = center_distance - gear_throat_radius
-    
-    # Validate curvature
-    if r_curvature <= module:
-        r_curvature = worm_outer_radius + 0.5 # Fallback
-    
-    # Points for Profile (Right side of axis)
-    # P1: (0, -H/2) - Bottom Axis
-    # P2: (0, H/2) - Top Axis
-    # P3: (R_edge, H/2) - Top Corner
-    # P4: (R_edge, -H/2) - Bottom Corner
-    
-    # Calculate R_edge at H/2
-    if r_curvature > half_height:
-        dx = math.sqrt(r_curvature**2 - half_height**2)
-        r_edge = center_distance - dx
-    else:
-        r_edge = gear_throat_radius + 0.5 * module
-    
-    p1 = App.Vector(0, -half_height, 0)
-    p2 = App.Vector(0, half_height, 0)
-    p3 = App.Vector(r_edge, half_height, 0)
-    p4 = App.Vector(r_edge, -half_height, 0)
-    p_center = App.Vector(center_distance, 0, 0)
-    
-    # Calculate angles for ArcOfCircle (P3 to P4 CCW)
-    # We want the arc segment on the West side (negative X relative to center)
-    v3 = p3 - p_center
-    v4 = p4 - p_center
-    ang3 = math.atan2(v3.y, v3.x)
-    ang4 = math.atan2(v4.y, v4.x)
-    
-    # Ensure we traverse CCW from P3 to P4 (crossing 180 deg)
-    # P3 is in Q2 (approx 170 deg), P4 is in Q3 (approx -170 deg)
-    if ang4 < ang3:
-        ang4 += 2 * math.pi
-    
-    # Geometry
-    geoList = []
-    geoList.append(Part.LineSegment(p1, p2)) # Axis
-    geoList.append(Part.LineSegment(p2, p3)) # Top
-    geoList.append(Part.ArcOfCircle(Part.Circle(p_center, App.Vector(0,0,1), r_curvature), ang3, ang4)) # Arc
-    geoList.append(Part.LineSegment(p4, p1)) # Bottom
-    
-    # Add to sketch
-    # 0: Axis, 1: Top, 2: Arc, 3: Bottom
-    idx_axis = sk_blank.addGeometry(geoList[0], False)
-    idx_top = sk_blank.addGeometry(geoList[1], False)
-    idx_arc = sk_blank.addGeometry(geoList[2], False)
-    idx_bot = sk_blank.addGeometry(geoList[3], False)
-    
-    # Constraints
-    sk_blank.addConstraint(Sketcher.Constraint('Coincident', idx_axis, 2, idx_top, 1))
-    sk_blank.addConstraint(Sketcher.Constraint('Coincident', idx_top, 2, idx_arc, 1)) # Arc Start is P3
-    sk_blank.addConstraint(Sketcher.Constraint('Coincident', idx_arc, 2, idx_bot, 1)) # Arc End is P4
-    sk_blank.addConstraint(Sketcher.Constraint('Coincident', idx_bot, 2, idx_axis, 1))
-    
-    sk_blank.addConstraint(Sketcher.Constraint('Vertical', idx_axis))
-    sk_blank.addConstraint(Sketcher.Constraint('Horizontal', idx_top))
-    #redundent 
-    #sk_blank.addConstraint(Sketcher.Constraint('Horizontal', idx_bot))
-    
-    # Axis on Y-Axis
-    #sk_blank.addConstraint(Sketcher.Constraint('PointOnObject', idx_axis, 1, -2)) 
-    #sk_blank.addConstraint(Sketcher.Constraint('PointOnObject', idx_axis, 2, -2))
-    
-    # Symmetry about Origin
-    sk_blank.addConstraint(Sketcher.Constraint('Symmetric', idx_axis, 1, idx_axis, 2, -1, 1)) # Center on Origin
-    
-    # Dimensions
-    sk_blank.addConstraint(Sketcher.Constraint('DistanceY', idx_axis, 1, idx_axis, 2, gear_height))
-    
-    # Throat/Arc Placement
-    # Constrain Arc Center Distance X from Axis
-    sk_blank.addConstraint(Sketcher.Constraint('DistanceX', idx_axis, 1, idx_arc, 3, center_distance)) 
-    # Arc Radius
-    sk_blank.addConstraint(Sketcher.Constraint('Radius', idx_arc, r_curvature))
-    
-    # Symmetry of Top/Bot endpoints (P3/P4) about X-Axis (-1)
-    # This replaces the redundant "Center on X-Axis"
-    sk_blank.addConstraint(Sketcher.Constraint('Symmetric', idx_top, 2, idx_bot, 1, -1))
-    sk_blank.Visibility = False
-    doc.recompute()
-    
-    # Revolution - Use Vertical Axis of Sketch (V_Axis)
-    rev = gear_body.newObject('PartDesign::Revolution', 'GearBlankRev')
-    rev.Profile = sk_blank
-    rev.ReferenceAxis = (sk_blank, ['V_Axis']) # Correct axis for XZ profile
-    rev.Angle = 360
-    
-    gear_body.Tip = rev
-    doc.recompute()
+    if not gear_body:
+        raise gearMath.GearParameterError(f"Failed to create spur gear body: {gear_body_name}")
 
     # =========================================================================
-    # STEP 2: Create tooth slot (Sketch + Pocket + PolarPattern)
+    # STEP 2: Throat Cut (Concave Profile via Groove)
     # =========================================================================
 
-    # Slot dimensions
-    tan_pa = math.tan(pressure_angle * util.DEG_TO_RAD)
-    tooth_thickness = (math.pi * module) / 2.0
-    slot_width_pitch = tooth_thickness * 0.95
-    slot_half_width_tip = (slot_width_pitch / 2.0) + dedendum * tan_pa
-    slot_half_width_root = (slot_width_pitch / 2.0) - addendum * tan_pa
-    slot_half_width_root = max(slot_half_width_root, module * 0.15)
+    # The Groove feature revolves a sketch profile around an axis.
+    # We sketch a circle on the XZ plane (which contains the gear's radial direction).
+    # The circle represents the cross-section of the worm.
+    # When revolved around the gear's Z-axis, it cuts a concave channel
+    # around the gear's perimeter.
+    #
+    # Geometry:
+    # - Gear center at origin, gear axis = Z
+    # - Worm axis perpendicular to gear axis (along Y after placement)
+    # - Worm center is at distance = center_distance from gear axis
+    # - Circle radius = worm outer radius + clearance
 
-    # Create slot sketch on XY plane (Face of Gear)
-    sk_slot = gear_body.newObject('Sketcher::SketchObject', 'ToothSlotSketch')
+    # Create sketch directly in the gear body (don't use util.createSketch)
+    sk_throat = gear_body.newObject('Sketcher::SketchObject', 'ThroatCutSketch')
 
-    # Find XY plane
-    xy_plane_obj = None
-    for child in gear_body.Origin.Group:
-        if 'XY' in child.Name:
-            xy_plane_obj = child
+    # Find the XZ_Plane in the body's Origin
+    # XZ plane is vertical, containing the gear axis (Z) and radial direction (X)
+    # This allows the groove to revolve around Z-axis
+    xz_plane = None
+    for feat in gear_body.Origin.OriginFeatures:
+        if 'XZ' in feat.Name or 'XZ' in feat.Label:
+            xz_plane = feat
             break
-            
-    if xy_plane_obj:
-        sk_slot.AttachmentSupport = [(xy_plane_obj, '')]
-        sk_slot.MapMode = 'FlatFace'
 
-    # Slot geometry
-    r_inner = gear_root_radius - 0.3 * module
-    r_outer = r_edge + 1.0 * module # Ensure we cut through the horn
+    if xz_plane:
+        sk_throat.AttachmentSupport = [(xz_plane, '')]
+        sk_throat.MapMode = 'ObjectXY'
+        # Offset the sketch in Y (which is Z in body coords for XZ plane) by half gear height
+        # For XZ plane with ObjectXY mode: sketch X = body X, sketch Y = body Z
+        # AttachmentOffset is in sketch local coords, so Y offset moves in body Z direction
+        sk_throat.AttachmentOffset = App.Placement(App.Vector(0, height / 2.0, 0), App.Rotation())
+    else:
+        App.Console.PrintError("Could not find XZ plane in Origin\n")
+        for i, feat in enumerate(gear_body.Origin.OriginFeatures):
+            App.Console.PrintMessage(f"  OriginFeatures[{i}]: {feat.Name} ({feat.Label})\n")
 
-    slot_points = [
-        App.Vector(r_inner, -slot_half_width_root, 0),   # Inner left
-        App.Vector(r_inner, slot_half_width_root, 0),    # Inner right
-        App.Vector(r_outer, slot_half_width_tip, 0),     # Outer right
-        App.Vector(r_outer, -slot_half_width_tip, 0),    # Outer left
-    ]
+    # Circle for worm clearance cut
+    # Radius = Worm Outer Radius + Clearance (for backlash)
+    clearance = module * 0.5
+    cut_radius = worm_outer_radius + clearance
 
-    util.addPolygonToSketch(sk_slot, slot_points, closed=True)
-    #gearMath.generateToothProfile(sk_slot, parameters)
+    # In XZ plane sketch coordinates:
+    # - Sketch X = Body X (radial outward)
+    # - Sketch Y = Body Z (gear height axis)
+    # Circle center at (center_distance, 0) - on the positive X side, centered on gear height
+
+    c_idx = sk_throat.addGeometry(
+        Part.Circle(App.Vector(center_distance, 0, 0), App.Vector(0, 0, 1), cut_radius),
+        False
+    )
+
+    # Constraints
+    # Center on horizontal axis (sketch X-axis, Y=0 means Z=0 in body = gear midplane)
+    sk_throat.addConstraint(Sketcher.Constraint('PointOnObject', c_idx, 3, -1))
+
+    # Lock the radius
+    sk_throat.addConstraint(Sketcher.Constraint('Radius', c_idx, cut_radius))
+
+    # Lock the X position of center (distance from gear axis)
+    sk_throat.addConstraint(Sketcher.Constraint('DistanceX', -1, 1, c_idx, 3, center_distance))
+
     doc.recompute()
-    sk_slot.Visibility = False
 
-    # Pocket
-    pocket = gear_body.newObject('PartDesign::Pocket', 'ToothSlotPocket')
-    pocket.Profile = sk_slot
-    pocket.Length = gear_height + 5.0 # Through all
-    pocket.Midplane = True
-    pocket.SideType = "Symmetric"
+    # Create the Groove - revolves the circle around the gear's Z-axis
+    # On XZ plane, the sketch's V_Axis (Y in sketch) corresponds to Body Z-axis
+    groove = gear_body.newObject('PartDesign::Groove', 'ThroatGroove')
+    groove.Profile = sk_throat
+    groove.ReferenceAxis = (sk_throat, ['V_Axis'])
+    groove.Angle = 360.0  # Full revolution
+    groove.Midplane = False
+    groove.Reversed = False
 
-    gear_body.Tip = pocket
+    sk_throat.Visibility = False
+    gear_body.Tip = groove
     doc.recompute()
 
-    # Polar Pattern
-    polar = gear_body.newObject('PartDesign::PolarPattern', 'ToothPattern')
-    polar.Originals = [pocket]
-    polar.Axis = (sk_slot, ['N_Axis'])
-    polar.Angle = 360
-    polar.Occurrences = num_teeth
-
-    gear_body.Tip = polar
-    
     # =========================================================================
     # STEP 3: Alignment & Placement
     # =========================================================================
-    
-    # Rotation Offset Logic
+
+    # Position the gear so it meshes with the worm:
+    # - Worm is at origin with axis along Z
+    # - Gear needs to be offset by center_distance along X
+    # - Gear axis needs to be perpendicular to worm axis
+
+    # Calculate rotation offset to align teeth with worm thread
+    tooth_angle_deg = 360.0 / num_teeth
+
     if num_teeth % 2 == 1:
-        # Odd teeth: Tooth center at 180 deg. No rotation needed.
+        # Odd teeth: gap (slot) naturally at 180 degrees from first tooth
         rotation_offset = 0.0
     else:
-        # Even teeth: Slot center at 180 deg. Rotate half pitch to bring tooth to 180.
+        # Even teeth: tooth at 180 degrees, rotate by half pitch to get slot there
         rotation_offset = tooth_angle_deg / 2.0
-        
-    # Combine Rotations
-    r_align = App.Rotation(App.Vector(1, 0, 0), 90) # Gear Z -> Global -Y
-    r_phase = App.Rotation(App.Vector(0, 0, 1), rotation_offset) # Rotate around Gear Z
-    
+
+    # Rotation to orient gear axis perpendicular to worm axis
+    # Worm axis = Z, Gear axis should be along Y (or X)
+    # Rotate 90 degrees around X to tilt gear axis from Z to Y
+    r_align = App.Rotation(App.Vector(1, 0, 0), 90)
+
+    # Phase rotation to align teeth
+    r_phase = App.Rotation(App.Vector(0, 0, 1), rotation_offset)
+
+    # Position: offset by center_distance in X, and half the gear height in Y
+    # (gear is centered on its local Z, but after rotation that becomes Y)
     gear_body.Placement = App.Placement(
-        App.Vector(center_distance, 0, 0),
+        App.Vector(center_distance, height / 2.0, 0),
         r_align.multiply(r_phase)
     )
 
@@ -1044,16 +966,14 @@ def generateMatingGear(doc, parameters, center_distance, worm_outer_radius):
                 "keyway_width": parameters.get("keyway_width", 2.0),
                 "keyway_depth": parameters.get("keyway_depth", 1.0),
             }
-            # For throated gear, the 'top' surface at center is roughly H/2.
-            # But creating bore from center plane out is safer.
-            bore_placement = App.Placement(App.Vector(0, 0, gear_height / 2.0), App.Rotation())
-            util.createBore(gear_body, gear_bore_params, gear_height, placement=bore_placement, reversed=False)
+            bore_placement = App.Placement(App.Vector(0, 0, height / 2.0), App.Rotation())
+            util.createBore(gear_body, gear_bore_params, height, placement=bore_placement, reversed=False)
         except Exception as e:
             App.Console.PrintWarning(f"Could not add bore to mating gear: {e}\n")
 
     doc.recompute()
     gear_body.ViewObject.Visibility = True
-    App.Console.PrintMessage(f"Throated Worm wheel created: {gear_body_name} with {num_teeth} teeth\n")
+    App.Console.PrintMessage(f"Throated Spur Worm Wheel created: {gear_body_name}\n")
 
 
 try: FreeCADGui.addCommand('GloboidWormGearCreateObject', GloboidWormGearCreateObject())
