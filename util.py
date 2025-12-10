@@ -321,7 +321,10 @@ def createPad(body, sketch, height, name='', midplane=False):
     pad = body.Document.addObject("PartDesign::Pad", name)
     body.addObject(pad)
     pad.Profile = sketch
+    #Midplane is being depreciated
     pad.Midplane = midplane  # Set before Length
+    if midplane:
+        pad.SideType = "Symmetric"
     pad.Length = height
     sketch.Visibility = False
     return pad

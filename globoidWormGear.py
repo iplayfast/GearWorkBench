@@ -65,9 +65,9 @@ class GloboidWormGear():
         obj.addProperty("App::PropertyAngle", "PressureAngle", "GloboidWorm", QT_TRANSLATE_NOOP("App::Property", "Pressure angle")).PressureAngle = 20.0
         
         # The worm length is defined by the wrap angle around the gear
-        obj.addProperty("App::PropertyAngle", "ArcAngle", "GloboidWorm", QT_TRANSLATE_NOOP("App::Property", "Engagement angle (typically 60-90)")).ArcAngle = 60.0
-        obj.addProperty("App::PropertyLength", "WormLength", "GloboidWorm", QT_TRANSLATE_NOOP("App::Property", "Length of the threaded section (0 = defined by ArcAngle)")).WormLength = 20.0
-        obj.addProperty("App::PropertyLength", "CylinderLength", "GloboidWorm", QT_TRANSLATE_NOOP("App::Property", "Total length of the worm cylinder")).CylinderLength = 30.0
+        obj.addProperty("App::PropertyAngle", "ArcAngle", "GloboidWorm", QT_TRANSLATE_NOOP("App::Property", "Engagement angle (typically 60-90)")).ArcAngle = 90.0
+        obj.addProperty("App::PropertyLength", "WormLength", "GloboidWorm", QT_TRANSLATE_NOOP("App::Property", "Length of the threaded section (0 = defined by ArcAngle)")).WormLength = 0.0
+        obj.addProperty("App::PropertyLength", "CylinderLength", "GloboidWorm", QT_TRANSLATE_NOOP("App::Property", "Total length of the worm cylinder")).CylinderLength = 40.0
         obj.addProperty("App::PropertyBool", "RightHanded", "GloboidWorm", QT_TRANSLATE_NOOP("App::Property", "True for Right-handed")).RightHanded = True
         obj.addProperty("App::PropertyString", "BodyName", "GloboidWorm", QT_TRANSLATE_NOOP("App::Property", "Body Name")).BodyName = "GloboidWorm"
         
@@ -782,8 +782,11 @@ def generateGloboidWormGearPart(doc, parameters):
 def generateMatingGear(doc, parameters, center_distance, worm_outer_radius):
     """Generate the mating worm wheel (gear) for the globoid worm.
 
-    The worm wheel has teeth that are throated to match the worm's curvature.
-    It is positioned at the correct center distance from the worm.
+    Creates a parametric worm wheel using PartDesign features:
+    1. Cylindrical gear blank (Sketch + Pad)
+    2. Tooth slot sketch with trapezoidal profile
+    3. Pocket for the slot
+    4. Polar pattern for all teeth
 
     Args:
         doc: FreeCAD document
@@ -794,23 +797,24 @@ def generateMatingGear(doc, parameters, center_distance, worm_outer_radius):
     body_name = parameters.get("body_name", "GloboidWorm")
     gear_body_name = f"{body_name}_WormWheel"
 
-    # Clean up existing gear body
+    # Clean up existing gear body and related objects
     gear_body = doc.getObject(gear_body_name)
     if gear_body:
         gear_body.removeObjectsFromDocument()
         doc.removeObject(gear_body_name)
 
-    # Also clean up cut result
-    cut_result_name = f"{gear_body_name}_CutResult"
-    cut_result = doc.getObject(cut_result_name)
-    if cut_result:
-        doc.removeObject(cut_result_name)
+    # Clean up any leftover Part::Feature objects
+    for suffix in ["_CutResult", "_Blank"]:
+        obj = doc.getObject(f"{gear_body_name}{suffix}")
+        if obj:
+            doc.removeObject(f"{gear_body_name}{suffix}")
 
     gear_body = doc.addObject('PartDesign::Body', gear_body_name)
 
     # Extract parameters
     module = parameters["module"]
     num_teeth = parameters["gear_teeth"]
+    num_threads = parameters["num_threads"]
     pressure_angle = parameters["pressure_angle"]
     gear_height = parameters.get("gear_height", 10.0)
     right_handed = parameters["right_handed"]
@@ -819,29 +823,25 @@ def generateMatingGear(doc, parameters, center_distance, worm_outer_radius):
     addendum = module * gearMath.ADDENDUM_FACTOR
     dedendum = module * gearMath.DEDENDUM_FACTOR
 
-    # Gear pitch radius
     gear_pitch_radius = (module * num_teeth) / 2.0
-    # Outer radius (tip of teeth)
     gear_outer_radius = gear_pitch_radius + addendum
-    # Root radius (bottom of teeth)
     gear_root_radius = gear_pitch_radius - dedendum
 
+    half_height = gear_height / 2.0
+    tooth_angle_deg = 360.0 / num_teeth
+
     # Position the gear body at center_distance along X-axis
-    # The worm is along Z-axis, gear should rotate around X-axis (gear axis along X)
-    # Rotate 90 degrees around Z to position, then 90 around the new Y to orient gear axis
     gear_body.Placement = App.Placement(
         App.Vector(center_distance, 0, 0),
-        App.Rotation(App.Vector(1, 0, 0), 90)  # Rotate 90° around X-axis so gear axis is along Y
+        App.Rotation(App.Vector(1, 0, 0), 90)
     )
 
-    # Create the base gear disk (will be cut by worm envelope)
-    # The gear is a cylinder with outer radius = gear_outer_radius
-    # Sketch on XY plane, pad along Z (which becomes the gear axis after body rotation)
+    # =========================================================================
+    # STEP 1: Create gear blank (Sketch + Pad) - PARAMETRIC
+    # =========================================================================
+    sk_blank = gear_body.newObject('Sketcher::SketchObject', 'GearBlankSketch')
 
-    # Create sketch for gear blank
-    sk_gear = gear_body.newObject('Sketcher::SketchObject', 'GearBlankSketch')
-
-    # Find XY plane for the gear body (this will be the face of the gear)
+    # Find XY plane
     xy_plane = None
     if hasattr(gear_body, 'Origin') and gear_body.Origin:
         for child in gear_body.Origin.Group:
@@ -852,93 +852,110 @@ def generateMatingGear(doc, parameters, center_distance, worm_outer_radius):
             xy_plane = gear_body.Origin.Group[0]
 
     if xy_plane:
-        sk_gear.AttachmentSupport = [(xy_plane, '')]
-        sk_gear.MapMode = 'FlatFace'
+        sk_blank.AttachmentSupport = [(xy_plane, '')]
+        sk_blank.MapMode = 'FlatFace'
 
-    # Draw the gear blank as a circle
-    circle = sk_gear.addGeometry(Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), gear_outer_radius), False)
-    sk_gear.addConstraint(Sketcher.Constraint('Coincident', circle, 3, -1, 1))
-    sk_gear.addConstraint(Sketcher.Constraint('Diameter', circle, gear_outer_radius * 2))
+    # Draw gear blank as circle
+    circle_idx = sk_blank.addGeometry(Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), gear_outer_radius), False)
+    sk_blank.addConstraint(Sketcher.Constraint('Coincident', circle_idx, 3, -1, 1))
+    sk_blank.addConstraint(Sketcher.Constraint('Diameter', circle_idx, gear_outer_radius * 2))
 
     doc.recompute()
+    sk_blank.Visibility = False
 
-    # Pad the gear blank with Midplane for symmetric extrusion
-    #pad = util.createPad(gear_body,circle,gear_height,'GearBlankPad',midplane=True)
-    pad = doc.addObject('PartDesign::Pad', 'GearBlankPad')
-    gear_body.addObject(pad)
-    pad.Profile = sk_gear
+    # Pad the gear blank
+    pad = gear_body.newObject('PartDesign::Pad', 'GearBlankPad')
+    pad.Profile = sk_blank
     pad.Length = gear_height
+    pad.Midplane = True
+    pad.SideType = "Symmetric"
 
-    pad.Midplane = True  
+    gear_body.Tip = pad
     doc.recompute()
 
-    # Now we need to cut the teeth using the worm envelope
-    # The slot is the space between teeth (where the worm thread fits)
-    tan_pressure = math.tan(pressure_angle * util.DEG_TO_RAD)
+    # =========================================================================
+    # STEP 2: Create tooth slot (Sketch + Pocket + PolarPattern) - PARAMETRIC
+    # =========================================================================
 
-    # Tooth thickness at pitch circle
+    # Slot dimensions based on worm thread
+    tan_pa = math.tan(pressure_angle * util.DEG_TO_RAD)
     tooth_thickness = (math.pi * module) / 2.0
 
-    # Slot width at pitch circle (space for worm thread)
-    slot_width_pitch = tooth_thickness  # Equal spacing
+    # Slot width (space between teeth where worm thread fits)
+    slot_width_pitch = tooth_thickness * 0.95  # Clearance
 
-    # Slot is NARROWER at the root (bottom of slot, near center), WIDER at outer edge
-    # This is the inverse of the tooth shape
-    slot_width_outer = slot_width_pitch + 2 * addendum * tan_pressure  # Wider at outside
-    slot_width_inner = slot_width_pitch - 2 * dedendum * tan_pressure  # Narrower at root
+    # Slot is wider at root (inside), narrower at tip (outside)
+    # This is the INVERSE of a tooth profile
+    slot_half_width_tip = (slot_width_pitch / 2.0) + dedendum * tan_pa
+    slot_half_width_root = (slot_width_pitch / 2.0) - addendum * tan_pa
+    slot_half_width_root = max(slot_half_width_root, module * 0.15)  # Minimum
 
-    # Create slot cutting sketch on XY plane (gear face)
+    # Create slot sketch on XY plane
     sk_slot = gear_body.newObject('Sketcher::SketchObject', 'ToothSlotSketch')
-
-    # Find XY plane for the gear body
-    xy_plane = None
-    if hasattr(gear_body, 'Origin') and gear_body.Origin:
-        for child in gear_body.Origin.Group:
-            if 'XY' in child.Name or 'XY' in child.Label:
-                xy_plane = child
-                break
-        if not xy_plane and len(gear_body.Origin.Group) > 0:
-            xy_plane = gear_body.Origin.Group[0]
 
     if xy_plane:
         sk_slot.AttachmentSupport = [(xy_plane, '')]
         sk_slot.MapMode = 'FlatFace'
 
-    # Trapezoidal slot profile (one tooth gap)
-    # The slot radiates outward from near the root to past the outer radius
-    # In XY plane: X is radial, Y is tangential
+    # Trapezoidal slot profile - radial slot from root to outer
+    # Points in XY plane (X = radial, Y = tangential at angle 0)
+    r_inner = gear_root_radius - 0.3 * module  # Cut slightly below root
+    r_outer = gear_outer_radius + 0.5 * module  # Cut beyond outer
+
     slot_points = [
-        App.Vector(gear_root_radius, -slot_width_inner / 2, 0),   # Inner edge, left
-        App.Vector(gear_root_radius, slot_width_inner / 2, 0),    # Inner edge, right
-        App.Vector(gear_outer_radius + 0.5, slot_width_outer / 2, 0),   # Outer edge, right (wider)
-        App.Vector(gear_outer_radius + 0.5, -slot_width_outer / 2, 0),  # Outer edge, left (wider)
+        App.Vector(r_inner, -slot_half_width_root, 0),   # Inner left
+        App.Vector(r_inner, slot_half_width_root, 0),    # Inner right
+        App.Vector(r_outer, slot_half_width_tip, 0),     # Outer right (narrower)
+        App.Vector(r_outer, -slot_half_width_tip, 0),    # Outer left (narrower)
     ]
 
     util.addPolygonToSketch(sk_slot, slot_points, closed=True)
 
     doc.recompute()
+    sk_slot.Visibility = False
 
-    # Pocket the slot through the gear (along Z in gear local coords = gear axis direction)
+    # Pocket the slot through the gear
     pocket = gear_body.newObject('PartDesign::Pocket', 'ToothSlotPocket')
     pocket.Profile = sk_slot
-    pocket.Length = gear_height + 1  # Slightly more than gear height to cut through
-    pocket.Midplane = True  # Symmetric - cuts equally both directions from sketch plane
-    pocket.Reversed = True  # Cut in the correct direction (toward worm)
+    pocket.Length = gear_height + 1.0
+    pocket.Midplane = True
+    pocket.SideType = "Symmetric"
 
+    gear_body.Tip = pocket
     doc.recompute()
 
-    # Create polar pattern for all teeth around Z axis (gear axis in local coords)
+    # Polar pattern for all teeth
     polar = gear_body.newObject('PartDesign::PolarPattern', 'ToothPattern')
     polar.Originals = [pocket]
-    polar.Axis = (sk_slot, ['N_Axis'])  # Normal axis of sketch = Z = gear rotation axis
+    polar.Axis = (sk_slot, ['N_Axis'])  # Normal axis of sketch = Z = gear axis
     polar.Angle = 360
     polar.Occurrences = num_teeth
 
     gear_body.Tip = polar
+    # we need to rotate the wheel one half tooth to align with worm thread
+    # The gear slots (voids) are created at angle 0. The worm groove (void) is also at Z=0.
+    # We want the gear tooth (solid) to align with the worm groove (void).
+    # So rotate by half a pitch (tooth_angle / 2).
+    rotation_offset = tooth_angle_deg / 2.0
+    
+    # Rotation alignment: Local Z (Gear Axis) -> Global -Y (Standard Worm Orientation)
+    # Rotating 90 deg around X: (0,0,1) -> (0,-1,0)
+    r_align = App.Rotation(App.Vector(1, 0, 0), 90)
+    
+    # Rotation phase: Rotate gear around its own axis (Local Z)
+    r_phase = App.Rotation(App.Vector(0, 0, 1), rotation_offset)
+    
+    # Combine: Apply phase rotation first, then alignment
+    gear_body.Placement = App.Placement(
+        App.Vector(center_distance, 0, 0),
+        r_align.multiply(r_phase)
+    )
 
     doc.recompute()
 
-    # Add bore to mating gear
+    # =========================================================================
+    # STEP 3: Add bore if requested - PARAMETRIC
+    # =========================================================================
     gear_bore_type = parameters.get("gear_bore_type", "none")
     if gear_bore_type != "none":
         try:
@@ -950,14 +967,14 @@ def generateMatingGear(doc, parameters, center_distance, worm_outer_radius):
                 "keyway_width": parameters.get("keyway_width", 2.0),
                 "keyway_depth": parameters.get("keyway_depth", 1.0),
             }
-            # Bore placement for gear - on XY plane at Z = gear_height/2, cutting down along Z
-            bore_placement = App.Placement(App.Vector(0, 0, gear_height / 2), App.Rotation())
+            bore_placement = App.Placement(App.Vector(0, 0, gear_height / 2.0), App.Rotation())
             util.createBore(gear_body, gear_bore_params, gear_height, placement=bore_placement, reversed=False)
         except Exception as e:
             App.Console.PrintWarning(f"Could not add bore to mating gear: {e}\n")
 
     doc.recompute()
-    App.Console.PrintMessage(f"Mating gear created: {gear_body_name} with {num_teeth} teeth\n")
+    gear_body.ViewObject.Visibility = True
+    App.Console.PrintMessage(f"Worm wheel created: {gear_body_name} with {num_teeth} teeth (parametric)\n")
 
 
 try: FreeCADGui.addCommand('GloboidWormGearCreateObject', GloboidWormGearCreateObject())
