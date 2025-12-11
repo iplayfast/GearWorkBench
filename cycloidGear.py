@@ -55,15 +55,41 @@ def generateCycloidToothProfile(sketch, parameters):
     Rf = R - dedendum 
     r_roll = 2.5 * module 
     half_tooth_angle = math.pi / (2.0 * num_teeth)
+
+    def get_epi_point(t):
+        cx = (R + r_roll) * math.cos(t) - r_roll * math.cos((R + r_roll)/r_roll * t)
+        cy = (R + r_roll) * math.sin(t) - r_roll * math.sin((R + r_roll)/r_roll * t)
+        return cx, cy
+
+    def get_hypo_point(t):
+        cx = (R - r_roll) * math.cos(t) + r_roll * math.cos((R - r_roll)/r_roll * t)
+        cy = -( (R - r_roll) * math.sin(t) - r_roll * math.sin((R - r_roll)/r_roll * t) )
+        return cx, cy
     
     # 1. Epicycloid (Tip)
     epi_pts = []
-    steps = 7
+    steps = 50
+    step_size = 0.5 / steps
+    
     for i in range(steps + 1):
-        t = i * (0.5 / steps)
-        cx = (R + r_roll) * math.cos(t) - r_roll * math.cos((R + r_roll)/r_roll * t)
-        cy = (R + r_roll) * math.sin(t) - r_roll * math.sin((R + r_roll)/r_roll * t)
-        if math.sqrt(cx*cx + cy*cy) > Ra: break
+        t = i * step_size
+        cx, cy = get_epi_point(t)
+        r_cur = math.sqrt(cx*cx + cy*cy)
+        
+        if r_cur > Ra:
+            # Refine t to hit Ra exactly
+            t_low = (i - 1) * step_size
+            t_high = t
+            for _ in range(10): # Binary search
+                t_mid = (t_low + t_high) / 2.0
+                mx, my = get_epi_point(t_mid)
+                mr = math.sqrt(mx*mx + my*my)
+                if mr > Ra: t_high = t_mid
+                else: t_low = t_mid
+            cx, cy = get_epi_point(t_low) # Use lower bound to be safe/close
+            epi_pts.append(App.Vector(cx, cy, 0))
+            break
+            
         epi_pts.append(App.Vector(cx, cy, 0))
     
     rot_bias = (math.pi / 2.0) - half_tooth_angle
@@ -76,10 +102,24 @@ def generateCycloidToothProfile(sketch, parameters):
     # 2. Hypocycloid (Root)
     hypo_pts = []
     for i in range(steps + 1):
-        t = i * (0.5 / steps)
-        cx = (R - r_roll) * math.cos(t) + r_roll * math.cos((R - r_roll)/r_roll * t)
-        cy = -( (R - r_roll) * math.sin(t) - r_roll * math.sin((R - r_roll)/r_roll * t) )
-        if math.sqrt(cx*cx + cy*cy) < Rf: break
+        t = i * step_size
+        cx, cy = get_hypo_point(t)
+        r_cur = math.sqrt(cx*cx + cy*cy)
+        
+        if r_cur < Rf:
+            # Refine t to hit Rf exactly
+            t_low = (i - 1) * step_size
+            t_high = t
+            for _ in range(10):
+                t_mid = (t_low + t_high) / 2.0
+                mx, my = get_hypo_point(t_mid)
+                mr = math.sqrt(mx*mx + my*my)
+                if mr < Rf: t_high = t_mid # Too deep
+                else: t_low = t_mid
+            cx, cy = get_hypo_point(t_low)
+            hypo_pts.append(App.Vector(cx, cy, 0))
+            break
+            
         hypo_pts.append(App.Vector(cx, cy, 0))
 
     right_dedendum_geo = []
@@ -273,8 +313,7 @@ class CycloidGear():
                 App.Console.PrintError(traceback.format_exc())
 
     def execute(self, obj):
-        t = QtCore.QTimer()
-        t.singleShot(50, self.recompute)
+        QtCore.QTimer.singleShot(50, self.recompute)
 
 
 class ViewProviderCycloidGear:

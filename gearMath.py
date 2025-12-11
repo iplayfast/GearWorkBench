@@ -58,6 +58,94 @@ def calcInternalAddendumDiameter(pitch_diameter: float, module: float, profile_s
 def calcInternalDedendumDiameter(pitch_diameter: float, module: float, profile_shift: float = 0.0, rim_thickness: float = 3.0) -> float:
     return pitch_diameter + 2 * module * (DEDENDUM_FACTOR - profile_shift) + 2 * rim_thickness
 
+
+def involute_point(base_radius: float, t: float) -> Tuple[float, float]:
+    """
+    Calculate a point on an involute curve.
+
+    Args:
+        base_radius: Base circle radius
+        t: Parameter (roll angle in radians)
+
+    Returns:
+        (x, y) coordinates of the involute point
+    """
+    x = base_radius * (math.cos(t) + t * math.sin(t))
+    y = base_radius * (math.sin(t) - t * math.cos(t))
+    return x, y
+
+
+def involute_xy(base_r: float, t: float) -> Tuple[float, float]:
+    """
+    Alias for involute_point.
+
+    Args:
+        base_r: Base circle radius
+        t: Parameter (roll angle in radians)
+
+    Returns:
+        (x, y) coordinates of the involute point
+    """
+    return involute_point(base_r, t)
+
+
+def pitch_radius(module: float, num_teeth: int) -> float:
+    """
+    Calculate pitch radius from module and number of teeth.
+    """
+    return calcPitchDiameter(module, num_teeth) / 2.0
+
+
+def pitch_diameter(module: float, num_teeth: int) -> float:
+    """
+    Calculate pitch diameter from module and number of teeth.
+    Alias for calcPitchDiameter.
+    """
+    return calcPitchDiameter(module, num_teeth)
+
+
+def base_radius(pitch_diameter: float, pressure_angle_deg: float) -> float:
+    """
+    Calculate base radius from pitch diameter and pressure angle.
+    """
+    return calcBaseDiameter(pitch_diameter, pressure_angle_deg) / 2.0
+
+
+def outer_radius(pitch_diameter: float, module: float, profile_shift: float = 0.0) -> float:
+    """
+    Calculate outer (tip) radius.
+    """
+    return calcAddendumDiameter(pitch_diameter, module, profile_shift) / 2.0
+
+
+def root_radius(pitch_diameter: float, module: float, profile_shift: float = 0.0) -> float:
+    """
+    Calculate root radius.
+    """
+    return calcDedendumDiameter(pitch_diameter, module, profile_shift) / 2.0
+
+
+def transverse_module(normal_module: float, helix_angle_deg: float) -> float:
+    """
+    Calculate transverse module from normal module and helix angle.
+    """
+    beta = helix_angle_deg * util.DEG_TO_RAD
+    return normal_module / math.cos(beta)
+
+
+def twist_per_height(helix_angle_deg: float, radius: float) -> float:
+    """
+    Calculate twist per unit height for helical gears.
+    """
+    beta = helix_angle_deg * util.DEG_TO_RAD
+    return math.tan(beta) / radius if radius != 0 else 0.0
+
+# ============================================================================
+
+
+
+
+
 # ============================================================================
 # GENERIC TOOTH PROFILE GENERATORS
 # ============================================================================
@@ -75,18 +163,29 @@ def generateToothProfile(sketch, parameters):
     dw = module * num_teeth
     dg = dw * math.cos(pressure_angle_rad)
     da = dw + 2 * module * (ADDENDUM_FACTOR + profile_shift)
+    
+    if "tip_radius" in parameters:
+        da = parameters["tip_radius"] * 2.0
+
     df = dw - 2 * module * (DEDENDUM_FACTOR - profile_shift)
 
     s_pitch = module * (math.pi / 2.0 + 2.0 * profile_shift * math.tan(pressure_angle_rad))
     psi = s_pitch / dw 
     inv_alpha = math.tan(pressure_angle_rad) - pressure_angle_rad
     
-    num_inv_points = 5 
+    num_inv_points = 20 
     epsilon = 0.001
     start_radius = max(dg/2.0 + epsilon, df/2.0)
     end_radius = da/2.0
     
     involute_pts = []
+    is_pointed = False
+    
+    # Target inv_phi for pointed tip (where theta = pi/2)
+    # theta = pi/2 - psi - inv_alpha + inv_phi
+    # pi/2 = pi/2 - psi - inv_alpha + inv_phi  => inv_phi = psi + inv_alpha
+    target_inv_phi = psi + inv_alpha
+
     for i in range(num_inv_points):
         t = i / (num_inv_points - 1)
         r = start_radius + t * (end_radius - start_radius)
@@ -94,6 +193,26 @@ def generateToothProfile(sketch, parameters):
         if val > 1.0: val = 1.0
         phi = math.acos(val)
         inv_phi = math.tan(phi) - phi
+        
+        # Check if tooth becomes pointed
+        if inv_phi >= target_inv_phi:
+            is_pointed = True
+            # Binary search for exact radius where inv_phi == target_inv_phi
+            r_low = involute_pts[-1].y if involute_pts else start_radius
+            r_high = r
+            for _ in range(10):
+                r_mid = (r_low + r_high) / 2.0
+                val_mid = (dg / 2.0) / r_mid
+                if val_mid > 1.0: val_mid = 1.0
+                phi_mid = math.acos(val_mid)
+                inv_mid = math.tan(phi_mid) - phi_mid
+                if inv_mid < target_inv_phi: r_low = r_mid
+                else: r_high = r_mid
+            
+            # Add tip point (on Y axis)
+            involute_pts.append(App.Vector(0, r_low, 0))
+            break
+            
         theta = (math.pi / 2.0) - psi - inv_alpha + inv_phi 
         involute_pts.append(App.Vector(r * math.cos(theta), r * math.sin(theta), 0))
 
@@ -116,11 +235,12 @@ def generateToothProfile(sketch, parameters):
     bspline_right.interpolate(right_flank_geo)
     geo_list.append(sketch.addGeometry(bspline_right, False))
     
-    p_tip_right = right_flank_geo[-1]
-    p_tip_left = left_flank_geo[0]
-    p_tip_mid = App.Vector(0, da/2.0, 0)
-    tip_arc = Part.Arc(p_tip_right, p_tip_mid, p_tip_left)
-    geo_list.append(sketch.addGeometry(tip_arc, False))
+    if not is_pointed and right_flank_geo[-1].x > 1e-5:
+        p_tip_right = right_flank_geo[-1]
+        p_tip_left = left_flank_geo[0]
+        p_tip_mid = App.Vector(0, da/2.0, 0)
+        tip_arc = Part.Arc(p_tip_right, p_tip_mid, p_tip_left)
+        geo_list.append(sketch.addGeometry(tip_arc, False))
     
     bspline_left = Part.BSplineCurve()
     bspline_left.interpolate(left_flank_geo)

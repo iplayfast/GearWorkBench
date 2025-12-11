@@ -49,7 +49,7 @@ def generateInternalToothProfile(sketch, parameters):
     inv_alpha = math.tan(pressure_angle_rad) - pressure_angle_rad
     tooth_center_offset = beta - inv_alpha
 
-    num_inv_points = 5 
+    num_inv_points = 20 
     epsilon = 0.001
     start_radius = max(da_internal/2.0, dg/2.0 + epsilon)
     end_radius = df_internal/2.0
@@ -380,8 +380,7 @@ class InternalSpurGear():
         Args:
             obj: FreeCAD document object
         """
-        t = QtCore.QTimer()
-        t.singleShot(50, self.recompute)
+        QtCore.QTimer.singleShot(50, self.recompute)
 
 
 class ViewProviderInternalSpurGear:
