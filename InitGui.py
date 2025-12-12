@@ -58,6 +58,8 @@ class GearWorkbenchWB(Workbench):
             self.__class__.Icon = main_Gear_Icon
 
             # List of gear creation commands
+            # Note: DoubleHelicalGearCreateObject removed - HelicalGearCreateObject
+            # now handles both single and double helical via DoubleHelical boolean
             gear_items = ["SpurGearCreateObject",
                            "InternalSpurGearCreateObject",
                            "InternalDoubleHelicalGearCreateObject",
@@ -68,7 +70,6 @@ class GearWorkbenchWB(Workbench):
                            "CrownGearCreateObject",
                            "WormGearCreateObject",
                            "GloboidWormGearCreateObject",
-                           "DoubleHelicalGearCreateObject",
                            "HelicalGearCreateObject",
                            "HypoidGearCreateObject",
                            "ScrewGearCreateObject",

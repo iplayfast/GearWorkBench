@@ -312,7 +312,7 @@ def createPad(body, sketch, height, name='', midplane=False):
         sketch: Sketch to pad
         height: Pad height
         name: Base name for the pad (will append 'Pad')
-        midplane: If True, extrude symmetrically from sketch plane
+        midplane: If True, extrude symmetrically from sketch plane (handled by caller setting sketch placement)
 
     Returns:
         Created pad object
@@ -321,11 +321,13 @@ def createPad(body, sketch, height, name='', midplane=False):
     pad = body.Document.addObject("PartDesign::Pad", name)
     body.addObject(pad)
     pad.Profile = sketch
-    #Midplane is being depreciated
-    pad.Midplane = midplane  # Set before Length
-    if midplane:
-        pad.SideType = "Symmetric"
-    pad.Length = height
+    pad.Length = height # Always extrude by 'height' in one direction
+    
+    # The 'midplane' argument is now primarily informational for the caller,
+    # as centering is expected to be handled by the sketch's Placement.
+    # We explicitly remove the SideType setting here to avoid inconsistent behavior.
+    # For symmetry, the caller should set sketch.Placement.Base.Z = -height/2.0
+    
     sketch.Visibility = False
     return pad
 
