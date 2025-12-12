@@ -37,6 +37,7 @@ import helicalGear # Import helical gear module
 import hypoidGear # Import hypoid gear module
 import screwGear # Import screw gear module
 import nonCircularGear # Import non-circular gear module
+import internalDoubleHelicalGear # Import internal double helical gear module
 
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, 'icons')
@@ -59,6 +60,7 @@ class GearWorkbenchWB(Workbench):
             # List of gear creation commands
             gear_items = ["SpurGearCreateObject",
                            "InternalSpurGearCreateObject",
+                           "InternalDoubleHelicalGearCreateObject",
                            "RackGearCreateObject",
                            "CycloidGearCreateObject",
                            "CycloidRackCreateObject",

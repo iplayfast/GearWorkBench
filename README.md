@@ -16,7 +16,7 @@ A comprehensive FreeCAD workbench for designing all types of parametric gears op
 
 ## Status
 
-**Alpha** - Initial implementation complete. Spur gears functional. Additional gear types (helical, rack, bevel) planned.
+**Alpha** - Many gear types are now functional: Spur gear, Internal Spur gear, Rack gear, Cycloid gear, Cycloid Rack gear, Bevel Gear, Crown Gear, Worm Gear, Globoid Worm Gear, and Double Helical Gear. Development continues on additional types and further refinements.
 
 ## Prerequisites
 
@@ -176,8 +176,13 @@ For detailed mathematics, see the source code documentation in `gearMath.py` and
 - ⬜ Rack (linear gear)
 - ⬜ Internal gears (ring gears)
 - ⬜ Bevel gears (90° drive)
-- ⬜ Double helical/herringbone
-- ⬜ Worm gears
+- ✅ Double helical/herringbone
+- ✅ Worm gears
+- ✅ Globoid Worm Gear
+- ⬜ Internal Helical Gear
+- ⬜ Hypoid Gear
+- ⬜ Screw Gear
+- ⬜ Non-Circular Gear
 - ⬜ Gear train analysis
 - ⬜ Strength calculations
 
