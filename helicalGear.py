@@ -50,6 +50,78 @@ def validateHelicalParameters(parameters):
         if fishbone_width >= parameters["height"]:
             raise gearMath.GearParameterError("Fishbone width must be less than total height")
 
+    # Internal gear specific validation
+    if parameters.get("internal_gear", False):
+        rim_thickness = parameters.get("rim_thickness", 3.0)
+        if rim_thickness <= 0:
+            raise gearMath.GearParameterError("Rim thickness must be positive for internal gears")
+
+
+def generateInternalToothProfile(sketch, parameters):
+    """Generate INTERNAL involute tooth profile for helical gears."""
+    module = parameters["module"]
+    num_teeth = parameters["num_teeth"]
+    pressure_angle_rad = parameters["pressure_angle"] * util.DEG_TO_RAD
+    profile_shift = parameters.get("profile_shift", 0.0)
+
+    dw = module * num_teeth
+    dg = dw * math.cos(pressure_angle_rad)
+    da_internal = dw - 2 * module * (gearMath.ADDENDUM_FACTOR + profile_shift) 
+    df_internal = dw + 2 * module * (gearMath.DEDENDUM_FACTOR - profile_shift) 
+
+    beta = (math.pi / (2 * num_teeth)) + (2 * profile_shift * math.tan(pressure_angle_rad) / num_teeth)
+    inv_alpha = math.tan(pressure_angle_rad) - pressure_angle_rad
+    tooth_center_offset = beta - inv_alpha
+
+    num_inv_points = 20 
+    epsilon = 0.001
+    start_radius = max(da_internal/2.0, dg/2.0 + epsilon)
+    end_radius = df_internal/2.0
+
+    right_flank_geo = []
+    # Avoid domain error if start > end
+    if start_radius >= end_radius:
+         start_radius = end_radius - epsilon
+
+    for i in range(num_inv_points):
+        t = i / (num_inv_points - 1)
+        # Phi calculation for internal gear
+        # phi = sqrt((2*r/dg)^2 - 1)
+        phi_start = math.sqrt(max(0, (2*start_radius/dg)**2 - 1))
+        phi_end = math.sqrt(max(0, (2*end_radius/dg)**2 - 1))
+        phi = phi_start + t * (phi_end - phi_start)
+        
+        r = (dg / 2.0) * math.sqrt(1 + phi**2)
+        theta_inv = phi - math.atan(phi)
+        angle = (math.pi / 2.0) - tooth_center_offset - theta_inv
+        right_flank_geo.append(App.Vector(r * math.cos(angle), r * math.sin(angle), 0))
+
+    left_flank_geo = util.mirrorPointsX(right_flank_geo)
+
+    geo_list = []
+    
+    bspline_right = Part.BSplineCurve()
+    bspline_right.interpolate(right_flank_geo)
+    geo_list.append(sketch.addGeometry(bspline_right, False))
+    
+    p_root_start = right_flank_geo[-1]
+    p_root_end = left_flank_geo[0]
+    p_root_mid = App.Vector(0, df_internal/2.0, 0)
+    root_arc = Part.Arc(p_root_start, p_root_mid, p_root_end)
+    geo_list.append(sketch.addGeometry(root_arc, False))
+    
+    bspline_left = Part.BSplineCurve()
+    bspline_left.interpolate(left_flank_geo)
+    geo_list.append(sketch.addGeometry(bspline_left, False))
+    
+    p_tip_start = left_flank_geo[-1]
+    p_tip_end = right_flank_geo[0]
+    p_tip_mid = App.Vector(0, da_internal/2.0, 0)
+    tip_arc = Part.Arc(p_tip_start, p_tip_mid, p_tip_end)
+    geo_list.append(sketch.addGeometry(tip_arc, False))
+    
+    util.finalizeSketchGeometry(sketch, geo_list)
+
 
 def generateHelicalGearPart(doc, parameters):
     """Generate helical gear geometry.
@@ -74,15 +146,24 @@ def generateHelicalGearPart(doc, parameters):
     height = parameters["height"]
     helix_angle_deg = parameters["helix_angle"]
     bore_type = parameters.get("bore_type", "none")
-    # Extract double_helical and fishbone_width directly from parameters
+    # Extract parameters
     double_helical = parameters.get("double_helical", False)
+    internal_gear = parameters.get("internal_gear", False)
     fishbone_width = parameters.get("fishbone_width", 0.0)
+    rim_thickness = parameters.get("rim_thickness", 3.0)
 
-    # Calculate diameters
+    # Calculate diameters based on gear type
     pitch_dia = gearMath.calcPitchDiameter(module, num_teeth)
     pitch_r = pitch_dia / 2.0
-    outer_dia = gearMath.calcAddendumDiameter(pitch_dia, module, profile_shift)
-    root_dia = gearMath.calcDedendumDiameter(pitch_dia, module, profile_shift)
+    
+    if internal_gear:
+        # Internal gear calculations
+        outer_dia = gearMath.calcInternalDedendumDiameter(pitch_dia, module, profile_shift, rim_thickness)
+        root_dia = gearMath.calcInternalAddendumDiameter(pitch_dia, module, profile_shift)
+    else:
+        # External gear calculations
+        outer_dia = gearMath.calcAddendumDiameter(pitch_dia, module, profile_shift)
+        root_dia = gearMath.calcDedendumDiameter(pitch_dia, module, profile_shift)
 
     # Calculate helix pitch (height for one full rotation)
     helix_pitch = (math.pi * pitch_dia) / math.tan(helix_angle_deg * util.DEG_TO_RAD)
@@ -109,7 +190,11 @@ def generateHelicalGearPart(doc, parameters):
     profile_params = parameters.copy()
     profile_params["module"] = transverse_mod
     profile_params["pressure_angle"] = pressure_angle_t_deg
-    gearMath.generateToothProfile(sketch, profile_params)
+    
+    if internal_gear:
+        generateInternalToothProfile(sketch, profile_params)
+    else:
+        gearMath.generateToothProfile(sketch, profile_params)
 
     # 2. Create Datum Line for Z-axis reference
     z_axis_line = body.newObject("PartDesign::Line", "Z_Axis_DatumLine")
@@ -175,27 +260,53 @@ def generateHelicalGearPart(doc, parameters):
         polar.Visibility = True
         body.Tip = polar
 
-    # 5. Dedendum Cylinder (fills the center and creates solid hub)
-    # Use transverse root diameter to match the tooth profile
-    transverse_pitch_dia = gearMath.calcPitchDiameter(transverse_mod, num_teeth)
-    transverse_root_dia = gearMath.calcDedendumDiameter(transverse_pitch_dia, transverse_mod, profile_shift)
-    dedendum_sketch = util.createSketch(body, 'DedendumCircle')
-    circle = dedendum_sketch.addGeometry(Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), transverse_root_dia / 2.0 + 0.01), False)
-    dedendum_sketch.addConstraint(Sketcher.Constraint('Coincident', circle, 3, -1, 1))
-    dedendum_sketch.addConstraint(Sketcher.Constraint('Diameter', circle, transverse_root_dia + 0.02))
-    
-    dedendum_pad = util.createPad(body, dedendum_sketch, height, 'DedendumCircle')
-    # Use symmetric padding to center the dedendum cylinder for double helical alignment
-    if double_helical:
-        dedendum_pad.SideType = "Symmetric"
-    body.Tip = dedendum_pad
+    # 5. Hub/Ring creation (different for internal vs external gears)
+    if internal_gear:
+        # Internal gear: Create a ring structure
+        transverse_pitch_dia = gearMath.calcPitchDiameter(transverse_mod, num_teeth)
+        # Use transverse module for internal dedendum diameter (where teeth end)
+        transverse_df_internal = transverse_pitch_dia + 2 * transverse_mod * (gearMath.DEDENDUM_FACTOR - profile_shift)
+        outer_diameter = transverse_df_internal + 2 * rim_thickness
+        
+        # Create ring sketch with outer circle and inner hole
+        ring_sketch = util.createSketch(body, 'GearRing')
+        # Outer circle (larger diameter - outer rim)
+        outer_circle = ring_sketch.addGeometry(Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), outer_diameter / 2), False)
+        ring_sketch.addConstraint(Sketcher.Constraint('Coincident', outer_circle, 3, -1, 1))
+        ring_sketch.addConstraint(Sketcher.Constraint('Diameter', outer_circle, outer_diameter))
+
+        # Inner hole (smaller diameter - where the internal teeth are)
+        inner_hole = ring_sketch.addGeometry(Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), transverse_df_internal / 2), False)
+        ring_sketch.addConstraint(Sketcher.Constraint('Coincident', inner_hole, 3, -1, 1))
+        ring_sketch.addConstraint(Sketcher.Constraint('Diameter', inner_hole, transverse_df_internal))
+
+        ring_pad = util.createPad(body, ring_sketch, height, 'GearRing')
+        # Use symmetric padding to center the ring for double helical alignment
+        if double_helical:
+            ring_pad.SideType = "Symmetric"
+        body.Tip = ring_pad
+        
+    else:
+        # External gear: Create solid hub
+        transverse_pitch_dia = gearMath.calcPitchDiameter(transverse_mod, num_teeth)
+        transverse_root_dia = gearMath.calcDedendumDiameter(transverse_pitch_dia, transverse_mod, profile_shift)
+        dedendum_sketch = util.createSketch(body, 'DedendumCircle')
+        circle = dedendum_sketch.addGeometry(Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), transverse_root_dia / 2.0 + 0.01), False)
+        dedendum_sketch.addConstraint(Sketcher.Constraint('Coincident', circle, 3, -1, 1))
+        dedendum_sketch.addConstraint(Sketcher.Constraint('Diameter', circle, transverse_root_dia + 0.02))
+        
+        dedendum_pad = util.createPad(body, dedendum_sketch, height, 'DedendumCircle')
+        # Use symmetric padding to center the dedendum cylinder for double helical alignment
+        if double_helical:
+            dedendum_pad.SideType = "Symmetric"
+        body.Tip = dedendum_pad
 
     # 6. Adjust body position to compensate for symmetric padding jump
     if double_helical:
         body.Placement = App.Placement(App.Vector(0, 0, height/2.0), App.Rotation(0,0,0,1))
 
-    # 7. Bore
-    if bore_type != "none":
+    # 7. Bore (only for external gears - internal gears have their own bore structure)
+    if not internal_gear and bore_type != "none":
         util.createBore(body, parameters, height)
 
     doc.recompute()
@@ -296,7 +407,37 @@ class HelicalGear():
             1
         )
 
-        # Core gear parameters
+        # Core gear parameters (HelicalGear section - alphabetically sorted by FreeCAD)
+        obj.addProperty(
+            "App::PropertyString", "BodyName", "HelicalGear",
+            QT_TRANSLATE_NOOP("App::Property", "Name of the generated body")
+        ).BodyName = H["body_name"]
+
+        obj.addProperty(
+            "App::PropertyBool", "DoubleHelical", "HelicalGear",
+            QT_TRANSLATE_NOOP("App::Property", "Create double helical (herringbone) gear")
+        ).DoubleHelical = False
+
+        obj.addProperty(
+            "App::PropertyLength", "FishboneWidth", "HelicalGear",
+            QT_TRANSLATE_NOOP("App::Property", "Width of center gap for double helical (ignored if single)")
+        ).FishboneWidth = 2.0
+
+        obj.addProperty(
+            "App::PropertyLength", "Height", "HelicalGear",
+            QT_TRANSLATE_NOOP("App::Property", "Gear thickness/height")
+        ).Height = H["height"]
+
+        obj.addProperty(
+            "App::PropertyAngle", "HelixAngle", "HelicalGear",
+            QT_TRANSLATE_NOOP("App::Property", "Helix angle of the teeth")
+        ).HelixAngle = 30.0
+
+        obj.addProperty(
+            "App::PropertyBool", "InternalGear", "HelicalGear",
+            QT_TRANSLATE_NOOP("App::Property", "Create internal gear (teeth point inward)")
+        ).InternalGear = False
+
         obj.addProperty(
             "App::PropertyLength", "Module", "HelicalGear",
             QT_TRANSLATE_NOOP("App::Property", "Gear module (tooth size)")
@@ -318,33 +459,16 @@ class HelicalGear():
         ).ProfileShift = H["profile_shift"]
 
         obj.addProperty(
-            "App::PropertyLength", "Height", "HelicalGear",
-            QT_TRANSLATE_NOOP("App::Property", "Gear thickness/height")
-        ).Height = H["height"]
+            "App::PropertyLength", "RimThickness", "HelicalGear",
+            QT_TRANSLATE_NOOP("App::Property", "Thickness of material around internal gear teeth")
+        ).RimThickness = 3.0
 
-        # Helical specific properties
-        obj.addProperty(
-            "App::PropertyAngle", "HelixAngle", "HelicalGear",
-            QT_TRANSLATE_NOOP("App::Property", "Helix angle of the teeth")
-        ).HelixAngle = 30.0
+        self.Type = 'HelicalGear'
+        self.Object = obj
+        self.doc = App.ActiveDocument
+        obj.Proxy = self
 
-        obj.addProperty(
-            "App::PropertyBool", "DoubleHelical", "HelicalGear",
-            QT_TRANSLATE_NOOP("App::Property", "Create double helical (herringbone) gear")
-        ).DoubleHelical = False
-
-        obj.addProperty(
-            "App::PropertyLength", "FishboneWidth", "HelicalGear",
-            QT_TRANSLATE_NOOP("App::Property", "Width of center gap for double helical (ignored if single)")
-        ).FishboneWidth = 2.0
-
-        # Body Name Property
-        obj.addProperty(
-            "App::PropertyString", "BodyName", "HelicalGear",
-            QT_TRANSLATE_NOOP("App::Property", "Name of the generated body")
-        ).BodyName = H["body_name"]
-
-        # Bore parameters
+        # Bore parameters (Bore section - defined at the very end so it appears last)
         obj.addProperty(
             "App::PropertyEnumeration", "BoreType", "Bore",
             QT_TRANSLATE_NOOP("App::Property", "Type of center hole")
@@ -358,14 +482,14 @@ class HelicalGear():
         ).BoreDiameter = H["bore_diameter"]
 
         obj.addProperty(
-            "App::PropertyLength", "SquareCornerRadius", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Corner radius for square bore")
-        ).SquareCornerRadius = 0.5
-
-        obj.addProperty(
             "App::PropertyLength", "HexCornerRadius", "Bore",
             QT_TRANSLATE_NOOP("App::Property", "Corner radius for hexagonal bore")
         ).HexCornerRadius = 0.5
+
+        obj.addProperty(
+            "App::PropertyLength", "KeywayDepth", "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Depth of keyway")
+        ).KeywayDepth = 1.0
 
         obj.addProperty(
             "App::PropertyLength", "KeywayWidth", "Bore",
@@ -373,14 +497,9 @@ class HelicalGear():
         ).KeywayWidth = 2.0
 
         obj.addProperty(
-            "App::PropertyLength", "KeywayDepth", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Depth of keyway")
-        ).KeywayDepth = 1.0
-
-        self.Type = 'HelicalGear'
-        self.Object = obj
-        self.doc = App.ActiveDocument
-        obj.Proxy = self
+            "App::PropertyLength", "SquareCornerRadius", "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Corner radius for square bore")
+        ).SquareCornerRadius = 0.5
 
         # Trigger initial calculation of read-only properties
         self.onChanged(obj, "Module")
@@ -398,17 +517,25 @@ class HelicalGear():
         """Called when a property changes."""
         self.Dirty = True
 
-        if prop in ["Module", "NumberOfTeeth", "PressureAngle", "ProfileShift", "HelixAngle"]:
+        if prop in ["Module", "NumberOfTeeth", "PressureAngle", "ProfileShift", "HelixAngle", "InternalGear"]:
             try:
                 module = fp.Module.Value
                 num_teeth = fp.NumberOfTeeth
                 pressure_angle = fp.PressureAngle.Value
                 profile_shift = fp.ProfileShift
+                internal_gear = getattr(fp, 'InternalGear', False)
 
                 pitch_dia = gearMath.calcPitchDiameter(module, num_teeth)
                 base_dia = gearMath.calcBaseDiameter(pitch_dia, pressure_angle)
-                outer_dia = gearMath.calcAddendumDiameter(pitch_dia, module, profile_shift)
-                root_dia = gearMath.calcDedendumDiameter(pitch_dia, module, profile_shift)
+                
+                if internal_gear:
+                    # Internal gear calculations
+                    outer_dia = gearMath.calcInternalDedendumDiameter(pitch_dia, module, profile_shift, 3.0)
+                    root_dia = gearMath.calcInternalAddendumDiameter(pitch_dia, module, profile_shift)
+                else:
+                    # External gear calculations
+                    outer_dia = gearMath.calcAddendumDiameter(pitch_dia, module, profile_shift)
+                    root_dia = gearMath.calcDedendumDiameter(pitch_dia, module, profile_shift)
 
                 fp.PitchDiameter = pitch_dia
                 fp.BaseDiameter = base_dia
@@ -428,7 +555,9 @@ class HelicalGear():
             "height": float(self.Object.Height.Value),
             "helix_angle": float(self.Object.HelixAngle.Value),
             "double_helical": bool(self.Object.DoubleHelical),
+            "internal_gear": bool(self.Object.InternalGear),
             "fishbone_width": float(self.Object.FishboneWidth.Value),
+            "rim_thickness": float(self.Object.RimThickness.Value),
             "body_name": str(self.Object.BodyName),
             "bore_type": str(self.Object.BoreType),
             "bore_diameter": float(self.Object.BoreDiameter.Value),
