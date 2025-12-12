@@ -2,20 +2,17 @@
 
 A comprehensive FreeCAD workbench for designing all types of parametric gears optimized for 3D printing.
 > **NOTE**: This workbench is in heavy development, so will very likely change. Feel free to contribute, but for now, don't rely on it being consistant.
-> **Note**: This workbench is separate from the built-in "Gear" workbench (freecad.gears). GearWorkbench provides extensive customization options, multiple gear types (spur, helical, rack, bevel), and 3D printing optimization.
+> **Note**: This workbench is separate from the built-in "Gear" workbench (freecad.gears). GearWorkbench provides extensive customization options, multiple gear types (spur, helical, rack, bevel, etc)
 
-Image CoverPicture.png
+![Parametric gears!](CoverPicture.png)
 
 ![Status](https://img.shields.io/badge/status-alpha-orange)
 ![License](https://img.shields.io/badge/license-LGPL--2.1-blue)
 
 ## Features
 
-- **Parametric involute spur gears** with proper mathematical profiles
+- **Parametric gears** with proper mathematical profiles
 - **Multiple bore types**: circular, square, hexagonal, DIN 6885 keyway
-- **Profile shifting** to prevent undercutting on small gears
-- **Real-time parameter validation** with undercut detection
-- **3D printing optimized** with configurable clearances
 
 ## Status
 
@@ -31,7 +28,7 @@ Image CoverPicture.png
 ### Linux and macOS
 
 ```bash
-cd ~/.local/share/FreeCAD/Mod  # or ~/.local/share/FreeCAD/v1-1/Mod
+cd ~/.local/share/FreeCAD/Mod  # or ~/.local/share/FreeCAD/v1-2/Mod
 git clone https://github.com/iplayfast/GearWorkbench.git
 ```
 
@@ -52,6 +49,9 @@ Restart FreeCAD after installation.
 2. Select **GearWorkbench** from the Workbench dropdown menu
 3. Click the **Create Spur Gear** icon in the toolbar
 4. A parametric spur gear will be created with default values
+5. Adjust the values to create the perfect gear for your needs
+6. delete the parameters. Your gear is now locked, (other then normal freecad operations).
+   
 
 ![Spur Gear Icon](icons/spurGear.svg)
 
