@@ -74,7 +74,7 @@ def generateSpurGearPart(doc, parameters):
 
     # 4. Bore
     if bore_type != "none":
-        gearMath.generateBore(body, parameters, height)
+        util.createBore(body, parameters, height)
         
     doc.recompute()
     if App.GuiUp:
