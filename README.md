@@ -1,6 +1,6 @@
 # GearWorkbench
 
-A comprehensive FreeCAD workbench for designing all types of parametric gears optimized for 3D printing.
+A comprehensive FreeCAD workbench for designing all types of parametric gears.
 > **NOTE**: This workbench is in heavy development, so will very likely change. Feel free to contribute, but for now, don't rely on it being consistant.
 > **Note**: This workbench is separate from the built-in "Gear" workbench (freecad.gears). GearWorkbench provides extensive customization options, multiple gear types (spur, helical, rack, bevel, etc)
 
