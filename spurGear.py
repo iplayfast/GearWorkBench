@@ -175,16 +175,21 @@ class SpurGear():
             1
         )
 
-        # Core gear parameters
+        # Core gear parameters (most frequently adjusted)
+        obj.addProperty(
+            "App::PropertyInteger", "NumberOfTeeth", "SpurGear",
+            QT_TRANSLATE_NOOP("App::Property", "Number of teeth")
+        ).NumberOfTeeth = H["num_teeth"]
+
         obj.addProperty(
             "App::PropertyLength", "Module", "SpurGear",
             QT_TRANSLATE_NOOP("App::Property", "Gear module (tooth size)")
         ).Module = H["module"]
 
         obj.addProperty(
-            "App::PropertyInteger", "NumberOfTeeth", "SpurGear",
-            QT_TRANSLATE_NOOP("App::Property", "Number of teeth")
-        ).NumberOfTeeth = H["num_teeth"]
+            "App::PropertyLength", "Height", "SpurGear",
+            QT_TRANSLATE_NOOP("App::Property", "Gear thickness/height")
+        ).Height = H["height"]
 
         obj.addProperty(
             "App::PropertyAngle", "PressureAngle", "SpurGear",
@@ -196,18 +201,13 @@ class SpurGear():
             QT_TRANSLATE_NOOP("App::Property", "Profile shift coefficient (-1 to +1)")
         ).ProfileShift = H["profile_shift"]
 
-        obj.addProperty(
-            "App::PropertyLength", "Height", "SpurGear",
-            QT_TRANSLATE_NOOP("App::Property", "Gear thickness/height")
-        ).Height = H["height"]
-        
         # --- NEW: Body Name Property ---
         obj.addProperty(
             "App::PropertyString", "BodyName", "SpurGear",
             QT_TRANSLATE_NOOP("App::Property", "Name of the generated body")
         ).BodyName = H["body_name"]
 
-        # Bore parameters
+        # Bore parameters (less frequently changed)
         obj.addProperty(
             "App::PropertyEnumeration", "BoreType", "Bore",
             QT_TRANSLATE_NOOP("App::Property", "Type of center hole")

@@ -472,11 +472,24 @@ def _constrainSketchPoint(sketch, geo_index, point_index, point_vector):
         # Coincident with global origin (-1, 1)
         sketch.addConstraint(Sketcher.Constraint('Coincident', geo_index, point_index, -1, 1))
     else:
-        # Use distance constraints otherwise
-        if x_val != 0:
-            # 'DistanceX' (index of geom, point index, index of reference geom, reference point index, value)
+        # Handle X constraint
+        if x_val == 0:
+            # Point on Y Axis (Index -2)
+            sketch.addConstraint(Sketcher.Constraint('PointOnObject', geo_index, point_index, -2))
+        else:
+            # Distance from Y Axis (Reference -1, 1 which is Origin? or Reference -2?)
+            # DistanceX is distance FROM Y axis (measured along X).
+            # Constraint('DistanceX', Geo, Point, -1, 1, Val) measures from Root Point?
+            # Standard way: Constraint('DistanceX', Geo, Point, Val) - implicitly from origin?
+            # Let's stick to explicit reference if possible, or simple form.
+            # Using -1, 1 (Root) as reference for DistanceX is standard.
             sketch.addConstraint(Sketcher.Constraint('DistanceX', geo_index, point_index, -1, 1, x_val))
-        if y_val != 0:
+            
+        # Handle Y constraint
+        if y_val == 0:
+            # Point on X Axis (Index -1)
+            sketch.addConstraint(Sketcher.Constraint('PointOnObject', geo_index, point_index, -1))
+        else:
             sketch.addConstraint(Sketcher.Constraint('DistanceY', geo_index, point_index, -1, 1, y_val))
 
 
@@ -515,7 +528,8 @@ def sketchLineByPoints(sketch, startPoint, endPoint, addConstrainLength=False, a
     # 4. Apply length constraint if requested
     if addConstrainLength:
         # Calculate the actual length of the line segment
-        length = startPoint.distanceTo(endPoint)
+        # Use distanceToPoint for FreeCAD vectors
+        length = startPoint.distanceToPoint(endPoint)
         # Add a fixed distance constraint
         # 'Distance' (index of geom, point 1 index, index of geom 2, point 2 index, value)
         sketch.addConstraint(Sketcher.Constraint('Distance', geo_index, 1, geo_index, 2, length))
@@ -983,9 +997,13 @@ def readyPart(doc, name):
     """
     part = doc.getObject(name)
     if part:
-        # Remove the old body completely and create a fresh one
+        # Remove the old object completely and create a fresh one
         # This ensures Origin planes are properly initialized
-        part.removeObjectsFromDocument()
+        # Handle both PartDesign::Body and other object types
+        if hasattr(part, 'removeObjectsFromDocument'):
+            # PartDesign::Body - remove its contents first
+            part.removeObjectsFromDocument()
+        # Remove the object itself
         doc.removeObject(name)
     part = doc.addObject('PartDesign::Body', name)
     return part
