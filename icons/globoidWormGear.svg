@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" version="1.1">
+  <defs>
+    <style type="text/css">
+      .worm { fill:#4a90e2; stroke:#2c5aa0; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+      .wheel { fill:#f5a623; stroke:#d08b1b; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+    </style>
+  </defs>
+
+  <!-- Worm Wheel (meshing from bottom) -->
+  <g class="wheel">
+    <path d="M 18,48 A 20,20 0 0 1 46,48 L 46,62 L 18,62 Z" />
+    <!-- Teeth hints -->
+    <path d="M 28,42 L 30,48 L 34,48 L 36,42 Z" fill="#f5a623" stroke="#d08b1b" stroke-width="1.5" />
+  </g>
+
+  <!-- Globoid Worm (Hourglass) -->
+  <g class="worm">
+    <!-- Main Body: Concave top and bottom -->
+    <path d="M 8,12 Q 32,22 56,12 L 56,36 Q 32,26 8,36 Z" />
+    
+    <!-- End Caps -->
+    <ellipse cx="8" cy="24" rx="2" ry="12" fill="#4a90e2" stroke="#2c5aa0" />
+    <ellipse cx="56" cy="24" rx="2" ry="12" fill="#4a90e2" stroke="#2c5aa0" />
+
+    <!-- Threads (Curved to follow contour) -->
+    <path d="M 14,14 Q 28,24 18,34" fill="none" stroke="#2c5aa0" stroke-width="2" />
+    <path d="M 22,16 Q 36,24 26,32" fill="none" stroke="#2c5aa0" stroke-width="2" />
+    <path d="M 30,17 Q 44,24 34,31" fill="none" stroke="#2c5aa0" stroke-width="2" />
+    <path d="M 38,16 Q 52,24 42,32" fill="none" stroke="#2c5aa0" stroke-width="2" />
+    <path d="M 46,14 Q 60,24 50,34" fill="none" stroke="#2c5aa0" stroke-width="2" />
+  </g>
+</svg>
