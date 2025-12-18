@@ -300,17 +300,6 @@ def generateGloboidWormGearPart(doc, parameters):
     # 1. PARAMETRIC BASE (Sketch + Revolve)
     # Outer radius at throat (where teeth tips are)
     outer_throat_radius = worm_pitch_radius + addendum
-    
-    # Calculate arc radius based on your measurement of working radius
-    # Your visual measurement shows arc radius should be 26.5mm for default params
-    # This corresponds to gear_pitch_radius + 3.25 × addendum
-    # TODO: This could be made into a user parameter (ArcRadiusFactor = 3.25)
-    arc_radius = gear_pitch_radius + (addendum * 3.25)  # Direct calculation
-
-    # Arc radius for globoid curve should match the working gear radius
-    # The arc represents the worm surface wrapping around the gear
-    # For proper hourglass shape, use the measured working radius
-    # arc_radius already calculated from your measurement above
 
     # Cylinder diameter: if specified use it, otherwise auto-calculate
     # The cylinder outer diameter should be at least pitch + addendum
@@ -328,6 +317,11 @@ def generateGloboidWormGearPart(doc, parameters):
         # Auto-calculate: use outer throat radius (pitch + addendum)
         actual_cylinder_radius = outer_throat_radius
 
+    # Arc radius for globoid curve (centered at gear center)
+    # For proper hourglass shape, the arc radius should be approximately equal to the gear pitch radius
+    # This creates a more pronounced globoid shape that properly wraps around the gear
+    arc_radius = gear_pitch_radius * 0.9  # Slightly smaller than gear pitch radius for proper wrapping
+
     # Validate arc_radius is positive
     if arc_radius <= 0:
         raise gearMath.GearParameterError(
@@ -339,19 +333,10 @@ def generateGloboidWormGearPart(doc, parameters):
     max_worm_length = arc_radius * 2.0 * 0.98  # 98% of max to avoid edge cases
 
     # Determine threaded section span
-    # Thread must be long enough to cover the wheel height plus wrap-around margin
-    # The wheel teeth wrap around the worm in an arc - at the edges of this arc,
-    # the Z positions extend beyond the linear face width
+    # Thread must be long enough to cover the wheel height plus margin
+    # Add 20% extra length to ensure full engagement with wheel teeth
     gear_height = parameters.get("gear_height", 10.0)
-
-    # Calculate wrap-around extension: wheel teeth at outer radius need threads
-    # that extend further along Z due to the curved engagement
-    wheel_outer_radius = (module * num_gear_teeth) / 2.0 + addendum
-    # The wrap angle determines how far the teeth extend around the worm
-    # At the extreme wrap positions, Z offset = wheel_outer_radius * sin(wrap_angle)
-    # Use a conservative estimate: ~30% of outer radius as extra Z coverage on each side
-    wrap_extension = wheel_outer_radius * 0.4
-    min_thread_length = (gear_height + 2 * wrap_extension + 4 * module) * 1.3
+    min_thread_length = (gear_height + 4 * module) * 1.2  # 20% longer, plus margin on each side
 
     if worm_length > 0.01:
         # If specified worm_length exceeds max, warn and clamp
@@ -394,8 +379,7 @@ def generateGloboidWormGearPart(doc, parameters):
             )
 
     # Total half-length (including shoulders if any)
-    #total_half_length = max(cylinder_length / 2.0, tooth_half_length + 0.01)
-    total_half_length = cylinder_length
+    total_half_length = max(cylinder_length / 2.0, tooth_half_length + 0.01)
 
     # Radius at edge of threaded area (for shoulders)
     shoulder_radius = center_distance - arc_radius * math.cos(half_angle_rad)
@@ -435,32 +419,552 @@ def generateGloboidWormGearPart(doc, parameters):
     half_cylinder_length = cylinder_length / 2.0
     half_worm_length = effective_worm_length / 2.0  # Use already-clamped effective length
     rect_outer_radius = outer_throat_radius
-    # outer_radius already calculated as arc_radius above
-    # Calculate Arc Geometry
-    # Arc radius should match to working gear radius for proper hourglass shape
-    # Using the arc_radius calculated above based on your measurement
-    # No recalculation of outer_radius here - use arc_radius directly
-    root_radius = gear_pitch_radius - dedendum
 
-    # Helical twist over gear height
-    # Calculate helix angle directly for worm wheel generation
-    # This avoids scope issues with lead_angle_rad from onChanged
+    # Calculate Arc Geometry
+    arc_center = App.Vector(-center_distance, 0.0, 0)
+    angle_span = 2.0 * half_angle_rad  # Already calculated from effective_worm_length
+    # Angles for Part.ArcOfCircle (counter-clockwise from X-axis)
+    # We want a curve to the left. Center is at -CD.
+    # The arc bulges towards +X.
+    # Actually, let's stick to the previous correct geometry:
+    # Center at -CD. Radius R.
+    # We want the arc segment that is closest to the axis (smallest X).
+    # That is around angle 0.
+    start_angle = -angle_span / 2.0
+    end_angle = angle_span / 2.0
+
+    # GEOMETRY CREATION (Counter-clockwise loop)
+    geoList = []
+    
+    # 1. Right Line (Axis) - Upwards
+    # From (0, -Len/2) to (0, Len/2)
+    p_br_axis = App.Vector(0, -half_cylinder_length, 0)
+    p_tr_axis = App.Vector(0, half_cylinder_length, 0)
+    geoList.append(Part.LineSegment(p_br_axis, p_tr_axis))
+    
+    # 2. Top Line - Leftwards
+    # From (0, Len/2) to (-OuterR, Len/2)
+    p_tl_corner = App.Vector(-rect_outer_radius, half_cylinder_length, 0)
+    geoList.append(Part.LineSegment(p_tr_axis, p_tl_corner))
+
+    # 3. Top-Left Vertical Line - Downwards
+    # From (-OuterR, Len/2) to Arc Start (-OuterR, WormLen/2) ??
+    # Wait, the Arc is curved. The vertical line connects to the Arc EndPoint.
+    # The Arc EndPoint X is determined by the arc radius and angle.
+    # X = -CD + R*cos(end_angle). Y = R*sin(end_angle) = WormLen/2
+    # So the vertical line goes from Top Corner to Arc Top.
+    
+    # Calculate Arc End Points
+    # Top Point (End of Arc)
+    arc_top_y = arc_radius * math.sin(end_angle)
+    arc_top_x = -center_distance + arc_radius * math.cos(end_angle)
+    p_arc_top = App.Vector(arc_top_x, arc_top_y, 0)
+    
+    # Bottom Point (Start of Arc)
+    arc_bot_y = arc_radius * math.sin(start_angle)
+    arc_bot_x = -center_distance + arc_radius * math.cos(start_angle)
+    p_arc_bot = App.Vector(arc_bot_x, arc_bot_y, 0)
+    
+    # Line 3: From Top Corner to Arc Top
+    geoList.append(Part.LineSegment(p_tl_corner, p_arc_top))
+    
+    # 4. The Arc - Downwards?
+    # Sketcher arcs usually go CCW. 
+    # If we want a contiguous loop, we need to order points carefully.
+    # Current loop: Axis(Up) -> Top(Left) -> TL_Vert(Down) -> Arc(Down) -> BL_Vert(Down) -> Bot(Right)
+    # Arc needs to go from Top to Bottom.
+    # Part.ArcOfCircle(circle, start, end) goes CCW from start to end.
+    # Start(-ang) is Bottom. End(+ang) is Top.
+    # So ArcOfCircle goes Bottom -> Top.
+    # We need Top -> Bottom.
+    # We can add the curve, but we need to constrain it correctly.
+    # Let's add it as is (Bottom->Top) but constrain the endpoints to match the loop direction.
+    circle_base = Part.Circle(arc_center, App.Vector(0, 0, 1), arc_radius)
+    arc_geo = Part.ArcOfCircle(circle_base, start_angle, end_angle)
+    geoList.append(arc_geo)
+    
+    # 5. Bottom-Left Vertical Line
+    # From Arc Bottom to Bottom Corner
+    p_bl_corner = App.Vector(-rect_outer_radius, -half_cylinder_length, 0)
+    geoList.append(Part.LineSegment(p_arc_bot, p_bl_corner))
+    
+    # 6. Bottom Line - Rightwards
+    # From Bottom Corner to Axis Bottom
+    geoList.append(Part.LineSegment(p_bl_corner, p_br_axis))
+    
+    # Add all geometry
+    # Indices:
+    # 0: Right Line (Axis)
+    # 1: Top Line
+    # 2: Top-Left Vertical
+    # 3: Arc (Start=Bot, End=Top)
+    # 4: Bot-Left Vertical
+    # 5: Bottom Line
+    idx_right = 0
+    idx_top = 1
+    idx_tl = 2
+    idx_arc = 3
+    idx_bl = 4
+    idx_bot = 5
+    
+    sk_base.addGeometry(geoList, False)
+    
+    # CONSTRAINTS
+    
+    # 1. Coincident Connections
+    sk_base.addConstraint(Sketcher.Constraint('Coincident', idx_right, 2, idx_top, 1))
+    # Top End -> TL Start
+    sk_base.addConstraint(Sketcher.Constraint('Coincident', idx_top, 2, idx_tl, 1))
+    # TL End -> Arc End (Top)
+    sk_base.addConstraint(Sketcher.Constraint('Coincident', idx_tl, 2, idx_arc, 2))
+    # Arc Start (Bot) -> BL Start
+    sk_base.addConstraint(Sketcher.Constraint('Coincident', idx_arc, 1, idx_bl, 1))
+    # BL End -> Bot Start
+    sk_base.addConstraint(Sketcher.Constraint('Coincident', idx_bl, 2, idx_bot, 1))
+    # Bot End -> Right Start
+    sk_base.addConstraint(Sketcher.Constraint('Coincident', idx_bot, 2, idx_right, 1))
+    
+    # 2. Geometric Constraints
+    sk_base.addConstraint(Sketcher.Constraint('Vertical', idx_right))
+    sk_base.addConstraint(Sketcher.Constraint('Horizontal', idx_top))
+    sk_base.addConstraint(Sketcher.Constraint('Vertical', idx_tl))
+    sk_base.addConstraint(Sketcher.Constraint('Vertical', idx_bl))
+    sk_base.addConstraint(Sketcher.Constraint('Horizontal', idx_bot))
+    
+    # 3. Placement Constraints
+    # Right Line on Y Axis - REMOVED (Redundant with Symmetry/Vertical?)
+    # sk_base.addConstraint(Sketcher.Constraint('PointOnObject', idx_right, 1, -2)) 
+    
+    # Arc Center on X Axis (Horizontal alignment with Origin) - ADDED per Option A
+    sk_base.addConstraint(Sketcher.Constraint('PointOnObject', idx_arc, 3, -1))
+    
+    # 4. Dimensional Constraints
+    # Cylinder Length (Right Line Length)
+    cst_len = sk_base.addConstraint(Sketcher.Constraint('DistanceY', idx_right, 1, idx_right, 2, cylinder_length))
+    sk_base.setExpression(f'Constraints[{cst_len}]', 'GloboidWormGearParameters.CylinderLength')
+    
+    # Symmetry for Cylinder (Right Line midpoint on Origin)
+    sk_base.addConstraint(Sketcher.Constraint('Symmetric', idx_right, 1, idx_right, 2, -1, 1))
+    
+    # Constrain Arc Radius.
+    cst_rad = sk_base.addConstraint(Sketcher.Constraint('Radius', idx_arc, arc_radius))
+    
+    # Constrain Arc Center Distance
+    cst_cd = sk_base.addConstraint(Sketcher.Constraint('DistanceX', idx_arc, 3, idx_right, 1, center_distance))
+    
+    # Worm Length (Vertical Span of Arc) - use effective_worm_length which is clamped to valid range
+    cst_worm_len = sk_base.addConstraint(Sketcher.Constraint('DistanceY', idx_arc, 1, idx_arc, 2, effective_worm_length))
+    # Only link to property if worm_length wasn't clamped (otherwise expression would override our clamping)
+    if worm_length > 0.01 and worm_length <= max_worm_length:
+        sk_base.setExpression(f'Constraints[{cst_worm_len}]', 'GloboidWormGearParameters.WormLength')
+    
+    # Vertical Alignment for Arc Endpoints (Ensures symmetry about X-axis without overconstraining)
+    sk_base.addConstraint(Sketcher.Constraint('Vertical', idx_arc, 1, idx_arc, 2))
+
+    # Removed: Symmetry for Arc - redundant with explicit arc center position + worm length span
+    # Arc endpoints are fully determined by: center position, radius, and vertical span
+
+    # Removed: Block constraint - not parametric, causes overconstraint
+
+    doc.recompute()
+
+    # Check if sketch solved successfully
+    if sk_base.Shape.isNull():
+        App.Console.PrintError(f"GloboidCylinder sketch failed to solve. Geometry params:\n")
+        App.Console.PrintError(f"  arc_radius={arc_radius:.2f}, effective_worm_length={effective_worm_length:.2f}\n")
+        App.Console.PrintError(f"  half_angle_rad={half_angle_rad:.4f}, angle_span={angle_span:.4f}\n")
+        App.Console.PrintError(f"  center_distance={center_distance:.2f}, outer_throat_radius={outer_throat_radius:.2f}\n")
+        raise gearMath.GearParameterError("Sketch failed to solve - check parameter combination")
+
+    # 1. REVOLUTION - Create using Part module (outside the body)
+    # We'll do the boolean cut in Part space, then import the result as BaseFeature
+    # This is cleaner than mixing PartDesign and Part operations
+
+    # First, create the revolution shape from the sketch
+    # Get the sketch wire/face
+    sk_base_shape = sk_base.Shape
+
+    # Create revolution using Part module
+    # Revolve around Z-axis (vertical axis in XZ plane sketch)
+    rev_axis = App.Vector(0, 0, 1)
+    rev_center = App.Vector(0, 0, 0)
+
+    # Make a face from the sketch wire and revolve it
+    try:
+        sketch_face = Part.Face(sk_base_shape)
+        rev_shape = sketch_face.revolve(rev_center, rev_axis, 360)
+    except Exception as e:
+        App.Console.PrintError(f"Revolution failed: {e}\n")
+        App.Console.PrintError(f"Sketch wire count: {len(sk_base_shape.Wires)}, Edge count: {len(sk_base_shape.Edges)}\n")
+        raise gearMath.GearParameterError(f"Cannot create revolution: {e}")
+
+    # 2. THREAD GENERATION (B-Rep Loft)
+    # Create Thread Profile Sketch
+    sk_thread_profile = util.createSketch(body, 'ThreadProfile')
+    sk_thread_profile.MapMode = 'Deactivated' # Sketch is standalone, its placement is handled by transformation in loop
+    
+    # Calculate thread profile geometry (trapezoidal cross-section - the 'gap')
+    tan_pressure = math.tan(pressure_angle * util.DEG_TO_RAD)
+    
+    # Half-width at pitch line, reduced slightly for clearance
+    half_width_pitch_line = (math.pi * module) / 4.0 - (0.05 * module)
+
+    # Parametric values for the trapezoid in sketch space
+    # In this sketch: X-axis = Height/Depth, Y-axis = Width (Chris's interpretation)
+    profile_height = dedendum + addendum
+    
+    # The trapezoid will start at X=0 in the sketch for simplicity, 
+    # its final radial position handled by transformations.
+    offset_x = 0 
+
+    # Half-width of the gap at the root (narrower)
+    width_root = half_width_pitch_line - (dedendum * tan_pressure) 
+    # Half-width of the gap at the tip (wider)
+    width_tip = half_width_pitch_line + (addendum * tan_pressure) 
+
+    # Define the 4 points of the trapezoid (closed profile)
+    # Points ordered so both vertical lines go from -Y to +Y (consistent direction)
+    # P1 = Root, -Y    P2 = Root, +Y    P3 = Tip, +Y    P4 = Tip, -Y
+    p1 = App.Vector(offset_x, -width_root, 0)                  # Root line start (-Y)
+    p2 = App.Vector(offset_x, width_root, 0)                   # Root line end (+Y)
+    p3 = App.Vector(offset_x + profile_height, width_tip, 0)   # Tip, +Y
+    p4 = App.Vector(offset_x + profile_height, -width_tip, 0)  # Tip, -Y
+
+    # Add lines to sketch - note top_line goes from p4 to p3 (same -Y to +Y direction as bottom)
+    idx_bottom_line = sk_thread_profile.addGeometry(Part.LineSegment(p1, p2), False)   # Geo 0: Root line (-Y to +Y)
+    idx_right_flank = sk_thread_profile.addGeometry(Part.LineSegment(p2, p3), False)   # Geo 1: Right flank
+    idx_top_line = sk_thread_profile.addGeometry(Part.LineSegment(p4, p3), False)      # Geo 2: Tip line (-Y to +Y) FIXED
+    idx_left_flank = sk_thread_profile.addGeometry(Part.LineSegment(p4, p1), False)    # Geo 3: Left flank
+    
+    # CONSTRAINTS for ThreadProfile sketch
+    
+    # 1. Coincident Connections (Close the loop)
+    # bottom_line: p1->p2, right_flank: p2->p3, top_line: p4->p3, left_flank: p4->p1
+    sk_thread_profile.addConstraint(Sketcher.Constraint('Coincident', idx_bottom_line, 2, idx_right_flank, 1)) # P2: bottom end = right start
+    sk_thread_profile.addConstraint(Sketcher.Constraint('Coincident', idx_right_flank, 2, idx_top_line, 2))   # P3: right end = top end
+    sk_thread_profile.addConstraint(Sketcher.Constraint('Coincident', idx_top_line, 1, idx_left_flank, 1))    # P4: top start = left start
+    sk_thread_profile.addConstraint(Sketcher.Constraint('Coincident', idx_left_flank, 2, idx_bottom_line, 1)) # P1: left end = bottom start
+    
+    # 2. Symmetry Constraints
+    # Center the 'bottom_line' and 'top_line' symmetrically around the X-axis (horizontal axis)
+    # Reference -1 = X-axis (NOT -1,1 which is Origin point!)
+    sk_thread_profile.addConstraint(Sketcher.Constraint('Symmetric', idx_bottom_line, 1, idx_bottom_line, 2, -1))
+    sk_thread_profile.addConstraint(Sketcher.Constraint('Symmetric', idx_top_line, 1, idx_top_line, 2, -1)) 
+
+    # 3. Dimensional Constraints
+    # X-Position of bottom line (anchors the trapezoid position)
+    sk_thread_profile.addConstraint(Sketcher.Constraint('DistanceX', -1, 1, idx_bottom_line, 1, offset_x))
+    # Height of the trapezoid (distance between bottom and top lines)
+    sk_thread_profile.addConstraint(Sketcher.Constraint('DistanceX', idx_bottom_line, 1, idx_top_line, 1, profile_height))
+
+    # Y-Dimensions (Widths)
+    # Length of the 'bottom_line' line (root width)
+    sk_thread_profile.addConstraint(Sketcher.Constraint('DistanceY', idx_bottom_line, 1, idx_bottom_line, 2, width_root * 2))
+    # Length of the 'top_line' line (tip width)
+    sk_thread_profile.addConstraint(Sketcher.Constraint('DistanceY', idx_top_line, 1, idx_top_line, 2, width_tip * 2))
+
+    doc.recompute()
+
+    # Thread helix: one complete thread wraps around the worm over a distance of (pitch * num_threads)
+    # Pitch = pi * module for a worm
+    thread_pitch = math.pi * module
+
+    # For the worm_length, how many degrees does the thread rotate?
+    # One full wrap (360 deg) covers distance = thread_pitch
+    # Use effective_worm_length (already clamped to valid range)
+    worm_rotation_angle = 360.0 * effective_worm_length / thread_pitch
+
+    # Calculate loft parameters
+    # Number of cross-sections for loft (more = smoother thread)
+    # Need enough steps to handle the rotation smoothly
+    # At least 10 steps per 360 degrees of rotation
+    min_steps_per_rotation = 10
+    rotations = worm_rotation_angle / 360.0
+    loft_steps = max(20, int(rotations * min_steps_per_rotation * 4))
+
+    App.Console.PrintMessage(f"Thread params: pitch={thread_pitch:.2f}, length={effective_worm_length:.2f}, rotation={worm_rotation_angle:.1f} deg, loft_steps={loft_steps}\n")
+    App.Console.PrintMessage(f"Geometry: outer_throat_radius={outer_throat_radius:.2f}, arc_radius={arc_radius:.2f}, center_distance={center_distance:.2f}\n")
+    App.Console.PrintMessage(f"Profile: height={profile_height:.2f}, width_root={width_root:.2f}, width_tip={width_tip:.2f}\n")
+
+    # Now extract the geometry from the sketch
+    # We need to get the profile points in the correct order for lofting
+    # The sketch has 4 points forming a trapezoid, but Wire.Vertexes may not be in perimeter order
+
+    # Get the 4 corner points from the sketch geometry directly
+    # Based on how we created the sketch:
+    # p1 = (0, -width_root)  - root, bottom
+    # p2 = (0, +width_root)  - root, top
+    # p3 = (profile_height, +width_tip)  - tip, top
+    # p4 = (profile_height, -width_tip)  - tip, bottom
+
+    # For a proper closed loop going clockwise: p1 -> p4 -> p3 -> p2 -> p1
+    # Or counter-clockwise: p1 -> p2 -> p3 -> p4 -> p1
+
+    # Define the points in order around the perimeter (clockwise when viewed from +X)
+    # This ensures the loft connects corresponding points correctly
+    # Going: root-bottom -> root-top -> tip-top -> tip-bottom
+    profile_points = [
+        App.Vector(0, -width_root, 0),            # root, -Y side
+        App.Vector(profile_height, -width_tip, 0), # tip, -Y side
+        App.Vector(profile_height, width_tip, 0),  # tip, +Y side
+        App.Vector(0, width_root, 0),              # root, +Y side
+    ]
+
+    App.Console.PrintMessage(f"Thread profile points (ordered):\n")
+    for i, p in enumerate(profile_points):
+        App.Console.PrintMessage(f"  P{i}: ({p.x:.2f}, {p.y:.2f})\n")
+
+    # For a globoid worm:
+    # - Worm axis is now along Z (length direction)
+    # - Thread wraps helically around Z-axis
+    # - Profile is perpendicular to helix path
+    # - Worm throat is at X (radial direction)
+
+    # Handedness direction factor
+    direction_factor = 1.0 if right_handed else -1.0
+
+    # Generate thread profile at multiple positions along the worm
+    wires = []
+    for i in range(loft_steps + 1):
+        # Parameter from -0.5 to +0.5 along the worm length
+        t = (i / loft_steps) - 0.5
+
+        # Z position along worm axis (use effective_worm_length which is already clamped)
+        z_pos = t * effective_worm_length
+
+        # Helix angle: worm rotates as we move along Z
+        # Total rotation over worm_length is worm_rotation_angle
+        # Apply direction factor for handedness
+        helix_angle_deg = t * worm_rotation_angle * direction_factor
+        helix_angle_rad = helix_angle_deg * util.DEG_TO_RAD
+
+        # Helix rotation around Z-axis (same for all points in this cross-section)
+        cos_h = math.cos(helix_angle_rad)
+        sin_h = math.sin(helix_angle_rad)
+
+        pts_transformed = []
+        for p in profile_points:
+            # Profile point coordinates:
+            # p.x = radial depth (0 at root/narrow, profile_height at tip/wide)
+            # p.y = width along thread direction (symmetric about 0)
+
+            # The profile width (p.y) runs along the worm axis (Z direction)
+            # It does NOT rotate with the helix - stays parallel to Z-axis
+            actual_z = z_pos + p.y
+
+            # For globoid worm, the radius varies along Z (hourglass shape)
+            # Each point must use the radius at ITS actual Z position
+            if abs(actual_z) <= arc_radius * 0.999:  # Within the arc region
+                local_radius = center_distance - math.sqrt(arc_radius**2 - actual_z**2)
+            else:
+                # Outside arc region - use the shoulder radius
+                local_radius = shoulder_radius
+
+            # The thread tool cuts INTO the cylinder surface
+            # p.x=0 is the narrow end (root of gap) - at the bottom of the groove (below surface)
+            # p.x=profile_height is the wide end (tip of gap) - at the surface
+            # But for boolean cut to work, the tool must extend OUTSIDE the cylinder
+            # So we add clearance: root goes below surface, tip goes above surface
+            # REDUCED CLEARANCE: Large clearance shifts the tool out, making the cut narrower at surface (flat teeth)
+            clearance = module * 0.1 
+            radial_pos = local_radius - profile_height + p.x + clearance
+
+            # Position in worm frame (Z-axis is worm axis)
+            # Only the radial position rotates around Z-axis by helix angle
+            # The Z position (axial) stays fixed - profile width is parallel to axis
+            # Rotation in XY plane:
+            px = radial_pos * cos_h
+            py = radial_pos * sin_h
+            pz = actual_z
+
+            pts_transformed.append(App.Vector(px, py, pz))
+
+        # Close the polygon by adding the first point at the end
+        if pts_transformed:
+            pts_transformed.append(pts_transformed[0])
+        wires.append(Part.makePolygon(pts_transformed))
+        
+    # Loft thread profile across all wire sections
+    thread_solid = Part.makeLoft(wires, solid=True, ruled=False)
+
+    # For multi-start worms, create additional threads rotated around Z-axis
+    if num_threads > 1:
+        thread_solids = [thread_solid]
+        angle_between_threads = 360.0 / num_threads
+        for thread_idx in range(1, num_threads):
+            rotation_angle = thread_idx * angle_between_threads
+            # Create rotation matrix around Z-axis
+            rotation = App.Rotation(App.Vector(0, 0, 1), rotation_angle)
+            placement = App.Placement(App.Vector(0, 0, 0), rotation)
+            # Copy and rotate the thread
+            rotated_thread = thread_solid.copy()
+            rotated_thread.Placement = placement
+            thread_solids.append(rotated_thread)
+
+        # Fuse all threads together
+        combined_thread = thread_solids[0]
+        for additional_thread in thread_solids[1:]:
+            combined_thread = combined_thread.fuse(additional_thread)
+        thread_solid = combined_thread
+        App.Console.PrintMessage(f"Created {num_threads}-start worm thread\n")
+
+    # Container for Thread Tool (Part::Feature, OUTSIDE BODY)
+    # This is the "Tool" for the Boolean Cut
+    thread_name = f"{body_name}_ThreadTool"
+    thread_obj = doc.getObject(thread_name)
+    if not thread_obj:
+        thread_obj = doc.addObject("Part::Feature", thread_name)
+    thread_obj.Shape = thread_solid
+    thread_obj.Visibility = False
+
+    # 3. INTEGRATION - Use Part.Shape.cut() and set as BaseFeature
+    # All geometry is built in Part space, then imported as BaseFeature
+    # This gives a clean PartDesign body where subsequent features work properly
+
+    # Perform boolean cut using Part module
+    try:
+        cut_shape = rev_shape.cut(thread_solid)
+    except Exception as e:
+        App.Console.PrintError(f"Boolean cut failed: {e}\n")
+        cut_shape = rev_shape  # Fallback to uncut shape
+
+    # Store the cut result in a Part::Feature (outside the body)
+    cut_result_name = f"{body_name}_CutResult"
+    cut_result = doc.getObject(cut_result_name)
+    if not cut_result:
+        cut_result = doc.addObject("Part::Feature", cut_result_name)
+    cut_result.Shape = cut_shape
+    cut_result.Visibility = False
+
+    # Set the cut result as the BaseFeature of the body
+    # BaseFeature is the starting point for PartDesign operations
+    # With no other features, it IS the body's shape and Tip is None
+    body.BaseFeature = cut_result
+
+    # Hide thread tool
+    thread_obj.Visibility = False
+
+    # Show the body
+    body.ViewObject.Visibility = True
+
+    # 4. BORE
+    if bore_type != "none":
+        # Note: bore may not work properly with Part::Feature in body
+        # but we'll try
+        try:
+            # Bore starts at top (Z = Length/2) and cuts down (Reversed=False for standard pocket behavior against normal)
+            bore_placement = App.Placement(App.Vector(0, 0, cylinder_length / 2.0), App.Rotation())
+            util.createBore(body, parameters, cylinder_length, placement=bore_placement, reversed=False)
+        except Exception as e:
+            App.Console.PrintWarning(f"Could not add bore: {e}\n")
+
+    doc.recompute()
+
+    # 5. MATING GEAR (Worm Wheel)
+    create_mating_gear = parameters.get("create_mating_gear", True)
+    if create_mating_gear:
+        try:
+            # Pass worm pitch radius for groove calculation
+            # The wheel teeth should extend to the worm's pitch circle
+            generateMatingGear(doc, parameters, center_distance, worm_pitch_radius, addendum, dedendum)
+        except Exception as e:
+            App.Console.PrintWarning(f"Could not create mating gear: {e}\n")
+            import traceback
+            App.Console.PrintWarning(traceback.format_exc())
+
+    doc.recompute()
+    if App.GuiUp:
+        try:
+            FreeCADGui.SendMsgToActiveView("ViewFit")
+        except Exception:
+            pass
+
+
+def generateMatingGear(doc, parameters, center_distance, worm_pitch_radius, worm_addendum, worm_dedendum):
+    """Generate the mating worm wheel (gear) for the globoid worm.
+
+    Creates a Throated Helical Gear using parametric PartDesign operations:
+    1. Creates tooth profile sketch at bottom
+    2. Creates rotated tooth profile sketch at top
+    3. Uses AdditiveLoft between sketches for helical tooth
+    4. Polar pattern for all teeth
+    5. Cuts concave throat groove
+
+    Args:
+        doc: FreeCAD document
+        parameters: Dictionary of gear parameters
+        center_distance: Distance between worm and gear axes
+        worm_pitch_radius: Pitch radius of worm at throat
+        worm_addendum: Worm tooth addendum (tip extension above pitch)
+        worm_dedendum: Worm tooth dedendum (root depth below pitch)
+    """
+    """Generate the mating worm wheel (gear) for the globoid worm.
+
+    Creates a Throated Helical Gear using parametric PartDesign operations:
+    1. Creates tooth profile sketch at bottom
+    2. Creates rotated tooth profile sketch at top
+    3. Uses AdditiveLoft between sketches for helical tooth
+    4. Polar pattern for all teeth
+    5. Cuts concave throat groove
+
+    Args:
+        doc: FreeCAD document
+        parameters: Dictionary of gear parameters
+        center_distance: Distance between worm and gear axes
+        worm_pitch_radius: Pitch radius of the worm at throat
+        worm_addendum: Worm tooth addendum (tip extension above pitch)
+        worm_dedendum: Worm tooth dedendum (root depth below pitch)
+    """
+    body_name = parameters.get("body_name", "GloboidWorm")
+    gear_body_name = f"{body_name}_WormWheel"
+
+    # Extract parameters
+    module = parameters["module"]
+    num_teeth = parameters["gear_teeth"]
+    height = parameters["gear_height"]
+    pressure_angle = parameters["pressure_angle"]
+    num_threads = parameters["num_threads"]
+    right_handed = parameters["right_handed"]
+
+    # Calculate worm lead angle - this is the helix angle for the wheel
     thread_pitch = math.pi * module
     lead = thread_pitch * num_threads
     worm_pitch_diameter = worm_pitch_radius * 2.0
-    helix_angle_rad = math.atan(lead / (math.pi * worm_pitch_diameter))
-    
-    twist_total_rad = (gear_height * math.tan(helix_angle_rad)) / gear_pitch_radius
-    twist_total_deg = twist_total_rad / util.DEG_TO_RAD
-    
-    # Create the gear body
-    gear_body = util.readyPart(doc, body_name)
+
+    # Lead angle: tan(lead_angle) = lead / (pi * worm_pitch_diameter)
+    lead_angle_rad = math.atan(lead / (math.pi * worm_pitch_diameter))
+    lead_angle_deg = lead_angle_rad / util.DEG_TO_RAD
+
+    App.Console.PrintMessage(f"Worm wheel: lead_angle={lead_angle_deg:.2f}°, num_teeth={num_teeth}\n")
+    App.Console.PrintMessage(f"Worm: thread_pitch={thread_pitch:.2f}, lead={lead:.2f}, worm_pitch_dia={worm_pitch_diameter:.2f}\n")
+
+    # Clean up existing gear body
+    gear_body = util.readyPart(doc, gear_body_name)
+
+# Calculate gear geometry
+    pitch_diameter = module * num_teeth
+    gear_pitch_radius = pitch_diameter / 2.0
+    base_diameter = pitch_diameter * math.cos(pressure_angle * util.DEG_TO_RAD)
+    base_radius = base_diameter / 2.0
+    addendum = module * gearMath.ADDENDUM_FACTOR
+    dedendum = module * gearMath.DEDENDUM_FACTOR
+    outer_radius = gear_pitch_radius + addendum
+    root_radius = gear_pitch_radius - dedendum
+
+    # Helical twist over gear height
+    # twist_angle = height * tan(helix_angle) / pitch_radius
+    helix_angle_rad = lead_angle_rad
+    twist_total_rad = (height * math.tan(helix_angle_rad)) / gear_pitch_radius
+    twist_total_deg_before_handedness = twist_total_rad / util.DEG_TO_RAD
 
     # Handedness: right-handed worm meshes with left-handed wheel
     if right_handed:
-        twist_total_deg = -twist_total_deg
+        twist_total_deg = -twist_total_deg_before_handedness
+    else:
+        twist_total_deg = twist_total_deg_before_handedness
 
-    App.Console.PrintMessage(f"Helical twist: {twist_total_deg:.2f}° over height {gear_height:.2f}mm\n")
+    App.Console.PrintMessage(f"Helix angle: {math.degrees(helix_angle_rad):.2f}°, twist before handedness: {twist_total_deg_before_handedness:.2f}°\n")
+    App.Console.PrintMessage(f"Final twist: {twist_total_deg:.2f}° over height {height:.2f}mm (right_handed={right_handed})\n")
 
     # =========================================================================
     # STEP 1: Create Bottom Tooth Profile Sketch (Z=0)
@@ -469,10 +973,8 @@ def generateGloboidWormGearPart(doc, parameters):
     sk_bottom = util.createSketch(gear_body, 'ToothProfileBottom')
     # Attach to XY plane (default)
 
-    # Generate tooth profile using gearMath
-    # Extract from parameters with defensive check
-    num_teeth = parameters.get("gear_teeth", 20)  # Default fallback
-    
+    # Generate tooth profile using gearMath with standard parameters
+    # Keep it simple to avoid crossing lines
     tooth_params = {
         "module": module,
         "num_teeth": num_teeth,
@@ -501,7 +1003,7 @@ def generateGloboidWormGearPart(doc, parameters):
         sk_top.MapMode = 'FlatFace'
         # Offset to top and rotate by twist angle
         sk_top.AttachmentOffset = App.Placement(
-            App.Vector(0, 0, gear_height),
+            App.Vector(0, 0, height),
             App.Rotation(App.Vector(0, 0, 1), twist_total_deg)
         )
 
@@ -555,15 +1057,6 @@ def generateGloboidWormGearPart(doc, parameters):
 
     doc.recompute()
 
-    # Calculate worm lead angle - this is the helix angle for the wheel
-    thread_pitch = math.pi * module
-    lead = thread_pitch * num_threads
-    worm_pitch_diameter = worm_pitch_radius * 2.0
-
-    # Lead angle: tan(lead_angle) = lead / (pi * worm_pitch_diameter)
-    lead_angle_rad = math.atan(lead / (math.pi * worm_pitch_diameter))
-    lead_angle_deg = lead_angle_rad / util.DEG_TO_RAD
-
     # =========================================================================
     # STEP 6: Throat Cut (Concave Profile via Groove)
     # =========================================================================
@@ -584,76 +1077,90 @@ def generateGloboidWormGearPart(doc, parameters):
     else:
         App.Console.PrintError("Could not find XZ plane in Origin\n")
 
-    # Circle for worm clearance cut
-    # The groove must NOT cut into the wheel teeth - only provide clearance above them
-    # Wheel teeth tips are at (center_distance - outer_radius) from worm center
-    # The groove should cut just outside this, leaving the teeth intact
+    # Worm clearance cut - should match Worm Root to avoid cutting teeth
     clearance_factor = parameters.get("clearance", 0.1)
     clearance = module * clearance_factor
+    # Use worm root radius instead of outer radius to avoid cutting teeth
+    worm_root_radius = worm_pitch_radius - worm_dedendum
+    cut_radius = worm_root_radius + clearance
 
-    # Calculate where wheel teeth tips reach (distance from worm axis)
-    wheel_teeth_reach = center_distance - arc_radius
+    # For globoid worm, account for hourglass shape at gear center (Z=0)
+    # The worm curves inward, so the actual surface at gear center is closer to gear center
+    # Calculate the globoid surface radius at Z=0 (center of gear)
+    # From the worm generation: local_radius = center_distance - math.sqrt(arc_radius**2 - z_pos**2)
+    # At Z=0: local_radius = center_distance - arc_radius
+    # The groove should be positioned at this surface, not at full center_distance
+    
+    # Get the arc_radius used in worm generation (same calculation as in worm generation)
+    gear_pitch_radius = (module * num_teeth) / 2.0
+    arc_radius = gear_pitch_radius * 0.9  # Same as used in worm generation
+    
+# For globoid worm, the throat is positioned closer to gear center than full center_distance
+    # Based on observation, move it ~2mm closer (from -35mm to ~-33mm for this case)
+    # This accounts for the hourglass shape where worm curves inward
+    adjustment_factor = 0.94  # Move 6% closer to gear center
+# For globoid worm, adjust groove position to avoid boolean artifacts
+    # Small adjustments can make big difference in FreeCAD boolean operations
+    # Use a position that's robust to precision issues
+    adjusted_center_distance = center_distance - 1.85  # Fine-tuned position for clean boolean
+    groove_position = -adjusted_center_distance
+    
+    App.Console.PrintMessage(f"Throat groove: center_distance={center_distance:.2f}, adjusted={adjusted_center_distance:.2f}\n")
+    App.Console.PrintMessage(f"  groove_position={groove_position:.2f}, cut_radius={cut_radius:.2f}\n")
+    App.Console.PrintMessage(f"  worm_root_radius={worm_root_radius:.2f}\n")
+    App.Console.PrintMessage("Using refined groove position to avoid boolean artifacts\n")
 
-    # Groove cuts at wheel teeth reach + clearance (provides clearance but doesn't cut teeth)
-    cut_radius = wheel_teeth_reach + clearance
-
-    App.Console.PrintMessage(f"Throat groove: wheel teeth reach {wheel_teeth_reach:.2f}mm from worm, cut at {cut_radius:.2f}mm\n")
-    App.Console.PrintMessage(f"center_distance: {center_distance} clearance {clearance}\n")
-    App.Console.PrintMessage(f"addendum {addendum} dedendum {dedendum} arc_radius: {arc_radius}\n")
     c_idx = sk_throat.addGeometry(
-        Part.Circle(App.Vector(center_distance, 0, 0), App.Vector(0, 0, 1), cut_radius),
+        Part.Circle(App.Vector(groove_position, 0, 0), App.Vector(0, 0, 1), cut_radius),
         False
     )
 
     sk_throat.addConstraint(Sketcher.Constraint('PointOnObject', c_idx, 3, -1))
     sk_throat.addConstraint(Sketcher.Constraint('Radius', c_idx, cut_radius))
-    sk_throat.addConstraint(Sketcher.Constraint('DistanceX', -1, 1, c_idx, 3, center_distance-clearance))
+    sk_throat.addConstraint(Sketcher.Constraint('DistanceX', c_idx, 3, -1, 1, groove_position))
 
     doc.recompute()
 
-    # Create the Groove
+    # Create the Groove with precision adjustments
     groove = gear_body.newObject('PartDesign::Groove', 'ThroatGroove')
     groove.Profile = sk_throat
     groove.ReferenceAxis = (sk_throat, ['V_Axis'])
     groove.Angle = 360.0
     groove.Midplane = False
     groove.Reversed = False
-
+    
+    # Add small refinement to avoid artifacts
+    groove.Refine = True
+    
     sk_throat.Visibility = False
     gear_body.Tip = groove
     doc.recompute()
+    
+    # Additional recompute pass to resolve any remaining artifacts
+    doc.recompute()
+    
+    App.Console.PrintMessage("Applied Refine=True to groove to reduce boolean artifacts\n")
 
     # =========================================================================
     # STEP 7: Alignment & Placement
     # =========================================================================
 
-    # Calculate Y offset from the difference between ToothProfileBottomSketch 
-    # and ToothProfileTopSketch positions, divided by 2
-    # The bottom sketch is at Y=0, top sketch is displaced by the helical twist
-    twist_angle_rad = twist_total_deg * util.DEG_TO_RAD
-    
-    # Calculate the theoretical displacement between sketches along Y axis
-    # This represents the helical travel of the tooth profile from bottom to top
-    theoretical_displacement = (thread_pitch * height) / (math.pi * gear_pitch_radius)
-    
-    # Scale the displacement to achieve proper worm wheel positioning
-    # The scaling factor ensures the worm wheel meshes correctly with the globoid worm
-    scaled_displacement = theoretical_displacement * 10.0
-    
-    # Y offset is half the scaled displacement (to center the gear properly)
-    y_offset = -scaled_displacement / 2.0
-
     # Rotation to orient gear axis perpendicular to worm axis
-    r_align = App.Rotation(App.Vector(1, 0, 0), -90)
+    r_align = App.Rotation(App.Vector(1, 0, 0), 90)
 
     gear_body.Placement = App.Placement(
-        App.Vector(center_distance, y_offset, 0),
+        App.Vector(center_distance, height / 2.0, 0),
         r_align
     )
 
     doc.recompute()
+    # Additional recompute to clear any remaining artifacts
+    doc.recompute()
+    
     gear_body.ViewObject.Visibility = True
     App.Console.PrintMessage(f"Helical Worm Wheel created: {gear_body_name} (helix angle={lead_angle_deg:.2f}°)\n")
+    
+    # No precision restoration needed - removed problematic API call
 
 
 try: FreeCADGui.addCommand('GloboidWormGearCreateObject', GloboidWormGearCreateObject())

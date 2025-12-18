@@ -719,7 +719,7 @@ def parametricCircle(radius, segmentCount, segmentIndex):
     return x, y
 
 
-# [ADD THIS HELPER to gearMath.py, before generateToothProfile]
+
 
 def constrainSketchPoint(sketch, geo_index, point_index, point_vector):
     """
@@ -985,6 +985,59 @@ def rotatePoint(x, y, angle_rad):
 # Part Management
 # ============================================================================
 
+def findPlane(body, plane_name: str) -> Optional[object]:
+    """
+    Find a plane in a body's Origin features robustly.
+
+    Args:
+        body: FreeCAD body object.
+        plane_name: Name of the plane to find ('XY', 'XZ', 'YZ').
+
+    Returns:
+        The found plane object or None if not found.
+    """
+    if not hasattr(body, 'Origin') or not body.Origin:
+        logger.warning(f"Body '{body.Name}' has no Origin feature.")
+        return None
+
+    origin_features = body.Origin.OriginFeatures
+
+    # Primary method: Direct access via fixed internal names
+    if plane_name == 'XY' and hasattr(origin_features, 'XY_Plane'):
+        return origin_features.XY_Plane
+    if plane_name == 'XZ' and hasattr(origin_features, 'XZ_Plane'):
+        return origin_features.XZ_Plane
+    if plane_name == 'YZ' and hasattr(origin_features, 'YZ_Plane'):
+        return origin_features.YZ_Plane
+
+    # Fallback method: Search by name (less reliable)
+    logger.warning(f"Could not find plane '{plane_name}' by direct access. "
+                   "Falling back to searching by name.")
+    for child in body.Origin.Group:
+        if plane_name in child.Name or plane_name in child.Label:
+            logger.info(f"Found plane '{plane_name}' as '{child.Name}' (Label: {child.Label})")
+            return child
+    
+    # Second fallback: Try common variations
+    plane_variations = {
+        'XY': ['XY_Plane', 'Plane XY', 'XY Plane'],
+        'XZ': ['XZ_Plane', 'Plane XZ', 'XZ Plane'],
+        'YZ': ['YZ_Plane', 'Plane YZ', 'YZ Plane']
+    }
+    
+    if plane_name in plane_variations:
+        for child in body.Origin.Group:
+            for variation in plane_variations[plane_name]:
+                if variation in child.Name or variation in child.Label:
+                    logger.info(f"Found plane '{plane_name}' as '{child.Name}' using variation '{variation}'")
+                    return child
+    
+    logger.error(f"Failed to find plane '{plane_name}' in body '{body.Name}'.")
+    # List all available planes for debugging
+    available = [f"{child.Name} (Label: {child.Label})" for child in body.Origin.Group]
+    logger.error(f"Available planes: {available}")
+    return None
+
 def readyPart(doc, name):
     """Create a body if not present, or remove and recreate it if it exists.
 
@@ -1006,6 +1059,13 @@ def readyPart(doc, name):
         # Remove the object itself
         doc.removeObject(name)
     part = doc.addObject('PartDesign::Body', name)
+    
+    # Ensure Origin features are properly initialized
+    doc.recompute()
+    if not hasattr(part, 'Origin') or not part.Origin:
+        logger.warning(f"Body '{name}' has no Origin after creation. Trying to initialize...")
+        doc.recompute()
+    
     return part
 
 

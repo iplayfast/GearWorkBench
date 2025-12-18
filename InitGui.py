@@ -105,7 +105,9 @@ class GearWorkbenchWB(Workbench):
         pass # Msg("GearWorkbench.Deactivated()\n")
 
 
-FreeCADGui.addWorkbench(GearWorkbenchWB())
+if not hasattr(FreeCADGui, "_GearWorkbenchWB_loaded"):
+    FreeCADGui.addWorkbench(GearWorkbenchWB())
+    FreeCADGui._GearWorkbenchWB_loaded = True
 
 # File format pref pages are independent and can be loaded at startup
 # FreeCAD.__unit_test__ += ["TestSpurGear"]

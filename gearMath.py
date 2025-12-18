@@ -59,34 +59,7 @@ def calcInternalDedendumDiameter(pitch_diameter: float, module: float, profile_s
     return pitch_diameter + 2 * module * (DEDENDUM_FACTOR - profile_shift) + 2 * rim_thickness
 
 
-def involute_point(base_radius: float, t: float) -> Tuple[float, float]:
-    """
-    Calculate a point on an involute curve.
 
-    Args:
-        base_radius: Base circle radius
-        t: Parameter (roll angle in radians)
-
-    Returns:
-        (x, y) coordinates of the involute point
-    """
-    x = base_radius * (math.cos(t) + t * math.sin(t))
-    y = base_radius * (math.sin(t) - t * math.cos(t))
-    return x, y
-
-
-def involute_xy(base_r: float, t: float) -> Tuple[float, float]:
-    """
-    Alias for involute_point.
-
-    Args:
-        base_r: Base circle radius
-        t: Parameter (roll angle in radians)
-
-    Returns:
-        (x, y) coordinates of the involute point
-    """
-    return involute_point(base_r, t)
 
 
 def pitch_radius(module: float, num_teeth: int) -> float:
@@ -173,7 +146,7 @@ def generateToothProfile(sketch, parameters):
     psi = s_pitch / dw 
     inv_alpha = math.tan(pressure_angle_rad) - pressure_angle_rad
     
-    num_inv_points = 20 
+    num_inv_points = 10 
     epsilon = 0.001
     start_radius = max(dg/2.0 + epsilon, df/2.0)
     end_radius = da/2.0
@@ -213,8 +186,9 @@ def generateToothProfile(sketch, parameters):
             involute_pts.append(App.Vector(0, r_low, 0))
             break
             
+        x_raw, y_raw = util.involutePoint(dg / 2.0, phi)
         theta = (math.pi / 2.0) - psi - inv_alpha + inv_phi 
-        involute_pts.append(App.Vector(r * math.cos(theta), r * math.sin(theta), 0))
+        involute_pts.append(App.Vector(x_raw * math.cos(theta) - y_raw * math.sin(theta), x_raw * math.sin(theta) + y_raw * math.cos(theta), 0))
 
     right_flank_geo = involute_pts
     left_flank_geo = util.mirrorPointsX(right_flank_geo)
