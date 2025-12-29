@@ -43,6 +43,30 @@ def validateCommonParameters(parameters):
         raise gearMath.GearParameterError("Height must be positive")
 
 
+def _applyOriginAndAngle(body, parameters):
+    """Apply origin translation and angle rotation to the gear body.
+
+    Args:
+        body: FreeCAD body object
+        parameters: Gear parameters dict with origin_x, origin_y, origin_z, and angle
+    """
+    origin_x = parameters.get("origin_x", 0.0)
+    origin_y = parameters.get("origin_y", 0.0)
+    origin_z = parameters.get("origin_z", 0.0)
+    angle = parameters.get("angle", 0.0)
+
+    if origin_x == 0.0 and origin_y == 0.0 and origin_z == 0.0 and angle == 0.0:
+        return
+
+    translation = App.Vector(origin_x, origin_y, origin_z)
+    rotation = App.Rotation(App.Vector(0, 0, 1), angle)
+
+    current_placement = body.Placement
+    new_base_placement = App.Placement(translation, rotation)
+
+    body.Placement = current_placement.multiply(new_base_placement)
+
+
 # ============================================================================
 # MASTER GEAR BUILDER - HERRINGBONE
 # ============================================================================
@@ -179,6 +203,8 @@ def _createTwoSketchHerringbone(
         except Exception:
             pass
 
+    _applyOriginAndAngle(body, parameters)
+
     return {"body": body}
 
 
@@ -251,6 +277,8 @@ def _createThreeSketchHerringbone(
             FreeCADGui.SendMsgToActiveView("ViewFit")
         except Exception:
             pass
+
+    _applyOriginAndAngle(body, parameters)
 
     return {"body": body}
 
@@ -332,11 +360,13 @@ def genericSpurGear(doc, parameters, profile_func: Optional[Callable] = None):
 
     return genericHerringboneGear(doc, parameters, 0.0, 0.0, profile_func)
 
+
 # ============================================================================
 # FEATUREPYTHON CLASSES
 # ============================================================================
 
 version = "Dec 29, 2025"
+
 
 class GenericSpurGear:
     """FeaturePython object for parametric generic spur gear."""
@@ -348,98 +378,164 @@ class GenericSpurGear:
 
         # Read-only properties
         obj.addProperty(
-            "App::PropertyString", "Version", "read only",
+            "App::PropertyString",
+            "Version",
+            "read only",
             QT_TRANSLATE_NOOP("App::Property", "Workbench version"),
-            1
+            1,
         ).Version = version
 
         obj.addProperty(
-            "App::PropertyLength", "PitchDiameter", "read only",
+            "App::PropertyLength",
+            "PitchDiameter",
+            "read only",
             QT_TRANSLATE_NOOP("App::Property", "Pitch diameter (where gears mesh)"),
-            1
+            1,
         )
 
         obj.addProperty(
-            "App::PropertyLength", "BaseDiameter", "read only",
-            QT_TRANSLATE_NOOP("App::Property", "Base circle diameter (involute origin)"),
-            1
+            "App::PropertyLength",
+            "BaseDiameter",
+            "read only",
+            QT_TRANSLATE_NOOP(
+                "App::Property", "Base circle diameter (involute origin)"
+            ),
+            1,
         )
 
         obj.addProperty(
-            "App::PropertyLength", "OuterDiameter", "read only",
+            "App::PropertyLength",
+            "OuterDiameter",
+            "read only",
             QT_TRANSLATE_NOOP("App::Property", "Outer diameter (tip of teeth)"),
-            1
+            1,
         )
 
         obj.addProperty(
-            "App::PropertyLength", "RootDiameter", "read only",
+            "App::PropertyLength",
+            "RootDiameter",
+            "read only",
             QT_TRANSLATE_NOOP("App::Property", "Root diameter (bottom of teeth)"),
-            1
+            1,
         )
 
         # Core gear parameters
         obj.addProperty(
-            "App::PropertyInteger", "NumberOfTeeth", "GenericSpurGear",
-            QT_TRANSLATE_NOOP("App::Property", "Number of teeth")
+            "App::PropertyInteger",
+            "NumberOfTeeth",
+            "GenericSpurGear",
+            QT_TRANSLATE_NOOP("App::Property", "Number of teeth"),
         ).NumberOfTeeth = H["num_teeth"]
 
         obj.addProperty(
-            "App::PropertyLength", "Module", "GenericSpurGear",
-            QT_TRANSLATE_NOOP("App::Property", "Gear module (tooth size)")
+            "App::PropertyLength",
+            "Module",
+            "GenericSpurGear",
+            QT_TRANSLATE_NOOP("App::Property", "Gear module (tooth size)"),
         ).Module = H["module"]
 
         obj.addProperty(
-            "App::PropertyLength", "Height", "GenericSpurGear",
-            QT_TRANSLATE_NOOP("App::Property", "Gear thickness/height")
+            "App::PropertyLength",
+            "Height",
+            "GenericSpurGear",
+            QT_TRANSLATE_NOOP("App::Property", "Gear thickness/height"),
         ).Height = H["height"]
 
         obj.addProperty(
-            "App::PropertyAngle", "PressureAngle", "GenericSpurGear",
-            QT_TRANSLATE_NOOP("App::Property", "Pressure angle (normally 20°)")
+            "App::PropertyAngle",
+            "PressureAngle",
+            "GenericSpurGear",
+            QT_TRANSLATE_NOOP("App::Property", "Pressure angle (normally 20°)"),
         ).PressureAngle = H["pressure_angle"]
 
         obj.addProperty(
-            "App::PropertyFloat", "ProfileShift", "GenericSpurGear",
-            QT_TRANSLATE_NOOP("App::Property", "Profile shift coefficient (-1 to +1)")
+            "App::PropertyFloat",
+            "ProfileShift",
+            "GenericSpurGear",
+            QT_TRANSLATE_NOOP("App::Property", "Profile shift coefficient (-1 to +1)"),
         ).ProfileShift = H["profile_shift"]
 
         obj.addProperty(
-            "App::PropertyString", "BodyName", "GenericSpurGear",
-            QT_TRANSLATE_NOOP("App::Property", "Name of the generated body")
+            "App::PropertyString",
+            "BodyName",
+            "GenericSpurGear",
+            QT_TRANSLATE_NOOP("App::Property", "Name of the generated body"),
         ).BodyName = H["body_name"]
 
         # Bore parameters
         obj.addProperty(
-            "App::PropertyEnumeration", "BoreType", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Type of center hole")
+            "App::PropertyEnumeration",
+            "BoreType",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Type of center hole"),
         )
         obj.BoreType = ["none", "circular", "square", "hexagonal", "keyway"]
         obj.BoreType = H["bore_type"]
 
         obj.addProperty(
-            "App::PropertyLength", "BoreDiameter", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Diameter of center bore")
+            "App::PropertyLength",
+            "BoreDiameter",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Diameter of center bore"),
         ).BoreDiameter = H["bore_diameter"]
 
         obj.addProperty(
-            "App::PropertyLength", "SquareCornerRadius", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Corner radius for square bore")
+            "App::PropertyLength",
+            "SquareCornerRadius",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Corner radius for square bore"),
         ).SquareCornerRadius = 0.5
 
         obj.addProperty(
-            "App::PropertyLength", "HexCornerRadius", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Corner radius for hexagonal bore")
+            "App::PropertyLength",
+            "HexCornerRadius",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Corner radius for hexagonal bore"),
         ).HexCornerRadius = 0.5
 
         obj.addProperty(
-            "App::PropertyLength", "KeywayWidth", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Width of keyway (DIN 6885)")
+            "App::PropertyLength",
+            "KeywayWidth",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Width of keyway (DIN 6885)"),
         ).KeywayWidth = 2.0
 
         obj.addProperty(
-            "App::PropertyLength", "KeywayDepth", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Depth of keyway")
+            "App::PropertyLength",
+            "KeywayDepth",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Depth of keyway"),
         ).KeywayDepth = 1.0
+
+        obj.addProperty(
+            "App::PropertyLength",
+            "OriginX",
+            "Placement",
+            QT_TRANSLATE_NOOP("App::Property", "X coordinate of gear origin"),
+        ).OriginX = 0.0
+
+        obj.addProperty(
+            "App::PropertyLength",
+            "OriginY",
+            "Placement",
+            QT_TRANSLATE_NOOP("App::Property", "Y coordinate of gear origin"),
+        ).OriginY = 0.0
+
+        obj.addProperty(
+            "App::PropertyLength",
+            "OriginZ",
+            "Placement",
+            QT_TRANSLATE_NOOP("App::Property", "Z coordinate of gear origin"),
+        ).OriginZ = 0.0
+
+        obj.addProperty(
+            "App::PropertyAngle",
+            "Angle",
+            "Placement",
+            QT_TRANSLATE_NOOP(
+                "App::Property", "Rotation angle around Z axis (degrees)"
+            ),
+        ).Angle = 0.0
 
         self.Type = "GenericSpurGear"
         self.Object = obj
@@ -468,8 +564,12 @@ class GenericSpurGear:
 
                 pitch_dia = gearMath.calcPitchDiameter(module, num_teeth)
                 base_dia = gearMath.calcBaseDiameter(pitch_dia, pressure_angle)
-                outer_dia = gearMath.calcAddendumDiameter(pitch_dia, module, profile_shift)
-                root_dia = gearMath.calcDedendumDiameter(pitch_dia, module, profile_shift)
+                outer_dia = gearMath.calcAddendumDiameter(
+                    pitch_dia, module, profile_shift
+                )
+                root_dia = gearMath.calcDedendumDiameter(
+                    pitch_dia, module, profile_shift
+                )
 
                 fp.PitchDiameter = pitch_dia
                 fp.BaseDiameter = base_dia
@@ -494,6 +594,10 @@ class GenericSpurGear:
             "hex_corner_radius": float(self.Object.HexCornerRadius.Value),
             "keyway_width": float(self.Object.KeywayWidth.Value),
             "keyway_depth": float(self.Object.KeywayDepth.Value),
+            "origin_x": float(self.Object.OriginX.Value),
+            "origin_y": float(self.Object.OriginY.Value),
+            "origin_z": float(self.Object.OriginZ.Value),
+            "angle": float(self.Object.Angle.Value),
         }
         return parameters
 
@@ -513,6 +617,7 @@ class GenericSpurGear:
             except Exception as e:
                 App.Console.PrintError(f"Generic Spur Gear Error: {str(e)}\n")
                 import traceback
+
                 App.Console.PrintError(traceback.format_exc())
                 raise
 
@@ -532,103 +637,171 @@ class GenericHelixGear:
 
         # Read-only properties
         obj.addProperty(
-            "App::PropertyString", "Version", "read only",
+            "App::PropertyString",
+            "Version",
+            "read only",
             QT_TRANSLATE_NOOP("App::Property", "Workbench version"),
-            1
+            1,
         ).Version = version
 
         obj.addProperty(
-            "App::PropertyLength", "PitchDiameter", "read only",
+            "App::PropertyLength",
+            "PitchDiameter",
+            "read only",
             QT_TRANSLATE_NOOP("App::Property", "Pitch diameter (where gears mesh)"),
-            1
+            1,
         )
 
         obj.addProperty(
-            "App::PropertyLength", "BaseDiameter", "read only",
-            QT_TRANSLATE_NOOP("App::Property", "Base circle diameter (involute origin)"),
-            1
+            "App::PropertyLength",
+            "BaseDiameter",
+            "read only",
+            QT_TRANSLATE_NOOP(
+                "App::Property", "Base circle diameter (involute origin)"
+            ),
+            1,
         )
 
         obj.addProperty(
-            "App::PropertyLength", "OuterDiameter", "read only",
+            "App::PropertyLength",
+            "OuterDiameter",
+            "read only",
             QT_TRANSLATE_NOOP("App::Property", "Outer diameter (tip of teeth)"),
-            1
+            1,
         )
 
         obj.addProperty(
-            "App::PropertyLength", "RootDiameter", "read only",
+            "App::PropertyLength",
+            "RootDiameter",
+            "read only",
             QT_TRANSLATE_NOOP("App::Property", "Root diameter (bottom of teeth)"),
-            1
+            1,
         )
 
         # Core gear parameters
         obj.addProperty(
-            "App::PropertyInteger", "NumberOfTeeth", "GenericHelixGear",
-            QT_TRANSLATE_NOOP("App::Property", "Number of teeth")
+            "App::PropertyInteger",
+            "NumberOfTeeth",
+            "GenericHelixGear",
+            QT_TRANSLATE_NOOP("App::Property", "Number of teeth"),
         ).NumberOfTeeth = H["num_teeth"]
 
         obj.addProperty(
-            "App::PropertyLength", "Module", "GenericHelixGear",
-            QT_TRANSLATE_NOOP("App::Property", "Gear module (tooth size)")
+            "App::PropertyLength",
+            "Module",
+            "GenericHelixGear",
+            QT_TRANSLATE_NOOP("App::Property", "Gear module (tooth size)"),
         ).Module = H["module"]
 
         obj.addProperty(
-            "App::PropertyLength", "Height", "GenericHelixGear",
-            QT_TRANSLATE_NOOP("App::Property", "Gear thickness/height")
+            "App::PropertyLength",
+            "Height",
+            "GenericHelixGear",
+            QT_TRANSLATE_NOOP("App::Property", "Gear thickness/height"),
         ).Height = H["height"]
 
         obj.addProperty(
-            "App::PropertyAngle", "PressureAngle", "GenericHelixGear",
-            QT_TRANSLATE_NOOP("App::Property", "Pressure angle (normally 20°)")
+            "App::PropertyAngle",
+            "PressureAngle",
+            "GenericHelixGear",
+            QT_TRANSLATE_NOOP("App::Property", "Pressure angle (normally 20°)"),
         ).PressureAngle = H["pressure_angle"]
 
         obj.addProperty(
-            "App::PropertyFloat", "ProfileShift", "GenericHelixGear",
-            QT_TRANSLATE_NOOP("App::Property", "Profile shift coefficient (-1 to +1)")
+            "App::PropertyFloat",
+            "ProfileShift",
+            "GenericHelixGear",
+            QT_TRANSLATE_NOOP("App::Property", "Profile shift coefficient (-1 to +1)"),
         ).ProfileShift = H["profile_shift"]
 
         obj.addProperty(
-            "App::PropertyAngle", "HelixAngle", "GenericHelixGear",
-            QT_TRANSLATE_NOOP("App::Property", "Helix angle in degrees")
+            "App::PropertyAngle",
+            "HelixAngle",
+            "GenericHelixGear",
+            QT_TRANSLATE_NOOP("App::Property", "Helix angle in degrees"),
         ).HelixAngle = 15.0
 
         obj.addProperty(
-            "App::PropertyString", "BodyName", "GenericHelixGear",
-            QT_TRANSLATE_NOOP("App::Property", "Name of the generated body")
+            "App::PropertyString",
+            "BodyName",
+            "GenericHelixGear",
+            QT_TRANSLATE_NOOP("App::Property", "Name of the generated body"),
         ).BodyName = H["body_name"]
 
         # Bore parameters
         obj.addProperty(
-            "App::PropertyEnumeration", "BoreType", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Type of center hole")
+            "App::PropertyEnumeration",
+            "BoreType",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Type of center hole"),
         )
         obj.BoreType = ["none", "circular", "square", "hexagonal", "keyway"]
         obj.BoreType = H["bore_type"]
 
         obj.addProperty(
-            "App::PropertyLength", "BoreDiameter", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Diameter of center bore")
+            "App::PropertyLength",
+            "BoreDiameter",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Diameter of center bore"),
         ).BoreDiameter = H["bore_diameter"]
 
         obj.addProperty(
-            "App::PropertyLength", "SquareCornerRadius", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Corner radius for square bore")
+            "App::PropertyLength",
+            "SquareCornerRadius",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Corner radius for square bore"),
         ).SquareCornerRadius = 0.5
 
         obj.addProperty(
-            "App::PropertyLength", "HexCornerRadius", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Corner radius for hexagonal bore")
+            "App::PropertyLength",
+            "HexCornerRadius",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Corner radius for hexagonal bore"),
         ).HexCornerRadius = 0.5
 
         obj.addProperty(
-            "App::PropertyLength", "KeywayWidth", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Width of keyway (DIN 6885)")
+            "App::PropertyLength",
+            "KeywayWidth",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Width of keyway (DIN 6885)"),
         ).KeywayWidth = 2.0
 
         obj.addProperty(
-            "App::PropertyLength", "KeywayDepth", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Depth of keyway")
+            "App::PropertyLength",
+            "KeywayDepth",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Depth of keyway"),
         ).KeywayDepth = 1.0
+
+        obj.addProperty(
+            "App::PropertyLength",
+            "OriginX",
+            "Placement",
+            QT_TRANSLATE_NOOP("App::Property", "X coordinate of gear origin"),
+        ).OriginX = 0.0
+
+        obj.addProperty(
+            "App::PropertyLength",
+            "OriginY",
+            "Placement",
+            QT_TRANSLATE_NOOP("App::Property", "Y coordinate of gear origin"),
+        ).OriginY = 0.0
+
+        obj.addProperty(
+            "App::PropertyLength",
+            "OriginZ",
+            "Placement",
+            QT_TRANSLATE_NOOP("App::Property", "Z coordinate of gear origin"),
+        ).OriginZ = 0.0
+
+        obj.addProperty(
+            "App::PropertyAngle",
+            "Angle",
+            "Placement",
+            QT_TRANSLATE_NOOP(
+                "App::Property", "Rotation angle around Z axis (degrees)"
+            ),
+        ).Angle = 0.0
 
         self.Type = "GenericHelixGear"
         self.Object = obj
@@ -656,8 +829,12 @@ class GenericHelixGear:
 
                 pitch_dia = gearMath.calcPitchDiameter(module, num_teeth)
                 base_dia = gearMath.calcBaseDiameter(pitch_dia, pressure_angle)
-                outer_dia = gearMath.calcAddendumDiameter(pitch_dia, module, profile_shift)
-                root_dia = gearMath.calcDedendumDiameter(pitch_dia, module, profile_shift)
+                outer_dia = gearMath.calcAddendumDiameter(
+                    pitch_dia, module, profile_shift
+                )
+                root_dia = gearMath.calcDedendumDiameter(
+                    pitch_dia, module, profile_shift
+                )
 
                 fp.PitchDiameter = pitch_dia
                 fp.BaseDiameter = base_dia
@@ -682,6 +859,10 @@ class GenericHelixGear:
             "hex_corner_radius": float(self.Object.HexCornerRadius.Value),
             "keyway_width": float(self.Object.KeywayWidth.Value),
             "keyway_depth": float(self.Object.KeywayDepth.Value),
+            "origin_x": float(self.Object.OriginX.Value),
+            "origin_y": float(self.Object.OriginY.Value),
+            "origin_z": float(self.Object.OriginZ.Value),
+            "angle": float(self.Object.Angle.Value),
         }
         return parameters
 
@@ -702,6 +883,7 @@ class GenericHelixGear:
             except Exception as e:
                 App.Console.PrintError(f"Generic Helix Gear Error: {str(e)}\n")
                 import traceback
+
                 App.Console.PrintError(traceback.format_exc())
                 raise
 
@@ -721,108 +903,178 @@ class GenericHerringboneGear:
 
         # Read-only properties
         obj.addProperty(
-            "App::PropertyString", "Version", "read only",
+            "App::PropertyString",
+            "Version",
+            "read only",
             QT_TRANSLATE_NOOP("App::Property", "Workbench version"),
-            1
+            1,
         ).Version = version
 
         obj.addProperty(
-            "App::PropertyLength", "PitchDiameter", "read only",
+            "App::PropertyLength",
+            "PitchDiameter",
+            "read only",
             QT_TRANSLATE_NOOP("App::Property", "Pitch diameter (where gears mesh)"),
-            1
+            1,
         )
 
         obj.addProperty(
-            "App::PropertyLength", "BaseDiameter", "read only",
-            QT_TRANSLATE_NOOP("App::Property", "Base circle diameter (involute origin)"),
-            1
+            "App::PropertyLength",
+            "BaseDiameter",
+            "read only",
+            QT_TRANSLATE_NOOP(
+                "App::Property", "Base circle diameter (involute origin)"
+            ),
+            1,
         )
 
         obj.addProperty(
-            "App::PropertyLength", "OuterDiameter", "read only",
+            "App::PropertyLength",
+            "OuterDiameter",
+            "read only",
             QT_TRANSLATE_NOOP("App::Property", "Outer diameter (tip of teeth)"),
-            1
+            1,
         )
 
         obj.addProperty(
-            "App::PropertyLength", "RootDiameter", "read only",
+            "App::PropertyLength",
+            "RootDiameter",
+            "read only",
             QT_TRANSLATE_NOOP("App::Property", "Root diameter (bottom of teeth)"),
-            1
+            1,
         )
 
         # Core gear parameters
         obj.addProperty(
-            "App::PropertyInteger", "NumberOfTeeth", "GenericHerringboneGear",
-            QT_TRANSLATE_NOOP("App::Property", "Number of teeth")
+            "App::PropertyInteger",
+            "NumberOfTeeth",
+            "GenericHerringboneGear",
+            QT_TRANSLATE_NOOP("App::Property", "Number of teeth"),
         ).NumberOfTeeth = H["num_teeth"]
 
         obj.addProperty(
-            "App::PropertyLength", "Module", "GenericHerringboneGear",
-            QT_TRANSLATE_NOOP("App::Property", "Gear module (tooth size)")
+            "App::PropertyLength",
+            "Module",
+            "GenericHerringboneGear",
+            QT_TRANSLATE_NOOP("App::Property", "Gear module (tooth size)"),
         ).Module = H["module"]
 
         obj.addProperty(
-            "App::PropertyLength", "Height", "GenericHerringboneGear",
-            QT_TRANSLATE_NOOP("App::Property", "Gear thickness/height")
+            "App::PropertyLength",
+            "Height",
+            "GenericHerringboneGear",
+            QT_TRANSLATE_NOOP("App::Property", "Gear thickness/height"),
         ).Height = H["height"]
 
         obj.addProperty(
-            "App::PropertyAngle", "PressureAngle", "GenericHerringboneGear",
-            QT_TRANSLATE_NOOP("App::Property", "Pressure angle (normally 20°)")
+            "App::PropertyAngle",
+            "PressureAngle",
+            "GenericHerringboneGear",
+            QT_TRANSLATE_NOOP("App::Property", "Pressure angle (normally 20°)"),
         ).PressureAngle = H["pressure_angle"]
 
         obj.addProperty(
-            "App::PropertyFloat", "ProfileShift", "GenericHerringboneGear",
-            QT_TRANSLATE_NOOP("App::Property", "Profile shift coefficient (-1 to +1)")
+            "App::PropertyFloat",
+            "ProfileShift",
+            "GenericHerringboneGear",
+            QT_TRANSLATE_NOOP("App::Property", "Profile shift coefficient (-1 to +1)"),
         ).ProfileShift = H["profile_shift"]
 
         obj.addProperty(
-            "App::PropertyAngle", "Angle1", "GenericHerringboneGear",
-            QT_TRANSLATE_NOOP("App::Property", "First helix angle (bottom to middle)")
+            "App::PropertyAngle",
+            "Angle1",
+            "GenericHerringboneGear",
+            QT_TRANSLATE_NOOP("App::Property", "First helix angle (bottom to middle)"),
         ).Angle1 = 15.0
 
         obj.addProperty(
-            "App::PropertyAngle", "Angle2", "GenericHerringboneGear",
-            QT_TRANSLATE_NOOP("App::Property", "Second helix angle (middle to top)")
+            "App::PropertyAngle",
+            "Angle2",
+            "GenericHerringboneGear",
+            QT_TRANSLATE_NOOP("App::Property", "Second helix angle (middle to top)"),
         ).Angle2 = -15.0
 
         obj.addProperty(
-            "App::PropertyString", "BodyName", "GenericHerringboneGear",
-            QT_TRANSLATE_NOOP("App::Property", "Name of the generated body")
+            "App::PropertyString",
+            "BodyName",
+            "GenericHerringboneGear",
+            QT_TRANSLATE_NOOP("App::Property", "Name of the generated body"),
         ).BodyName = H["body_name"]
 
         # Bore parameters
         obj.addProperty(
-            "App::PropertyEnumeration", "BoreType", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Type of center hole")
+            "App::PropertyEnumeration",
+            "BoreType",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Type of center hole"),
         )
         obj.BoreType = ["none", "circular", "square", "hexagonal", "keyway"]
         obj.BoreType = H["bore_type"]
 
         obj.addProperty(
-            "App::PropertyLength", "BoreDiameter", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Diameter of center bore")
+            "App::PropertyLength",
+            "BoreDiameter",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Diameter of center bore"),
         ).BoreDiameter = H["bore_diameter"]
 
         obj.addProperty(
-            "App::PropertyLength", "SquareCornerRadius", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Corner radius for square bore")
+            "App::PropertyLength",
+            "SquareCornerRadius",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Corner radius for square bore"),
         ).SquareCornerRadius = 0.5
 
         obj.addProperty(
-            "App::PropertyLength", "HexCornerRadius", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Corner radius for hexagonal bore")
+            "App::PropertyLength",
+            "HexCornerRadius",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Corner radius for hexagonal bore"),
         ).HexCornerRadius = 0.5
 
         obj.addProperty(
-            "App::PropertyLength", "KeywayWidth", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Width of keyway (DIN 6885)")
+            "App::PropertyLength",
+            "KeywayWidth",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Width of keyway (DIN 6885)"),
         ).KeywayWidth = 2.0
 
         obj.addProperty(
-            "App::PropertyLength", "KeywayDepth", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Depth of keyway")
+            "App::PropertyLength",
+            "KeywayDepth",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Depth of keyway"),
         ).KeywayDepth = 1.0
+
+        obj.addProperty(
+            "App::PropertyLength",
+            "OriginX",
+            "Placement",
+            QT_TRANSLATE_NOOP("App::Property", "X coordinate of gear origin"),
+        ).OriginX = 0.0
+
+        obj.addProperty(
+            "App::PropertyLength",
+            "OriginY",
+            "Placement",
+            QT_TRANSLATE_NOOP("App::Property", "Y coordinate of gear origin"),
+        ).OriginY = 0.0
+
+        obj.addProperty(
+            "App::PropertyLength",
+            "OriginZ",
+            "Placement",
+            QT_TRANSLATE_NOOP("App::Property", "Z coordinate of gear origin"),
+        ).OriginZ = 0.0
+
+        obj.addProperty(
+            "App::PropertyAngle",
+            "Angle",
+            "Placement",
+            QT_TRANSLATE_NOOP(
+                "App::Property", "Rotation angle around Z axis (degrees)"
+            ),
+        ).Angle = 0.0
 
         self.Type = "GenericHerringboneGear"
         self.Object = obj
@@ -850,8 +1102,12 @@ class GenericHerringboneGear:
 
                 pitch_dia = gearMath.calcPitchDiameter(module, num_teeth)
                 base_dia = gearMath.calcBaseDiameter(pitch_dia, pressure_angle)
-                outer_dia = gearMath.calcAddendumDiameter(pitch_dia, module, profile_shift)
-                root_dia = gearMath.calcDedendumDiameter(pitch_dia, module, profile_shift)
+                outer_dia = gearMath.calcAddendumDiameter(
+                    pitch_dia, module, profile_shift
+                )
+                root_dia = gearMath.calcDedendumDiameter(
+                    pitch_dia, module, profile_shift
+                )
 
                 fp.PitchDiameter = pitch_dia
                 fp.BaseDiameter = base_dia
@@ -876,6 +1132,10 @@ class GenericHerringboneGear:
             "hex_corner_radius": float(self.Object.HexCornerRadius.Value),
             "keyway_width": float(self.Object.KeywayWidth.Value),
             "keyway_depth": float(self.Object.KeywayDepth.Value),
+            "origin_x": float(self.Object.OriginX.Value),
+            "origin_y": float(self.Object.OriginY.Value),
+            "origin_z": float(self.Object.OriginZ.Value),
+            "angle": float(self.Object.Angle.Value),
         }
         return parameters
 
@@ -897,6 +1157,7 @@ class GenericHerringboneGear:
             except Exception as e:
                 App.Console.PrintError(f"Generic Herringbone Gear Error: {str(e)}\n")
                 import traceback
+
                 App.Console.PrintError(traceback.format_exc())
                 raise
 
@@ -913,7 +1174,9 @@ class ViewProviderGenericGear:
         """Initialize view provider."""
         obj.Proxy = self
         self.part = obj
-        self.iconfile = iconfile if iconfile else os.path.join(smWB_icons_path, 'spurGear.svg')
+        self.iconfile = (
+            iconfile if iconfile else os.path.join(smWB_icons_path, "spurGear.svg")
+        )
 
     def attach(self, obj):
         """Setup the scene sub-graph."""
@@ -960,7 +1223,7 @@ class ViewProviderGenericGear:
 
     def regenerate(self):
         """Force regeneration of the gear."""
-        if hasattr(self.Object, 'Proxy'):
+        if hasattr(self.Object, "Proxy"):
             self.Object.Proxy.force_Recompute()
 
     def __getstate__(self):
@@ -972,7 +1235,7 @@ class ViewProviderGenericGear:
         if state:
             self.iconfile = state
         else:
-            self.iconfile = os.path.join(smWB_icons_path, 'spurGear.svg')
+            self.iconfile = os.path.join(smWB_icons_path, "spurGear.svg")
         return None
 
 
@@ -980,14 +1243,15 @@ class ViewProviderGenericGear:
 # FREECAD COMMAND CLASSES
 # ============================================================================
 
+
 class GenericSpurGearCommand:
     """Command to create a new generic spur gear object."""
 
     def GetResources(self):
         return {
-            'Pixmap': os.path.join(smWB_icons_path, 'spurGear.svg'),
-            'MenuText': "&Create Generic Spur Gear",
-            'ToolTip': "Create parametric involute spur gear using generic framework"
+            "Pixmap": os.path.join(smWB_icons_path, "spurGear.svg"),
+            "MenuText": "&Create Generic Spur Gear",
+            "ToolTip": "Create parametric involute spur gear using generic framework",
         }
 
     def __init__(self):
@@ -1009,7 +1273,9 @@ class GenericSpurGearCommand:
 
         gear_obj = doc.addObject("Part::FeaturePython", "GenericSpurGearParameters")
         spur_gear = GenericSpurGear(gear_obj)
-        ViewProviderGenericGear(gear_obj.ViewObject, os.path.join(smWB_icons_path, 'spurGear.svg'))
+        ViewProviderGenericGear(
+            gear_obj.ViewObject, os.path.join(smWB_icons_path, "spurGear.svg")
+        )
 
         gear_obj.BodyName = unique_name
 
@@ -1035,9 +1301,9 @@ class GenericHelixGearCommand:
 
     def GetResources(self):
         return {
-            'Pixmap': os.path.join(smWB_icons_path, 'HelicalGear.svg'),
-            'MenuText': "&Create Generic Helical Gear",
-            'ToolTip': "Create parametric involute helical gear using generic framework"
+            "Pixmap": os.path.join(smWB_icons_path, "HelicalGear.svg"),
+            "MenuText": "&Create Generic Helical Gear",
+            "ToolTip": "Create parametric involute helical gear using generic framework",
         }
 
     def __init__(self):
@@ -1059,7 +1325,9 @@ class GenericHelixGearCommand:
 
         gear_obj = doc.addObject("Part::FeaturePython", "GenericHelixGearParameters")
         helix_gear = GenericHelixGear(gear_obj)
-        ViewProviderGenericGear(gear_obj.ViewObject, os.path.join(smWB_icons_path, 'HelicalGear.svg'))
+        ViewProviderGenericGear(
+            gear_obj.ViewObject, os.path.join(smWB_icons_path, "HelicalGear.svg")
+        )
 
         gear_obj.BodyName = unique_name
 
@@ -1085,9 +1353,9 @@ class GenericHerringboneGearCommand:
 
     def GetResources(self):
         return {
-            'Pixmap': os.path.join(smWB_icons_path, 'DoubleHelicalGear.svg'),
-            'MenuText': "&Create Generic Herringbone Gear",
-            'ToolTip': "Create parametric involute herringbone gear using generic framework"
+            "Pixmap": os.path.join(smWB_icons_path, "DoubleHelicalGear.svg"),
+            "MenuText": "&Create Generic Herringbone Gear",
+            "ToolTip": "Create parametric involute herringbone gear using generic framework",
         }
 
     def __init__(self):
@@ -1107,9 +1375,13 @@ class GenericHerringboneGearCommand:
             unique_name = f"{base_name}{count:03d}"
             count += 1
 
-        gear_obj = doc.addObject("Part::FeaturePython", "GenericHerringboneGearParameters")
+        gear_obj = doc.addObject(
+            "Part::FeaturePython", "GenericHerringboneGearParameters"
+        )
         herringbone_gear = GenericHerringboneGear(gear_obj)
-        ViewProviderGenericGear(gear_obj.ViewObject, os.path.join(smWB_icons_path, 'DoubleHelicalGear.svg'))
+        ViewProviderGenericGear(
+            gear_obj.ViewObject, os.path.join(smWB_icons_path, "DoubleHelicalGear.svg")
+        )
 
         gear_obj.BodyName = unique_name
 
@@ -1132,10 +1404,13 @@ class GenericHerringboneGearCommand:
 
 # Register commands with FreeCAD
 try:
-    FreeCADGui.addCommand('GenericSpurGearCommand', GenericSpurGearCommand())
-    FreeCADGui.addCommand('GenericHelixGearCommand', GenericHelixGearCommand())
-    FreeCADGui.addCommand('GenericHerringboneGearCommand', GenericHerringboneGearCommand())
+    FreeCADGui.addCommand("GenericSpurGearCommand", GenericSpurGearCommand())
+    FreeCADGui.addCommand("GenericHelixGearCommand", GenericHelixGearCommand())
+    FreeCADGui.addCommand(
+        "GenericHerringboneGearCommand", GenericHerringboneGearCommand()
+    )
 except Exception as e:
     App.Console.PrintError(f"Failed to register generic gear commands: {e}\n")
     import traceback
+
     App.Console.PrintError(traceback.format_exc())
