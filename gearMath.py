@@ -126,7 +126,7 @@ def twist_per_height(helix_angle_deg: float, radius: float) -> float:
 def generateToothProfile(sketch, parameters):
     """
     Generates EXTERNAL involute tooth profile.
-    Uses the standard involute gear geometry approach.
+    Uses B-splines for involute flanks, arc for top land, lines for root.
     """
     module = parameters["module"]
     num_teeth = parameters["num_teeth"]
@@ -137,139 +137,107 @@ def generateToothProfile(sketch, parameters):
     dw = module * num_teeth  # pitch diameter
     rb = dw * math.cos(pressure_angle_rad) / 2.0  # base radius
     ra = dw / 2.0 + module * (ADDENDUM_FACTOR + profile_shift)  # addendum radius
-    rf = dw / 2.0 - module * (DEDENDUM_FACTOR - profile_shift)  # dedendum (root) radius
+    rf = dw / 2.0 - module * (DEDENDUM_FACTOR - profile_shift)  # root radius
 
     if "tip_radius" in parameters:
         ra = parameters["tip_radius"]
 
-    # Angular tooth thickness at pitch circle
-    # s = m * (pi/2 + 2*x*tan(alpha)) where x is profile shift
-    s_pitch = module * (math.pi / 2.0 + 2.0 * profile_shift * math.tan(pressure_angle_rad))
-
     # Half angular tooth thickness at base circle
-    # theta_base = s/(2*rp) + inv(alpha)
-    # This is the angle from tooth centerline to the involute at the base circle
+    s_pitch = module * (math.pi / 2.0 + 2.0 * profile_shift * math.tan(pressure_angle_rad))
     inv_alpha = math.tan(pressure_angle_rad) - pressure_angle_rad
     theta_base = s_pitch / dw + inv_alpha
 
-    num_inv_points = 20
-    epsilon = 0.001
-    start_radius = max(rb + epsilon, rf)
-    end_radius = ra
-
-    involute_pts = []
-    stopped_early = False
+    # Fixed rotation to position tooth on Y-axis
+    rotation = math.pi / 2.0 - theta_base
 
     # Generate involute points
-    for i in range(num_inv_points):
-        t = i / (num_inv_points - 1)
-        r = start_radius + t * (end_radius - start_radius)
+    num_points = 12
+    start_radius = max(rb + 0.001, rf)
+    involute_pts = []
+    is_pointed = False
 
-        # Roll angle at this radius: the involute unfolds from base circle
-        # At radius r: cos(phi) = rb/r, roll_angle = tan(phi)
+    for i in range(num_points):
+        t = i / (num_points - 1)
+        r = start_radius + t * (ra - start_radius)
+
         if r <= rb:
             roll_angle = 0
         else:
             phi = math.acos(rb / r)
             roll_angle = math.tan(phi)
-            inv_phi = roll_angle - phi  # inv(phi) = tan(phi) - phi
 
-        # Generate raw involute point (starts at (rb, 0) and curves CCW)
+        # Raw involute point
         x_inv = rb * (math.cos(roll_angle) + roll_angle * math.sin(roll_angle))
         y_inv = rb * (math.sin(roll_angle) - roll_angle * math.cos(roll_angle))
 
-        # The angle of this involute point from origin
-        # At base circle: angle = 0, at larger radii: angle = inv(phi)
-        # For right flank of tooth on Y-axis, rotate so tooth centerline is at pi/2
-        # The involute at base starts at angle 0, and we want it at angle (pi/2 - theta_base)
-        # So rotation = (pi/2 - theta_base) - 0 = pi/2 - theta_base for base point
-        # For other points, the involute has advanced by inv(phi), so the rotation stays the same
-        rotation = math.pi / 2.0 - theta_base
-
-        # Rotate the point
+        # Rotate to position
         x_rot = x_inv * math.cos(rotation) - y_inv * math.sin(rotation)
         y_rot = x_inv * math.sin(rotation) + y_inv * math.cos(rotation)
 
-        # Check if we've crossed the Y-axis
         if x_rot <= 0.001:
-            stopped_early = True
-            # Add final point on Y-axis
-            final_y = math.sqrt(x_inv**2 + y_inv**2)  # radius of the point
-            involute_pts.append(App.Vector(0, final_y, 0))
+            is_pointed = True
+            involute_pts.append(App.Vector(0, math.sqrt(x_inv**2 + y_inv**2), 0))
             break
 
         involute_pts.append(App.Vector(x_rot, y_rot, 0))
 
-    is_pointed = stopped_early
-
-    right_flank_geo = involute_pts
-    left_flank_geo = util.mirrorPointsX(right_flank_geo)
+    # Mirror for left flank
+    left_pts = util.mirrorPointsX(involute_pts)
 
     geo_list = []
-    has_radial_flank = rf < rb  # Root is inside base circle
+    has_radial = rf < rb
 
-    # Angle for radial flank (from base to root)
-    radial_flank_angle = math.pi / 2.0 - theta_base
-
-    if has_radial_flank:
-        p_base = right_flank_geo[0]
-        p_root = App.Vector(rf * math.cos(radial_flank_angle), rf * math.sin(radial_flank_angle), 0)
-        line = Part.LineSegment(p_root, p_base)
+    # 1. Right radial flank (line from root to base, if needed)
+    if has_radial:
+        p_root_right = App.Vector(rf * math.cos(rotation), rf * math.sin(rotation), 0)
+        line = Part.LineSegment(p_root_right, involute_pts[0])
         geo_list.append(sketch.addGeometry(line, False))
     else:
-        p_root = right_flank_geo[0]
+        p_root_right = involute_pts[0]
 
-    # Create involute flank using line segments
-    for i in range(len(right_flank_geo) - 1):
-        line = Part.LineSegment(right_flank_geo[i], right_flank_geo[i+1])
+    # 2. Right involute flank (B-spline)
+    if len(involute_pts) >= 2:
+        bspline = Part.BSplineCurve()
+        bspline.interpolate(involute_pts)
+        geo_list.append(sketch.addGeometry(bspline, False))
+
+    # 3. Top land (arc or line)
+    p_tip_right = involute_pts[-1]
+    p_tip_left = left_pts[0]
+
+    if not is_pointed and p_tip_right.x > 0.001 and p_tip_left.x < -0.001:
+        # Arc on addendum circle
+        angle_right = math.atan2(p_tip_right.y, p_tip_right.x)
+        angle_left = math.atan2(p_tip_left.y, p_tip_left.x)
+        if angle_right < 0:
+            angle_right += 2 * math.pi
+        if angle_left < 0:
+            angle_left += 2 * math.pi
+
+        arc_circle = Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), ra)
+        arc = Part.ArcOfCircle(arc_circle, angle_right, angle_left)
+        geo_list.append(sketch.addGeometry(arc, False))
+    else:
+        # Pointed or nearly pointed - use line
+        line = Part.LineSegment(p_tip_right, p_tip_left)
         geo_list.append(sketch.addGeometry(line, False))
 
-    # Add top land (flat tip) only if tooth is NOT pointed
-    if not is_pointed:
-        p_tip_right = right_flank_geo[-1]
-        p_tip_left = left_flank_geo[0]
+    # 4. Left involute flank (B-spline)
+    if len(left_pts) >= 2:
+        bspline = Part.BSplineCurve()
+        bspline.interpolate(left_pts)
+        geo_list.append(sketch.addGeometry(bspline, False))
 
-        # Get the angle where the involute ended
-        tip_right_angle = math.atan2(p_tip_right.y, p_tip_right.x)
-        tip_left_angle = math.atan2(p_tip_left.y, p_tip_left.x)
-
-        # Ensure we have positive angles in the right range
-        if tip_right_angle < 0:
-            tip_right_angle += 2 * math.pi
-        if tip_left_angle < 0:
-            tip_left_angle += 2 * math.pi
-
-        # Check if we can create a valid top land
-        if p_tip_right.x > 0.001 and p_tip_left.x < -0.001:
-            try:
-                # Create circular arc for top land on addendum circle
-                addendum_circle = Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), ra)
-                tip_arc = Part.ArcOfCircle(addendum_circle, tip_right_angle, tip_left_angle)
-                geo_list.append(sketch.addGeometry(tip_arc, False))
-            except Exception as e:
-                logger.warning(f"Arc creation failed: {e}, using line segment")
-                tip_line = Part.LineSegment(p_tip_right, p_tip_left)
-                geo_list.append(sketch.addGeometry(tip_line, False))
-        else:
-            # Flanks meet at top - connect with line
-            tip_line = Part.LineSegment(p_tip_right, p_tip_left)
-            geo_list.append(sketch.addGeometry(tip_line, False))
-
-    # Create left involute flank using line segments
-    for i in range(len(left_flank_geo) - 1):
-        line = Part.LineSegment(left_flank_geo[i], left_flank_geo[i+1])
-        geo_list.append(sketch.addGeometry(line, False))
-
-    if has_radial_flank:
-        p_base_left = left_flank_geo[-1]
-        p_root_left = App.Vector(-p_root.x, p_root.y, 0)
-        line = Part.LineSegment(p_base_left, p_root_left)
+    # 5. Left radial flank (line, if needed)
+    if has_radial:
+        p_root_left = App.Vector(-p_root_right.x, p_root_right.y, 0)
+        line = Part.LineSegment(left_pts[-1], p_root_left)
         geo_list.append(sketch.addGeometry(line, False))
     else:
-        p_root_left = left_flank_geo[-1]
+        p_root_left = left_pts[-1]
 
-    # Root Closure
-    root_line = Part.LineSegment(p_root_left, p_root)
+    # 6. Root closure (line)
+    root_line = Part.LineSegment(p_root_left, p_root_right)
     geo_list.append(sketch.addGeometry(root_line, False))
 
     util.finalizeSketchGeometry(sketch, geo_list)
