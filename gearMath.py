@@ -307,7 +307,42 @@ def generateSpurGearProfile(sketch, parameters):
 
 def generateHelicalGearProfile(sketch, parameters):
     """
-    Default tooth profile function for helical/herringbone gears.
-    Wrapper around generateToothProfile for explicit type identification.
+    Tooth profile function for helical/herringbone gears.
+
+    Converts from normal module convention (manufacturing standard) to
+    transverse values for the tooth profile:
+    - Transverse module: mt = mn / cos(β)
+    - Transverse pressure angle: tan(αt) = tan(αn) / cos(β)
+
+    Args:
+        sketch: FreeCAD sketch object
+        parameters: Dict with normal module, normal pressure angle, helix_angle
     """
-    generateToothProfile(sketch, parameters)
+    helix_angle = parameters.get("helix_angle", 0.0)
+
+    if helix_angle == 0:
+        # No helix - use parameters as-is (spur gear)
+        generateToothProfile(sketch, parameters)
+        return
+
+    # Convert to transverse values
+    beta_rad = helix_angle * util.DEG_TO_RAD
+    cos_beta = math.cos(beta_rad)
+
+    mn = parameters["module"]  # normal module
+    alpha_n = parameters["pressure_angle"]  # normal pressure angle (degrees)
+    alpha_n_rad = alpha_n * util.DEG_TO_RAD
+
+    # Transverse module: mt = mn / cos(β)
+    mt = mn / cos_beta
+
+    # Transverse pressure angle: tan(αt) = tan(αn) / cos(β)
+    alpha_t_rad = math.atan(math.tan(alpha_n_rad) / cos_beta)
+    alpha_t = alpha_t_rad * util.RAD_TO_DEG
+
+    # Create modified parameters with transverse values
+    transverse_params = parameters.copy()
+    transverse_params["module"] = mt
+    transverse_params["pressure_angle"] = alpha_t
+
+    generateToothProfile(sketch, transverse_params)

@@ -62,6 +62,8 @@ def genericHerringboneGear(
     - If angle1 == 0: skips middle sketch, lofts bottom→top directly
     - If angle1 != 0: creates middle sketch at height/2, lofts bottom→middle→top
 
+    Parameters use NORMAL module convention for helical/herringbone gears.
+
     Args:
         doc: FreeCAD document
         parameters: Gear parameters dict
@@ -77,14 +79,28 @@ def genericHerringboneGear(
     body_name = parameters.get("body_name", "GenericGear")
     body = util.readyPart(doc, body_name)
 
-    module = parameters["module"]
     num_teeth = parameters["num_teeth"]
     height = parameters["height"]
     profile_shift = parameters.get("profile_shift", 0.0)
     bore_type = parameters.get("bore_type", "none")
 
-    dw = module * num_teeth
-    df = dw - 2 * module * (gearMath.DEDENDUM_FACTOR - profile_shift)
+    # Ensure helix_angle is in parameters for profile function
+    # Use magnitude of angle1 (for herringbone, angle1 and angle2 are typically opposite)
+    if "helix_angle" not in parameters:
+        parameters = parameters.copy()
+        parameters["helix_angle"] = abs(angle1) if angle1 != 0 else abs(angle2)
+
+    # For dedendum calculation, use transverse module if helical
+    helix_angle = parameters.get("helix_angle", 0.0)
+    module = parameters["module"]
+    if helix_angle != 0:
+        beta_rad = helix_angle * util.DEG_TO_RAD
+        mt = module / math.cos(beta_rad)  # transverse module
+    else:
+        mt = module
+
+    dw = mt * num_teeth
+    df = dw - 2 * mt * (gearMath.DEDENDUM_FACTOR - profile_shift)
 
     if profile_func is None:
         profile_func = gearMath.generateHelicalGearProfile
@@ -250,12 +266,17 @@ def genericHelixGear(
     """
     Create a helical gear (single helix angle throughout).
 
-    This is implemented as a herringbone gear with same angle on both halves:
-    angle1 = helix_angle, angle2 = helix_angle
+    Uses two-sketch mode (angle1=0) with calculated total rotation for top sketch.
+    Total rotation = height * tan(helix_angle) / pitch_radius
+
+    Parameters use NORMAL module convention (standard for manufacturing):
+    - module: normal module (mn)
+    - pressure_angle: normal pressure angle (αn)
+    The profile function converts to transverse values internally.
 
     Args:
         doc: FreeCAD document
-        parameters: Gear parameters dict
+        parameters: Gear parameters dict (with normal module)
         helix_angle: Helix angle in degrees
         profile_func: Optional tooth profile function (uses helical default if None)
 
@@ -265,8 +286,29 @@ def genericHelixGear(
     if profile_func is None:
         profile_func = gearMath.generateHelicalGearProfile
 
+    # Add helix angle to parameters so profile function can calculate transverse values
+    params_with_helix = parameters.copy()
+    params_with_helix["helix_angle"] = helix_angle
+
+    # Calculate total rotation for top sketch
+    # Using transverse module for pitch radius calculation
+    mn = parameters["module"]
+    num_teeth = parameters["num_teeth"]
+    height = parameters["height"]
+    beta_rad = helix_angle * util.DEG_TO_RAD
+
+    if helix_angle != 0:
+        mt = mn / math.cos(beta_rad)  # transverse module
+        pitch_radius = mt * num_teeth / 2.0
+        # Total twist in radians, then convert to degrees
+        total_rotation_rad = height * math.tan(beta_rad) / pitch_radius
+        total_rotation_deg = total_rotation_rad * util.RAD_TO_DEG
+    else:
+        total_rotation_deg = 0.0
+
+    # Use two-sketch mode: angle1=0 triggers bottom→top loft without middle sketch
     return genericHerringboneGear(
-        doc, parameters, helix_angle, helix_angle, profile_func
+        doc, params_with_helix, 0.0, total_rotation_deg, profile_func
     )
 
 
