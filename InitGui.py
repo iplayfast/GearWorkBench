@@ -23,8 +23,8 @@
 
 import os
 import gearMath
-import spurGear  # Import at module level to ensure command registration
-import internalSpurGear  # Import internal gear module
+import genericGear  # Generic gear framework (spur, helical, herringbone)
+import genericInternalGear  # Generic internal gear framework
 import rackGear  # Import rack gear module
 import cycloidGear  # Import cycloid gear module
 import cycloidRack  # Import cycloid rack module
@@ -32,13 +32,9 @@ import bevelGear  # Import bevel gear module
 import crownGear  # Import crown gear module
 import wormGear  # Import worm gear module
 import globoidWormGear  # Import globoid worm gear module
-import doubleHelicalGear  # Import double helical gear module
-import helicalGear  # Import helical gear module
 import hypoidGear  # Import hypoid gear module
 import screwGear  # Import screw gear module
 import nonCircularGear  # Import non-circular gear module
-import internalDoubleHelicalGear  # Import internal double helical gear module
-import genericGear  # Import generic gear module
 
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, "icons")
@@ -61,12 +57,17 @@ class GearWorkbenchWB(Workbench):
             self.__class__.Icon = main_Gear_Icon
 
             # List of gear creation commands
-            # Note: DoubleHelicalGearCreateObject removed - HelicalGearCreateObject
-            # now handles both single and double helical via DoubleHelical boolean
+            # Generic gears replace old implementations
             gear_items = [
-                "SpurGearCreateObject",
-                "InternalSpurGearCreateObject",
-                "InternalDoubleHelicalGearCreateObject",
+                # External gears
+                "GenericSpurGearCommand",
+                "GenericHelixGearCommand",
+                "GenericHerringboneGearCommand",
+                # Internal gears
+                "GenericInternalSpurGearCommand",
+                "GenericInternalHelixGearCommand",
+                "GenericInternalHerringboneGearCommand",
+                # Other gear types
                 "RackGearCreateObject",
                 "CycloidGearCreateObject",
                 "CycloidRackCreateObject",
@@ -74,13 +75,9 @@ class GearWorkbenchWB(Workbench):
                 "CrownGearCreateObject",
                 "WormGearCreateObject",
                 "GloboidWormGearCreateObject",
-                "HelicalGearCreateObject",
                 "HypoidGearCreateObject",
                 "ScrewGearCreateObject",
                 "NonCircularGearCreateObject",
-                "GenericSpurGearCommand",
-                "GenericHelixGearCommand",
-                "GenericHerringboneGearCommand",
             ]
 
             # Verify command is available
