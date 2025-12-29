@@ -146,49 +146,93 @@ def generateToothProfile(sketch, parameters):
     psi = s_pitch / dw 
     inv_alpha = math.tan(pressure_angle_rad) - pressure_angle_rad
     
-    num_inv_points = 10 
+    num_inv_points = 12  # Balanced: smooth curve without performance penalty
     epsilon = 0.001
     start_radius = max(dg/2.0 + epsilon, df/2.0)
     end_radius = da/2.0
-    
+
     involute_pts = []
-    is_pointed = False
-    
-    # Target inv_phi for pointed tip (where theta = pi/2)
-    # theta = pi/2 - psi - inv_alpha + inv_phi
-    # pi/2 = pi/2 - psi - inv_alpha + inv_phi  => inv_phi = psi + inv_alpha
+
+    # Pre-calculate if tooth should be pointed
+    # A tooth is pointed if the involute reaches the Y-axis (theta = pi/2) before the addendum circle
+    # Target inv_phi for pointed tip: inv_phi = psi + inv_alpha
     target_inv_phi = psi + inv_alpha
 
-    for i in range(num_inv_points):
-        t = i / (num_inv_points - 1)
-        r = start_radius + t * (end_radius - start_radius)
-        val = (dg / 2.0) / r
-        if val > 1.0: val = 1.0
-        phi = math.acos(val)
-        inv_phi = math.tan(phi) - phi
-        
-        # Check if tooth becomes pointed
-        if inv_phi >= target_inv_phi:
-            is_pointed = True
-            # Binary search for exact radius where inv_phi == target_inv_phi
-            r_low = involute_pts[-1].y if involute_pts else start_radius
-            r_high = r
-            for _ in range(10):
-                r_mid = (r_low + r_high) / 2.0
-                val_mid = (dg / 2.0) / r_mid
-                if val_mid > 1.0: val_mid = 1.0
-                phi_mid = math.acos(val_mid)
-                inv_mid = math.tan(phi_mid) - phi_mid
-                if inv_mid < target_inv_phi: r_low = r_mid
-                else: r_high = r_mid
-            
-            # Add tip point (on Y axis)
-            involute_pts.append(App.Vector(0, r_low, 0))
-            break
-            
-        x_raw, y_raw = util.involutePoint(dg / 2.0, phi)
-        theta = (math.pi / 2.0) - psi - inv_alpha + inv_phi 
-        involute_pts.append(App.Vector(x_raw * math.cos(theta) - y_raw * math.sin(theta), x_raw * math.sin(theta) + y_raw * math.cos(theta), 0))
+    # Check at addendum radius
+    val_addendum = (dg / 2.0) / end_radius
+    if val_addendum > 1.0:
+        val_addendum = 1.0
+    phi_addendum = math.acos(val_addendum)
+    inv_phi_addendum = math.tan(phi_addendum) - phi_addendum
+
+    # Tooth is pointed only if involute reaches target (Y-axis) BEFORE the addendum circle
+    # This should only happen for very small tooth counts or extreme parameters
+    is_pointed = inv_phi_addendum > target_inv_phi
+
+    # Debug logging
+    logger.debug(f"Tooth profile: teeth={num_teeth}, PA={parameters['pressure_angle']}°, "
+                 f"inv_phi@addendum={inv_phi_addendum:.6f}, target={target_inv_phi:.6f}, "
+                 f"pointed={is_pointed}")
+
+    if is_pointed:
+        # Binary search for exact radius where involute reaches Y-axis
+        r_low = start_radius
+        r_high = end_radius
+        for _ in range(20):
+            r_mid = (r_low + r_high) / 2.0
+            val_mid = (dg / 2.0) / r_mid
+            if val_mid > 1.0: val_mid = 1.0
+            phi_mid = math.acos(val_mid)
+            inv_mid = math.tan(phi_mid) - phi_mid
+            if inv_mid < target_inv_phi:
+                r_low = r_mid
+            else:
+                r_high = r_mid
+
+        # Generate involute points up to the pointed tip
+        pointed_radius = r_low
+        for i in range(num_inv_points):
+            t = i / (num_inv_points - 1)
+            r = start_radius + t * (pointed_radius - start_radius)
+            val = (dg / 2.0) / r
+            if val > 1.0: val = 1.0
+            phi = math.acos(val)
+            inv_phi = math.tan(phi) - phi
+
+            x_raw, y_raw = util.involutePoint(dg / 2.0, phi)
+            theta = (math.pi / 2.0) - psi - inv_alpha + inv_phi
+            involute_pts.append(App.Vector(x_raw * math.cos(theta) - y_raw * math.sin(theta), x_raw * math.sin(theta) + y_raw * math.cos(theta), 0))
+
+        # Add the pointed tip on Y-axis
+        involute_pts.append(App.Vector(0, pointed_radius, 0))
+    else:
+        # Standard tooth - generate involute up to addendum, but STOP before crossing Y-axis
+        for i in range(num_inv_points):
+            t = i / (num_inv_points - 1)
+            r = start_radius + t * (end_radius - start_radius)
+            val = (dg / 2.0) / r
+            if val > 1.0: val = 1.0
+            phi = math.acos(val)
+            inv_phi = math.tan(phi) - phi
+
+            # Calculate theta to see if we're approaching the Y-axis
+            theta = (math.pi / 2.0) - psi - inv_alpha + inv_phi
+
+            # Stop BEFORE we cross the Y-axis (theta must stay < pi/2 for right flank)
+            # Use a more conservative margin to prevent crossing
+            if theta >= math.pi / 2.0 - 0.01:  # Stop 0.01 radians before Y-axis
+                break
+
+            x_raw, y_raw = util.involutePoint(dg / 2.0, phi)
+            x_rot = x_raw * math.cos(theta) - y_raw * math.sin(theta)
+            y_rot = x_raw * math.sin(theta) + y_raw * math.cos(theta)
+
+            # Safety check: ensure the point has positive X (right side)
+            if x_rot < 0:
+                logger.warning(f"Involute crossed to wrong side at i={i}, theta={theta}, x={x_rot}")
+                break
+
+            involute_pts.append(App.Vector(x_rot, y_rot, 0))
 
     right_flank_geo = involute_pts
     left_flank_geo = util.mirrorPointsX(right_flank_geo)
@@ -205,20 +249,56 @@ def generateToothProfile(sketch, parameters):
     else:
         p_root = right_flank_geo[0]
 
-    bspline_right = Part.BSplineCurve()
-    bspline_right.interpolate(right_flank_geo)
-    geo_list.append(sketch.addGeometry(bspline_right, False))
-    
-    if not is_pointed and right_flank_geo[-1].x > 1e-5:
+    # Create involute flank using line segments (no B-spline oscillations)
+    # This is more accurate than B-spline interpolation
+    for i in range(len(right_flank_geo) - 1):
+        line = Part.LineSegment(right_flank_geo[i], right_flank_geo[i+1])
+        geo_list.append(sketch.addGeometry(line, False))
+
+    # Add top land (flat tip) - always create unless truly pointed
+    if not is_pointed:
         p_tip_right = right_flank_geo[-1]
         p_tip_left = left_flank_geo[0]
-        p_tip_mid = App.Vector(0, da/2.0, 0)
-        tip_arc = Part.Arc(p_tip_right, p_tip_mid, p_tip_left)
-        geo_list.append(sketch.addGeometry(tip_arc, False))
+
+        # Get the angle where the involute ended
+        tip_right_angle = math.atan2(p_tip_right.y, p_tip_right.x)
+        tip_left_angle = math.atan2(p_tip_left.y, p_tip_left.x)
+
+        # Ensure we have positive angles in the right range
+        if tip_right_angle < 0:
+            tip_right_angle += 2 * math.pi
+        if tip_left_angle < 0:
+            tip_left_angle += 2 * math.pi
+
+        # Create the top land arc on the addendum circle
+        # Points should go from right flank → top center → left flank
+        p_tip_right_on_addendum = App.Vector((da/2.0) * math.cos(tip_right_angle), (da/2.0) * math.sin(tip_right_angle), 0)
+        p_tip_mid_on_addendum = App.Vector(0, da/2.0, 0)  # Top center point on Y-axis
+        p_tip_left_on_addendum = App.Vector((da/2.0) * math.cos(tip_left_angle), (da/2.0) * math.sin(tip_left_angle), 0)
+
+        # Verify the arc makes sense (right point should have positive X, left should have negative X)
+        if p_tip_right_on_addendum.x > 0.001 and p_tip_left_on_addendum.x < -0.001:
+            try:
+                # Create circular arc for top land using ArcOfCircle for better control
+                # Create a circle at origin with addendum radius
+                addendum_circle = Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), da/2.0)
+
+                # Create arc from right angle to left angle (counter-clockwise, the short way at top)
+                # Angles must be in radians and go counter-clockwise from right to left
+                tip_arc = Part.ArcOfCircle(addendum_circle, tip_right_angle, tip_left_angle)
+                geo_list.append(sketch.addGeometry(tip_arc, False))
+            except Exception as e:
+                logger.warning(f"Arc creation failed: {e}, using line segment")
+                # Fallback: create a simple line if arc fails
+                tip_line = Part.LineSegment(p_tip_right_on_addendum, p_tip_left_on_addendum)
+                geo_list.append(sketch.addGeometry(tip_line, False))
+        else:
+            logger.warning(f"Top land geometry invalid: right.x={p_tip_right_on_addendum.x}, left.x={p_tip_left_on_addendum.x}")
     
-    bspline_left = Part.BSplineCurve()
-    bspline_left.interpolate(left_flank_geo)
-    geo_list.append(sketch.addGeometry(bspline_left, False))
+    # Create left involute flank using line segments
+    for i in range(len(left_flank_geo) - 1):
+        line = Part.LineSegment(left_flank_geo[i], left_flank_geo[i+1])
+        geo_list.append(sketch.addGeometry(line, False))
     
     if has_radial_flank:
         p_base_left = left_flank_geo[-1]
@@ -285,3 +365,21 @@ def generateDefaultCycloidParameters() -> Dict[str, Any]:
 def generateDefaultCycloidRackParameters() -> Dict[str, Any]:
     return {"module": 1.0, "num_teeth": 10, "height": 5.0, "addendum_factor": 1.4,
             "dedendum_factor": 1.6, "base_thickness": 5.0, "body_name": "CycloidRack"}
+
+# ============================================================================
+# GEAR TYPE DEFAULT PROFILE FUNCTIONS
+# ============================================================================
+
+def generateSpurGearProfile(sketch, parameters):
+    """
+    Default tooth profile function for spur gears.
+    Wrapper around generateToothProfile for explicit type identification.
+    """
+    generateToothProfile(sketch, parameters)
+
+def generateHelicalGearProfile(sketch, parameters):
+    """
+    Default tooth profile function for helical/herringbone gears.
+    Wrapper around generateToothProfile for explicit type identification.
+    """
+    generateToothProfile(sketch, parameters)

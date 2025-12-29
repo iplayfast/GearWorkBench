@@ -185,6 +185,7 @@ For detailed mathematics, see the source code documentation in `gearMath.py` and
 - ⬜ Non-Circular Gear
 - ⬜ Gear train analysis
 - ⬜ Strength calculations
+- ✅ **NEW: Generic Gear Framework** (unified spur, helical, herringbone)
 
 ## Related Projects
 
