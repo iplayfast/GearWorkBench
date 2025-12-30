@@ -268,19 +268,13 @@ class GearPositionDialog(QtGui.QDialog):
                     f"Compatible gears must have:\n"
                     f"- Same module ({gear1_specs['module']:.3f} mm)\n"
                     f"- Same pressure angle ({gear1_specs['pressure_angle']:.1f}°)\n"
-
-                    if type1 == "Spur":
-                        self.compatibility_label.setText(
-                            "- Same gear type (only with spur gears)"
-                        )
-                    elif type1 == "Helical":
-                        self.compatibility_label.setText(
-                            "- Same gear type (only with helical gears)"
-                        )
-                    elif type1 == "Herringbone":
-                        self.compatibility_label.setText(
-                            "- Same gear type (only with herringbone gears)"
-                        )
+                    )
+                if type1 == "Spur":
+                    self.compatibility_label.setText( "- Same gear type (only with spur gears)")
+                elif type1 == "Helical":
+                    self.compatibility_label.setText( "- Same gear type (only with helical gears)")
+                elif type1 == "Herringbone":
+                    self.compatibility_label.setText( "- Same gear type (only with herringbone gears)")
             else:
                 for idx in compatible_indices:
                     self.gear2_combo.addItem(self.gears[idx]["label"], idx)
