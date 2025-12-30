@@ -26,6 +26,10 @@ class GearPositionDialog(QtGui.QDialog):
         super().__init__(parent)
         self.gears = gears
         self.preview_body = None
+        self.preview_objects = []
+        self.original_gear2_positions = {}
+        self.preview_counter = 0
+        self.preview_prefix = "Preview"
         self.setupUI()
         self.setAttribute(QtCore.Qt.WA_DeleteOnClose)
 
@@ -165,64 +169,15 @@ class GearPositionDialog(QtGui.QDialog):
 
         return False
 
-    def updateRotationPreview(self):
-        """Update preview and move gear 2 to rotated position."""
-        idx1 = self.gear1_combo.currentIndex()
-        idx2_data = self.gear2_combo.itemData(self.gear2_combo.currentIndex())
-        rotation_angle = self.angle_spinbox.value()
-
-        if idx1 >= 0 and idx2_data is not None:
-            try:
-                gear1_info = self.gears[idx1]
-                gear2_info = self.gears[idx2_data]
-
-                center_body_name = gear1_info["param_obj"].BodyName
-                center_body = gear1_info["param_obj"].Document.getObject(center_body_name)
-                gear2_body = gear2_info["body_obj"]
-
-                if center_body and gear2_body:
-                    center_origin = center_body.Placement.Base
-
-                    pitch1 = gear1_info.get("pitch_diameter", 0.0)
-                    pitch2 = gear2_info.get("pitch_diameter", 0.0)
-                    center_distance = (pitch1 + pitch2) / 2.0
-
-                    angle_rad = rotation_angle * math.pi / 180.0
-
-                    dx = center_distance * math.cos(angle_rad)
-                    dy = center_distance * math.sin(angle_rad)
-
-                    new_x = center_origin.x + dx
-                    new_y = center_origin.y + dy
-                    new_z = center_origin.z
-
-                    new_placement = App.Placement(
-                        App.Vector(new_x, new_y, new_z),
-                        App.Rotation(App.Vector(0, 0, 1), rotation_angle),
-                    )
-
-                    if self.preview_body:
-                        self.preview_body.Placement = new_placement
-                    else:
-                        self.preview_body = App.ActiveDocument.addObject(
-                            "Part::Feature", f"Preview_{gear2_body.Name}"
-                        )
-                        self.preview_body.Shape = gear2_body.Shape.copy()
-                        self.preview_body.Placement = new_placement
-
-                        if self.preview_body.ViewObject:
-                            self.preview_body.ViewObject.Transparency = 50
-
-            except Exception as e:
-                App.Console.PrintError(f"Error updating preview: {e}\n")
-
     def moveAndFinalize(self):
         """Move gear 2 to final position and delete preview."""
-        if not self.preview_body:
+        idx2_data = self.gear2_combo.itemData(self.gear2_combo.currentIndex())
+        if not self.preview_body or idx2_data is None:
             return
 
+        gear2_info = self.gears[idx2_data]
         gear2_body_name = self.preview_body.Name
-        real_gear2_body = self.gear2_info["body_obj"]
+        real_gear2_body = gear2_info["body_obj"]
 
         real_gear2_body.Placement = self.preview_body.Placement
         real_gear2_body.Document.recompute()
@@ -230,7 +185,7 @@ class GearPositionDialog(QtGui.QDialog):
         self.preview_body.Document.removeObject(gear2_body_name)
         self.preview_body = None
 
-        gear2_param = self.gear2_info["param_obj"]
+        gear2_param = gear2_info["param_obj"]
         gear2_param.OriginX = real_gear2_body.Placement.Base.x
         gear2_param.OriginY = real_gear2_body.Placement.Base.y
         gear2_param.OriginZ = real_gear2_body.Placement.Base.z
@@ -240,96 +195,6 @@ class GearPositionDialog(QtGui.QDialog):
         App.Console.PrintMessage(
             f"Moved '{real_gear2_body.Name}' to final position\n"
         )
-
-    def positionFirstGear(self):
-        """Position first gear beside second gear at specified angle."""
-        idx1 = self.gear1_combo.currentIndex()
-        idx2_data = self.gear2_combo.itemData(self.gear2_combo.currentIndex())
-        angle = self.angle_spinbox.value()
-
-        if idx1 >= 0 and idx2_data is not None:
-            gear1_info = self.gears[idx1]
-            gear2_info = self.gears[idx2_data]
-
-            try:
-                positionGearBeside(
-                    gear1_info["param_obj"],
-                    gear1_info,
-                    gear2_info["param_obj"],
-                    gear2_info,
-                    angle,
-                )
-
-                self.updateRotationPreview()
-            except Exception as e:
-                App.Console.PrintError(f"Error positioning gear 1: {e}\n")
-                QtGui.QMessageBox.critical(
-                    None, "Positioning Error", f"Failed to position gears:\n{str(e)}"
-                )
-
-    def updateSecondGearOptions(self):
-        """Update second gear options when first gear is selected."""
-        gear1_idx = self.gear1_combo.currentIndex()
-        idx2 = self.gear2_combo.currentIndex()
-
-        if gear1_idx >= 0:
-            gear1_info = self.gears[gear1_idx]
-            gear1_specs = self.getGearSpecs(gear1_info)
-            type1 = gear1_specs["gear_type"].capitalize()
-
-            compatible_indices = self.getCompatibleGears(gear1_idx)
-
-            self.gear2_combo.clear()
-
-            if not compatible_indices:
-                self.gear2_combo.addItem("No compatible gears")
-                self.gear2_combo.setEnabled(False)
-                self.position_btn.setEnabled(False)
-                self.done_btn.setEnabled(False)
-
-                self.compatibility_label.setText(
-                    f"⚠ No compatible gears found. Gear type: {type1}\n"
-                    f"Compatible gears must have:\n"
-                    f"- Same module ({gear1_specs['module']:.3f} mm)\n"
-                    f"- Same pressure angle ({gear1_specs['pressure_angle']:.1f}°)\n"
-                    )
-                if type1 == "Spur":
-                    self.compatibility_label.setText( "- Same gear type (only with spur gears)")
-                elif type1 == "Helical":
-                    self.compatibility_label.setText( "- Same gear type (only with helical gears)")
-                elif type1 == "Herringbone":
-                    self.compatibility_label.setText( "- Same gear type (only with herringbone gears)")
-            else:
-                for idx in compatible_indices:
-                    self.gear2_combo.addItem(self.gears[idx]["label"], idx)
-
-                self.gear2_combo.setEnabled(True)
-                self.position_btn.setEnabled(True)
-                self.done_btn.setEnabled(True)
-
-                self.compatibility_label.setText(
-                    f"✓ {len(compatible_indices)} compatible {type1} gear(s) found"
-                )
-
-                if len(compatible_indices) > 0:
-                    self.gear2_combo.setCurrentIndex(0)
-
-    def updateDistance(self):
-        """Update calculated center distance based on selected gears."""
-        idx1 = self.gear1_combo.currentIndex()
-        idx2 = self.gear2_combo.currentIndex()
-
-        if idx1 >= 0 and idx2 >= 0:
-            gear1 = self.gears[idx1]
-            gear2 = self.gears[idx2]
-
-            pitch1 = gear1.get("pitch_diameter", 0.0)
-            pitch2 = gear2.get("pitch_diameter", 0.0)
-
-            center_distance = (pitch1 + pitch2) / 2.0
-            self.center_distance_label.setText(
-                f"Center Distance: {center_distance:.3f} mm"
-            )
 
     def getCompatibleGears(self, selected_gear_idx: int) -> List[int]:
         """Get list of compatible gear indices.
@@ -555,7 +420,7 @@ class GearPositionDialog(QtGui.QDialog):
         """Update preview gear showing where gear 2 would be positioned."""
         idx1 = self.gear1_combo.currentIndex()
         idx2_data = self.gear2_combo.itemData(self.gear2_combo.currentIndex())
-        rotation_angle = self.rotation_spinbox.value()
+        rotation_angle = self.angle_spinbox.value()
 
         self.cleanupPreview()
 
@@ -627,17 +492,7 @@ class GearPositionDialog(QtGui.QDialog):
             except Exception as e:
                 App.Console.PrintError(f"Error creating preview: {e}\n")
 
-def positionGearBeside(
-                    gear1_info["param_obj"],
-                    gear1_info,
-                    gear2_info["param_obj"],
-                    gear2_info,
-                    angle,
-                    self.calculateCenterDistance(gear1_info, gear2_info),
-                )
-
-
-def cleanupPreview(self):
+    def cleanupPreview(self):
         """Remove all preview objects created by this dialog."""
         if not App.ActiveDocument:
             return
@@ -654,15 +509,15 @@ def cleanupPreview(self):
 
         self.preview_objects = []
 
-def rotateSecondGear(self):
+    def rotateSecondGear(self):
         """Rotate second gear around first gear (preview only)."""
         self.updateRotationPreview()
 
-def moveSecondGear(self):
+    def moveSecondGear(self):
         """Actually move second gear to rotated position."""
         idx1 = self.gear1_combo.currentIndex()
         idx2_data = self.gear2_combo.itemData(self.gear2_combo.currentIndex())
-        rotation_angle = self.rotation_spinbox.value()
+        rotation_angle = self.angle_spinbox.value()
 
         if idx1 >= 0 and idx2_data is not None:
             gear1_info = self.gears[idx1]
@@ -738,7 +593,7 @@ def moveSecondGear(self):
                     None, "Move Error", f"Failed to move gear:\n{str(e)}"
                 )
 
-def closeEvent(self, event):
+    def closeEvent(self, event):
         """Handle dialog close event - cleanup preview objects."""
         self.cleanupPreview()
         super().closeEvent(event)
@@ -872,6 +727,21 @@ def findGearsInDocument(doc) -> List[Dict]:
     return gears
 
 
+def calculateCenterDistance(gear1_params: Dict, gear2_params: Dict) -> float:
+    """Calculate center distance between two gears.
+
+    Args:
+        gear1_params: First gear parameters dict
+        gear2_params: Second gear parameters dict
+
+    Returns:
+        Center distance in mm
+    """
+    pitch1 = gear1_params.get("pitch_diameter", 0.0)
+    pitch2 = gear2_params.get("pitch_diameter", 0.0)
+    return (pitch1 + pitch2) / 2.0
+
+
 def positionGearBeside(
     gear1_param_obj, gear1_params, gear2_param_obj, gear2_params, angle_deg: float = 0.0
 ):
@@ -992,13 +862,13 @@ class GearPositioningCommand:
                 gear2_info = gears[idx2_data]
 
                 try:
-positionGearBeside(
-                    gear1_info["param_obj"],
-                    gear1_info,
-                    gear2_info["param_obj"],
-                    angle,
-                    self.calculateCenterDistance(gear1_params, gear2_params),
-                )
+                    positionGearBeside(
+                        gear1_info["param_obj"],
+                        gear1_info,
+                        gear2_info["param_obj"],
+                        gear2_info,
+                        angle,
+                    )
                 except Exception as e:
                     QtGui.QMessageBox.critical(
                         None,
