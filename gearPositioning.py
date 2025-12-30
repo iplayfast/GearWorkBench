@@ -627,47 +627,14 @@ class GearPositionDialog(QtGui.QDialog):
             except Exception as e:
                 App.Console.PrintError(f"Error creating preview: {e}\n")
 
-    def calculateCenterDistance(gear1_info, gear2_info):
-    """Calculate center distance between two gears.
-
-    For external-external: (pitch1 + pitch2) / 2
-    For internal-external: (pitch_internal - pitch_external) / 2
-
-    Args:
-        gear1_info: First gear information
-        gear2_info: Second gear information
-
-    Returns:
-        Center distance in mm
-    """
-    pitch1 = gear1_info.get("pitch_diameter", 0.0)
-    pitch2 = gear2_info.get("pitch_diameter", 0.0)
-
-    # Check if either gear is internal
-    param1 = gear1_info.get("param_obj")
-    param2 = gear2_info.get("param_obj")
-    
-    is_internal1 = False
-    is_internal2 = False
-    
-    if param1:
-        name1 = param1.Name if hasattr(param1, "Name") else ""
-        is_internal1 = "Internal" in name1
-    if param2:
-        name2 = param2.Name if hasattr(param2, "Name") else ""
-        is_internal2 = "Internal" in name2
-
-    if is_internal1 and not is_internal2:
-        # Internal gear 1, external gear 2
-        center_distance = (pitch1 - pitch2) / 2.0
-    elif is_internal2 and not is_internal1:
-        # External gear 1, internal gear 2
-        center_distance = (pitch2 - pitch1) / 2.0
-    else:
-        # Both external
-        center_distance = (pitch1 + pitch2) / 2.0
-
-    return abs(center_distance)
+def positionGearBeside(
+                    gear1_info["param_obj"],
+                    gear1_info,
+                    gear2_info["param_obj"],
+                    gear2_info,
+                    angle,
+                    self.calculateCenterDistance(gear1_info, gear2_info),
+                )
 
 
 def cleanupPreview(self):
@@ -687,11 +654,11 @@ def cleanupPreview(self):
 
         self.preview_objects = []
 
-    def rotateSecondGear(self):
+def rotateSecondGear(self):
         """Rotate second gear around first gear (preview only)."""
         self.updateRotationPreview()
 
-    def moveSecondGear(self):
+def moveSecondGear(self):
         """Actually move second gear to rotated position."""
         idx1 = self.gear1_combo.currentIndex()
         idx2_data = self.gear2_combo.itemData(self.gear2_combo.currentIndex())
@@ -771,7 +738,7 @@ def cleanupPreview(self):
                     None, "Move Error", f"Failed to move gear:\n{str(e)}"
                 )
 
-    def closeEvent(self, event):
+def closeEvent(self, event):
         """Handle dialog close event - cleanup preview objects."""
         self.cleanupPreview()
         super().closeEvent(event)
@@ -1025,13 +992,13 @@ class GearPositioningCommand:
                 gear2_info = gears[idx2_data]
 
                 try:
-                    positionGearBeside(
-                        gear1_info["param_obj"],
-                        gear1_info,
-                        gear2_info["param_obj"],
-                        gear2_info,
-                        angle,
-                    )
+positionGearBeside(
+                    gear1_info["param_obj"],
+                    gear1_info,
+                    gear2_info["param_obj"],
+                    angle,
+                    self.calculateCenterDistance(gear1_params, gear2_params),
+                )
                 except Exception as e:
                     QtGui.QMessageBox.critical(
                         None,
