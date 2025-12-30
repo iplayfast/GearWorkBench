@@ -44,6 +44,7 @@ class GearPositionDialog(QtGui.QDialog):
             "pressure_angle": 0.0,
             "helix_angle": 0.0,
             "gear_type": "unknown",
+            "is_internal": False,
         }
 
         try:
@@ -62,17 +63,32 @@ class GearPositionDialog(QtGui.QDialog):
 
             obj_name = gear_info["name"]
 
-            if "GenericSpur" in obj_name:
+            # Check for internal gears first
+            if "Internal" in obj_name:
+                specs["is_internal"] = True
+                if "Spur" in obj_name:
+                    specs["gear_type"] = "spur"
+                    specs["helix_angle"] = 0.0
+                elif "Herringbone" in obj_name:
+                    specs["gear_type"] = "herringbone"
+                    if hasattr(param_obj, "HelixAngle"):
+                        specs["helix_angle"] = float(
+                            param_obj.HelixAngle.Value
+                            if hasattr(param_obj.HelixAngle, "Value")
+                            else param_obj.HelixAngle
+                        )
+                elif "Helix" in obj_name:
+                    specs["gear_type"] = "helical"
+                    if hasattr(param_obj, "HelixAngle"):
+                        specs["helix_angle"] = float(
+                            param_obj.HelixAngle.Value
+                            if hasattr(param_obj.HelixAngle, "Value")
+                            else param_obj.HelixAngle
+                        )
+            # External gears
+            elif "GenericSpur" in obj_name:
                 specs["gear_type"] = "spur"
                 specs["helix_angle"] = 0.0
-            elif "GenericHelix" in obj_name:
-                specs["gear_type"] = "helical"
-                if hasattr(param_obj, "HelixAngle"):
-                    specs["helix_angle"] = float(
-                        param_obj.HelixAngle.Value
-                        if hasattr(param_obj.HelixAngle, "Value")
-                        else param_obj.HelixAngle
-                    )
             elif "GenericHerringbone" in obj_name:
                 specs["gear_type"] = "herringbone"
                 if hasattr(param_obj, "Angle1"):
@@ -80,6 +96,14 @@ class GearPositionDialog(QtGui.QDialog):
                         param_obj.Angle1.Value
                         if hasattr(param_obj.Angle1, "Value")
                         else param_obj.Angle1
+                    )
+            elif "GenericHelix" in obj_name:
+                specs["gear_type"] = "helical"
+                if hasattr(param_obj, "HelixAngle"):
+                    specs["helix_angle"] = float(
+                        param_obj.HelixAngle.Value
+                        if hasattr(param_obj.HelixAngle, "Value")
+                        else param_obj.HelixAngle
                     )
         except Exception:
             pass
@@ -603,7 +627,50 @@ class GearPositionDialog(QtGui.QDialog):
             except Exception as e:
                 App.Console.PrintError(f"Error creating preview: {e}\n")
 
-    def cleanupPreview(self):
+    def calculateCenterDistance(gear1_info, gear2_info):
+    """Calculate center distance between two gears.
+
+    For external-external: (pitch1 + pitch2) / 2
+    For internal-external: (pitch_internal - pitch_external) / 2
+
+    Args:
+        gear1_info: First gear information
+        gear2_info: Second gear information
+
+    Returns:
+        Center distance in mm
+    """
+    pitch1 = gear1_info.get("pitch_diameter", 0.0)
+    pitch2 = gear2_info.get("pitch_diameter", 0.0)
+
+    # Check if either gear is internal
+    param1 = gear1_info.get("param_obj")
+    param2 = gear2_info.get("param_obj")
+    
+    is_internal1 = False
+    is_internal2 = False
+    
+    if param1:
+        name1 = param1.Name if hasattr(param1, "Name") else ""
+        is_internal1 = "Internal" in name1
+    if param2:
+        name2 = param2.Name if hasattr(param2, "Name") else ""
+        is_internal2 = "Internal" in name2
+
+    if is_internal1 and not is_internal2:
+        # Internal gear 1, external gear 2
+        center_distance = (pitch1 - pitch2) / 2.0
+    elif is_internal2 and not is_internal1:
+        # External gear 1, internal gear 2
+        center_distance = (pitch2 - pitch1) / 2.0
+    else:
+        # Both external
+        center_distance = (pitch1 + pitch2) / 2.0
+
+    return abs(center_distance)
+
+
+def cleanupPreview(self):
         """Remove all preview objects created by this dialog."""
         if not App.ActiveDocument:
             return
@@ -855,7 +922,8 @@ def positionGearBeside(
     pitch1 = gear1_params.get("pitch_diameter", 0.0)
     pitch2 = gear2_params.get("pitch_diameter", 0.0)
 
-    center_distance = (pitch1 + pitch2) / 2.0
+    # Use the calculateCenterDistance method for proper center distance calculation
+    center_distance = calculateCenterDistance(gear1_params, gear2_params)
 
     angle_rad = angle_deg * math.pi / 180.0
 
