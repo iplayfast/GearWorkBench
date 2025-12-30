@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   xmlns="http://www.w3.org/2000/svg"
+   width="64"
+   height="64"
+   viewBox="0 0 64 64"
+   version="1.1">
+  <defs>
+    <style type="text/css">
+      .arrow-line { stroke:#e74c3c; stroke-width:4; stroke-linecap:round; }
+      .arrow-head { fill:#e74c3c; }
+      .gear-left { fill:#4a90e2; stroke:#2c5aa0; stroke-width:1.5; }
+      .gear-right { fill:#50c878; stroke:#2d7a4a; stroke-width:1.5; }
+      .hole { fill:#ffffff; }
+    </style>
+  </defs>
+
+  <!-- Double-ended arrow in center -->
+  <g transform="translate(32,32)">
+    <!-- Main horizontal line -->
+    <line x1="-18" y1="0" x2="18" y2="0" class="arrow-line" />
+
+    <!-- Left arrowhead -->
+    <polygon points="-18,-7 -8,0 -18,7" class="arrow-head" />
+
+    <!-- Right arrowhead -->
+    <polygon points="18,-7 8,0 18,7" class="arrow-head" />
+  </g>
+
+  <!-- Left circle (gear) at left arrowhead -->
+  <g transform="translate(12,32)">
+    <circle cx="0" cy="0" r="10" class="gear-left" />
+    <circle cx="0" cy="0" r="4" class="hole" />
+  </g>
+
+  <!-- Right circle (gear) at right arrowhead -->
+  <g transform="translate(52,32)">
+    <circle cx="0" cy="0" r="10" class="gear-right" />
+    <circle cx="0" cy="0" r="4" class="hole" />
+  </g>
+</svg>

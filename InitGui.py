@@ -25,6 +25,7 @@ import os
 import gearMath
 import genericGear  # Generic gear framework (spur, helical, herringbone)
 import genericInternalGear  # Generic internal gear framework
+import gearPositioning  # Gear positioning tool
 import rackGear  # Import rack gear module
 import cycloidGear  # Import cycloid gear module
 import cycloidRack  # Import cycloid rack module
@@ -78,6 +79,8 @@ class GearWorkbenchWB(Workbench):
                 "HypoidGearCreateObject",
                 "ScrewGearCreateObject",
                 "NonCircularGearCreateObject",
+                # Tools
+                "GearPositioningCommand",
             ]
 
             # Verify command is available
