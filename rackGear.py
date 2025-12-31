@@ -193,13 +193,14 @@ class RackGear():
         self.Type = 'RackGear'
         self.Object = obj
         self.doc = App.ActiveDocument
+        self.last_body_name = obj.BodyName
         obj.Proxy = self
-        
+
         # Trigger initial calculation
         self.onChanged(obj, "Module")
 
     def __getstate__(self): return self.Type
-    def __setstate__(self, state): 
+    def __setstate__(self, state):
         if state: self.Type = state
 
     def onChanged(self, fp, prop):
@@ -209,7 +210,18 @@ class RackGear():
         - If Length changes -> Update Teeth (rounded to nearest int)
         """
         self.Dirty = True
-        
+
+        if prop == "BodyName":
+            old_name = self.last_body_name
+            new_name = fp.BodyName
+            if old_name != new_name:
+                doc = App.ActiveDocument
+                if doc:
+                    old_body = doc.getObject(old_name)
+                    if old_body:
+                        doc.removeObject(old_body)
+                self.last_body_name = new_name
+
         # Ensure properties exist before accessing them
         if not all(hasattr(fp, p) for p in ["Module", "NumberOfTeeth", "TotalLength"]):
             return

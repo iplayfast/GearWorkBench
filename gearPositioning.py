@@ -12,6 +12,8 @@ import math
 import FreeCAD as App
 import FreeCADGui
 import Part
+import Sketcher
+import util
 from PySide import QtCore, QtGui
 from typing import List, Dict, Optional
 
@@ -76,11 +78,13 @@ class GearPositionDialog(QtGui.QDialog):
             return True
 
         if type1 == "helical" and type2 == "helical":
-            helix_diff = abs(helix1 - helix2)
+            # Compare magnitudes since gears can be used upside down or right-side up
+            helix_diff = abs(abs(helix1) - abs(helix2))
             return helix_diff < 1.0
 
         if type1 == "herringbone" and type2 == "herringbone":
-            helix_diff = abs(helix1 - helix2)
+            # Compare magnitudes since gears can be used upside down or right-side up
+            helix_diff = abs(abs(helix1) - abs(helix2))
             return helix_diff < 1.0
 
         if (type1 == "spur" or type2 == "spur") and (
@@ -101,67 +105,116 @@ class GearPositionDialog(QtGui.QDialog):
         return False
 
     def moveAndFinalize(self):
-        """Move gear 2 to final position and delete preview."""
+        """Move gear 1 to final position and delete preview."""
         idx1 = self.gear1_combo.currentIndex()
         idx2_data = self.gear2_combo.itemData(self.gear2_combo.currentIndex())
 
         if idx1 < 0 or idx2_data is None:
+            App.Console.PrintError("Invalid gear selection\n")
             return
 
         gear1_info = self.gears[idx1]
         gear2_info = self.gears[idx2_data]
-        real_gear2_body = gear2_info["body_obj"]
+
+        # Re-fetch bodies from document to ensure they're valid
+        doc = App.ActiveDocument
+        if not doc:
+            App.Console.PrintError("No active document\n")
+            return
+
+        gear1_param = gear1_info["param_obj"]
+        gear2_param = gear2_info["param_obj"]
+
+        gear1_body_name = gear1_param.BodyName if hasattr(gear1_param, "BodyName") else None
+        gear2_body_name = gear2_param.BodyName if hasattr(gear2_param, "BodyName") else None
+
+        if not gear1_body_name or not gear2_body_name:
+            App.Console.PrintError("Cannot determine gear body names\n")
+            return
+
+        gear1_body = doc.getObject(gear1_body_name)
+        gear2_body = doc.getObject(gear2_body_name)
+
+        gear1_valid = gear1_body is not None
+        if gear1_valid:
+            try:
+                gear1_valid = gear1_body.isValid()
+            except Exception:
+                gear1_valid = False
+
+        gear2_valid = gear2_body is not None
+        if gear2_valid:
+            try:
+                gear2_valid = gear2_body.isValid()
+            except Exception:
+                gear2_valid = False
+
+        if not gear1_valid:
+            App.Console.PrintError(f"Gear 1 body '{gear1_body_name}' not valid\n")
+            return
+
+        if not gear2_valid:
+            App.Console.PrintError(f"Gear 2 body '{gear2_body_name}' not valid\n")
+            return
+
         rotation_angle = self.angle_spinbox.value()
 
         # Check if there's a preview to use
         if self.preview_objects and App.ActiveDocument:
             # Get the latest preview object
             latest_preview_name = self.preview_objects[-1]
-            preview_obj = App.ActiveDocument.getObject(latest_preview_name)
+            preview_obj = doc.getObject(latest_preview_name)
 
-            if preview_obj and preview_obj.isValid():
+            preview_valid = preview_obj is not None
+            if preview_valid:
+                try:
+                    preview_valid = preview_obj.isValid()
+                except Exception:
+                    preview_valid = False
+
+            if preview_valid:
                 # Use the preview's placement
-                real_gear2_body.Placement = preview_obj.Placement
+                gear1_body.Placement = preview_obj.Placement
             else:
                 # No valid preview, recalculate position from angle
-                self._calculateAndApplyPosition(gear1_info, gear2_info, rotation_angle)
+                self._calculateAndApplyPosition(gear1_info, gear2_info, rotation_angle, gear2_body, gear1_body)
         else:
             # No preview exists, recalculate position from angle
-            self._calculateAndApplyPosition(gear1_info, gear2_info, rotation_angle)
+            self._calculateAndApplyPosition(gear1_info, gear2_info, rotation_angle, gear2_body, gear1_body)
 
-        # Update parameter object
-        gear2_param = gear2_info["param_obj"]
-        gear2_param.OriginX = real_gear2_body.Placement.Base.x
-        gear2_param.OriginY = real_gear2_body.Placement.Base.y
-        gear2_param.OriginZ = real_gear2_body.Placement.Base.z
+        # Update gear 1 parameter object properties (gear 1 moved, gear 2 is reference)
+        if hasattr(gear1_param, "OriginX"):
+            gear1_param.OriginX = gear1_body.Placement.Base.x
+        if hasattr(gear1_param, "OriginY"):
+            gear1_param.OriginY = gear1_body.Placement.Base.y
+        if hasattr(gear1_param, "OriginZ"):
+            gear1_param.OriginZ = gear1_body.Placement.Base.z
+        if hasattr(gear1_param, "Angle"):
+            gear1_param.Angle = rotation_angle
 
-        # Extract rotation angle from placement
-        rotation = real_gear2_body.Placement.Rotation
-        angle_deg = math.degrees(
-            math.atan2(
-                rotation.Axis.y * math.sin(math.radians(rotation.Angle)),
-                rotation.Axis.x * math.sin(math.radians(rotation.Angle)),
-            )
-        )
-        gear2_param.Angle = angle_deg
-
-        gear2_param.Document.recompute()
+        gear1_param.Document.recompute()
 
         # Clean up all previews
         self.cleanupPreview()
 
         App.Console.PrintMessage(
-            f"Moved '{real_gear2_body.Name}' to final position at {rotation_angle:.1f}°\n"
+            f"Moved '{gear1_body.Name}' to final position at {rotation_angle:.1f}° around '{gear2_body.Name}'\n"
         )
 
-    def _calculateAndApplyPosition(self, gear1_info, gear2_info, rotation_angle):
-        """Calculate and apply position for gear2 based on rotation angle around gear1."""
+    def _calculateAndApplyPosition(self, gear1_info, gear2_info, rotation_angle, gear1_body, gear2_body):
+        """Calculate and apply position for gear1 around gear2 (reference)."""
         import math
 
-        gear1_body = gear1_info["body_obj"]
-        gear2_body = gear2_info["body_obj"]
+        # Validate that bodies still exist
+        if not gear1_body or not hasattr(gear1_body, "Placement"):
+            App.Console.PrintError("Error: Gear 1 body no longer exists\n")
+            return
+        if not gear2_body or not hasattr(gear2_body, "Placement"):
+            App.Console.PrintError("Error: Gear 2 body no longer exists\n")
+            return
 
-        center_origin = gear1_body.Placement.Base
+        # Gear 2 is center/reference (fixed), Gear 1 moves around it
+        center_origin = gear2_body.Placement.Base
 
         # Get gear specs for center distance calculation
         gear1_specs = self.getGearSpecs(gear1_info)
@@ -172,6 +225,7 @@ class GearPositionDialog(QtGui.QDialog):
 
         # Calculate new position
         angle_rad = rotation_angle * math.pi / 180.0
+
         dx = center_distance * math.cos(angle_rad)
         dy = center_distance * math.sin(angle_rad)
 
@@ -179,13 +233,14 @@ class GearPositionDialog(QtGui.QDialog):
         new_y = center_origin.y + dy
         new_z = center_origin.z
 
-        # Apply new placement
+        # Directly set rotation to angle spinbox value (no complex calculation)
         new_placement = App.Placement(
             App.Vector(new_x, new_y, new_z),
             App.Rotation(App.Vector(0, 0, 1), rotation_angle),
         )
 
-        gear2_body.Placement = new_placement
+        # Apply to gear1 (the moving gear)
+        gear1_body.Placement = new_placement
 
     def getCompatibleGears(self, selected_gear_idx: int) -> List[int]:
         """Get list of compatible gear indices.
@@ -352,6 +407,13 @@ class GearPositionDialog(QtGui.QDialog):
         self.done_btn.clicked.connect(self.moveAndFinalize)
         button_layout.addWidget(self.done_btn)
 
+        scaffold_btn = QtGui.QPushButton("Create Scaffolding")
+        scaffold_btn.setStyleSheet(
+            "background-color: #4CAF50; color: white; font-weight: bold; padding: 8px;"
+        )
+        scaffold_btn.clicked.connect(self.createScaffolding)
+        button_layout.addWidget(scaffold_btn)
+
         cancel_btn = QtGui.QPushButton("Cancel")
         cancel_btn.clicked.connect(self.reject)
         button_layout.addWidget(cancel_btn)
@@ -414,7 +476,7 @@ class GearPositionDialog(QtGui.QDialog):
                 )
 
     def updateRotationPreview(self):
-        """Update preview gear showing where gear 2 would be positioned."""
+        """Update preview gear showing where gear 1 would be positioned."""
         idx1 = self.gear1_combo.currentIndex()
         idx2_data = self.gear2_combo.itemData(self.gear2_combo.currentIndex())
         rotation_angle = self.angle_spinbox.value()
@@ -426,24 +488,31 @@ class GearPositionDialog(QtGui.QDialog):
                 gear1_info = self.gears[idx1]
                 gear2_info = self.gears[idx2_data]
 
-                center_body_name = gear1_info["param_obj"].BodyName
-                center_body = gear1_info["param_obj"].Document.getObject(
+                # Gear 2 is center/reference (fixed), Gear 1 moves around it
+                center_body_name = gear2_info["param_obj"].BodyName
+                center_body = gear2_info["param_obj"].Document.getObject(
                     center_body_name
                 )
-                gear2_body = gear2_info["body_obj"]
 
-                if center_body and gear2_body:
+                # Refresh gear1_body reference from document (cached reference may be stale if BodyName changed)
+                gear1_body_name = gear1_info["label"]
+                gear1_body = App.ActiveDocument.getObject(gear1_body_name)
+
+                gear1_valid = gear1_body is not None
+                if gear1_valid:
+                    try:
+                        gear1_valid = gear1_body.isValid()
+                    except Exception:
+                        gear1_valid = False
+
+                if center_body and gear1_valid:
                     center_origin = center_body.Placement.Base
-                    gear2_body_name = gear2_body.Name
+                    gear1_body_name = gear1_body.Name
 
-                    if gear2_body_name not in self.original_gear2_positions:
-                        self.original_gear2_positions[gear2_body_name] = (
-                            gear2_body.Placement.Base
+                    if gear1_body_name not in self.original_gear2_positions:
+                        self.original_gear2_positions[gear1_body_name] = (
+                            gear1_body.Placement.Base
                         )
-
-                    original_gear2_origin = self.original_gear2_positions.get(
-                        gear2_body_name
-                    )
 
                     # Always calculate center distance using gear specs for internal gear support
                     gear1_specs = self.getGearSpecs(gear1_info)
@@ -459,6 +528,7 @@ class GearPositionDialog(QtGui.QDialog):
                     new_y = center_origin.y + dy
                     new_z = center_origin.z
 
+                    # Directly set rotation to angle spinbox value (no complex calculation)
                     new_placement = App.Placement(
                         App.Vector(new_x, new_y, new_z),
                         App.Rotation(App.Vector(0, 0, 1), rotation_angle),
@@ -470,15 +540,22 @@ class GearPositionDialog(QtGui.QDialog):
                     preview_body = App.ActiveDocument.addObject(
                         "Part::Feature", preview_name
                     )
-                    preview_body.Shape = gear2_body.Shape.copy()
-                    preview_body.Placement = new_placement
 
-                    if preview_body.ViewObject:
-                        preview_body.ViewObject.Transparency = 50
+                    try:
+                        preview_body.Shape = gear1_body.Shape.copy()
+                        preview_body.Placement = new_placement
+
+                        if preview_body.ViewObject:
+                            preview_body.ViewObject.Transparency = 50
+                            preview_body.ViewObject.Visibility = True
+                    except Exception as shape_error:
+                        App.Console.PrintError(f"Error copying gear shape: {shape_error}\n")
 
                     self.preview_objects.append(preview_name)
 
                     App.ActiveDocument.recompute()
+                else:
+                    App.Console.PrintError("Center body or gear 1 body not valid\n")
             except Exception as e:
                 App.Console.PrintError(f"Error creating preview: {e}\n")
 
@@ -490,7 +567,14 @@ class GearPositionDialog(QtGui.QDialog):
         for obj_name in self.preview_objects[:]:
             try:
                 obj = App.ActiveDocument.getObject(obj_name)
-                if obj and obj.isValid():
+                obj_valid = obj is not None
+                if obj_valid:
+                    try:
+                        obj_valid = obj.isValid()
+                    except Exception:
+                        obj_valid = False
+
+                if obj_valid:
                     App.ActiveDocument.removeObject(obj.Name)
             except Exception as e:
                 App.Console.PrintError(
@@ -582,6 +666,375 @@ class GearPositionDialog(QtGui.QDialog):
                 QtGui.QMessageBox.critical(
                     None, "Move Error", f"Failed to move gear:\n{str(e)}"
                 )
+
+    def createScaffolding(self):
+        """Create scaffolding body with gear axis circles as reference points."""
+        idx1 = self.gear1_combo.currentIndex()
+        idx2_data = self.gear2_combo.itemData(self.gear2_combo.currentIndex())
+
+        if idx1 < 0 or idx2_data is None:
+            QtGui.QMessageBox.warning(
+                None, "Invalid Selection", "Please select two different gears."
+            )
+            return
+
+        gear1_info = self.gears[idx1]
+        gear2_info = self.gears[idx2_data]
+
+        try:
+            doc = App.ActiveDocument
+            if not doc:
+                QtGui.QMessageBox.warning(
+                    None, "No Document", "Please create or open a FreeCAD document first."
+                )
+                return
+
+            # Re-fetch bodies from document by name (not from cached references)
+            gear1_param = gear1_info["param_obj"]
+            gear2_param = gear2_info["param_obj"]
+
+            gear1_body_name = gear1_param.BodyName if hasattr(gear1_param, "BodyName") else None
+            gear2_body_name = gear2_param.BodyName if hasattr(gear2_param, "BodyName") else None
+
+            if not gear1_body_name or not gear2_body_name:
+                App.Console.PrintError("Cannot determine gear body names\n")
+                return
+
+            gear1_body = doc.getObject(gear1_body_name)
+            gear2_body = doc.getObject(gear2_body_name)
+
+            gear1_valid = gear1_body is not None
+            if gear1_valid:
+                try:
+                    gear1_valid = gear1_body.isValid()
+                except Exception:
+                    gear1_valid = False
+
+            gear2_valid = gear2_body is not None
+            if gear2_valid:
+                try:
+                    gear2_valid = gear2_body.isValid()
+                except Exception:
+                    gear2_valid = False
+
+            if not gear1_valid:
+                App.Console.PrintError(f"Gear 1 body '{gear1_body_name}' not valid\n")
+                return
+
+            if not gear2_valid:
+                App.Console.PrintError(f"Gear 2 body '{gear2_body_name}' not valid\n")
+                return
+
+            # Create new body for scaffolding
+            scaffold_body_name = "GearScaffolding"
+            existing = doc.getObject(scaffold_body_name)
+            if existing:
+                counter = 1
+                while doc.getObject(f"{scaffold_body_name}{counter:03d}"):
+                    counter += 1
+                scaffold_body_name = f"{scaffold_body_name}{counter:03d}"
+
+            scaffold_body = util.readyPart(doc, scaffold_body_name)
+
+            gear1_placement = gear1_body.Placement.Base
+            gear2_placement = gear2_body.Placement.Base
+
+            # Calculate gear center positions
+            p1 = App.Vector(gear1_placement.x, gear1_placement.y, gear1_placement.z)
+            p2 = App.Vector(gear2_placement.x, gear2_placement.y, gear2_placement.z)
+
+            # Calculate direction vector from p1 to p2
+            direction = p2 - p1
+            distance = direction.Length
+
+            # Calculate midpoint
+            midpoint = (p1 + p2) / 2.0
+
+            # Calculate oval/plate dimensions
+            major_radius = distance / 2.0 + 5.0
+            minor_radius = distance / 2.0 + 5.0
+
+            # Calculate axle radius and height
+            axle_radius = 2.0
+            axle_height = 20.0
+
+            # Create sketch for oval plate (no holes in sketch)
+            sketch = util.createSketch(scaffold_body, "ScaffoldingPlate")
+            sketch.Placement = App.Placement(
+                App.Vector(0, 0, 0), App.Rotation(0, 0, 0)
+            )
+
+            # Add outer oval (plate boundary only, no holes in this sketch)
+            ellipse = sketch.addGeometry(
+                Part.Ellipse(
+                    App.Vector(0, 0, 0),
+                    App.Vector(major_radius, 0, 0),
+                    App.Vector(0, minor_radius, 0),
+                    App.Vector(0, 0, 1)
+                ),
+                False
+            )
+            sketch.addConstraint(Sketcher.Constraint("Coincident", ellipse, 3, -1, 1))
+            sketch.addConstraint(Sketcher.Constraint("RadiusX", ellipse, major_radius))
+            sketch.addConstraint(Sketcher.Constraint("RadiusY", ellipse, minor_radius))
+
+            # Pad the oval sketch to create the plate (5mm thickness)
+            plate_pad = util.createPad(scaffold_body, sketch, 5.0, "ScaffoldingPlate")
+            sketch.Visibility = False
+
+            # Calculate rotation to align plate with gear axes
+            angle_rad = math.atan2(direction.y, direction.x)
+            angle_deg = angle_rad * 180.0 / math.pi
+
+            # Position the plate at midpoint
+            plate_pad.Placement = App.Placement(
+                midpoint,
+                App.Rotation(App.Vector(0, 0, 1), angle_deg)
+            )
+
+            # Create sketch for axle 1
+            sketch_axle1 = util.createSketch(scaffold_body, "Axle1Sketch")
+            sketch_axle1.Placement = App.Placement(App.Vector(0, 0, 0), App.Rotation(0, 0, 0))
+
+            circle_axle1 = sketch_axle1.addGeometry(
+                Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), axle_radius),
+                False
+            )
+            sketch_axle1.addConstraint(Sketcher.Constraint("Coincident", circle_axle1, 3, -1, 1))
+            sketch_axle1.addConstraint(Sketcher.Constraint("Diameter", circle_axle1, axle_radius * 2.0))
+
+            # Pad axle 1 sketch (20mm height)
+            axle1_pad = util.createPad(scaffold_body, sketch_axle1, axle_height, "Axle1")
+            sketch_axle1.Visibility = False
+
+            # Position axle 1 at gear 1 center
+            axle1_pad.Placement = App.Placement(p1, App.Rotation(0, 0, 0))
+
+            # Create sketch for axle 2
+            sketch_axle2 = util.createSketch(scaffold_body, "Axle2Sketch")
+            sketch_axle2.Placement = App.Placement(App.Vector(0, 0, 0), App.Rotation(0, 0, 0))
+
+            circle_axle2 = sketch_axle2.addGeometry(
+                Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), axle_radius),
+                False
+            )
+            sketch_axle2.addConstraint(Sketcher.Constraint("Coincident", circle_axle2, 3, -1, 1))
+            sketch_axle2.addConstraint(Sketcher.Constraint("Diameter", circle_axle2, axle_radius * 2.0))
+
+            # Pad axle 2 sketch (20mm height)
+            axle2_pad = util.createPad(scaffold_body, sketch_axle2, axle_height, "Axle2")
+            sketch_axle2.Visibility = False
+
+            # Position axle 2 at gear 2 center
+            axle2_pad.Placement = App.Placement(p2, App.Rotation(0, 0, 0))
+
+            # Set visibility and appearance
+            if plate_pad.ViewObject:
+                plate_pad.ViewObject.Transparency = 40
+                plate_pad.ViewObject.ShapeColor = (0.7, 0.7, 0.7)
+            if axle1_pad.ViewObject:
+                axle1_pad.ViewObject.Transparency = 30
+                axle1_pad.ViewObject.ShapeColor = (0.6, 0.4, 0.2)
+            if axle2_pad.ViewObject:
+                axle2_pad.ViewObject.Transparency = 30
+                axle2_pad.ViewObject.ShapeColor = (0.6, 0.4, 0.2)
+
+            doc.recompute()
+
+            App.Console.PrintMessage(
+                f"Created scaffolding body '{scaffold_body_name}'\n"
+            )
+            App.Console.PrintMessage(
+                f"  Plate: oval, padded 5mm\n"
+            )
+            App.Console.PrintMessage(
+                f"  Axle 1 sketch: circle, padded 20mm at {gear1_body_name}\n"
+            )
+            App.Console.PrintMessage(
+                f"  Axle 2 sketch: circle, padded 20mm at {gear2_body_name}\n"
+            )
+
+            # Add outer oval (plate boundary)
+            ellipse = sketch.addGeometry(
+                Part.Ellipse(
+                    App.Vector(0, 0, 0),
+                    App.Vector(major_radius, 0, 0),
+                    App.Vector(0, minor_radius, 0),
+                    App.Vector(0, 0, 1)
+                ),
+                False
+            )
+            sketch.addConstraint(Sketcher.Constraint("Coincident", ellipse, 3, -1, 1))
+            sketch.addConstraint(Sketcher.Constraint("RadiusX", ellipse, major_radius))
+            sketch.addConstraint(Sketcher.Constraint("RadiusY", ellipse, minor_radius))
+
+            # Add hole for gear 1 axle (relative to ellipse center)
+            # Position holes on the major axis, offset from center
+            hole1_x = -distance / 2.0
+            hole1_y = 0.0
+
+            circle1 = sketch.addGeometry(
+                Part.Circle(App.Vector(hole1_x, hole1_y, 0), App.Vector(0, 0, 1), hole_radius),
+                False
+            )
+            sketch.addConstraint(Sketcher.Constraint("Coincident", circle1, 3, -1, 1))
+            sketch.addConstraint(Sketcher.Constraint("Diameter", circle1, hole_radius * 2.0))
+
+            # Add hole for gear 2 axle
+            hole2_x = distance / 2.0
+            hole2_y = 0.0
+
+            circle2 = sketch.addGeometry(
+                Part.Circle(App.Vector(hole2_x, hole2_y, 0), App.Vector(0, 0, 1), hole_radius),
+                False
+            )
+            sketch.addConstraint(Sketcher.Constraint("Coincident", circle2, 3, -1, 1))
+            sketch.addConstraint(Sketcher.Constraint("Diameter", circle2, hole_radius * 2.0))
+
+            # Constrain holes to be on major axis
+            sketch.addConstraint(Sketcher.Constraint("Vertical", circle1, 3, ellipse, 3))
+            sketch.addConstraint(Sketcher.Constraint("Vertical", circle2, 3, ellipse, 3))
+
+            # Constrain holes to be at specific distances from center
+            sketch.addConstraint(Sketcher.Constraint("DistanceX", circle1, 3, -1, 1, abs(hole1_x)))
+            sketch.addConstraint(Sketcher.Constraint("DistanceX", circle2, 3, -1, 1, abs(hole2_x)))
+
+            # Pad the sketch to create the plate (5mm thickness)
+            plate_pad = util.createPad(scaffold_body, sketch, 5.0, "ScaffoldingPlate")
+            sketch.Visibility = False
+
+            # Calculate rotation to align plate with gear axes
+            angle_rad = math.atan2(direction.y, direction.x)
+            angle_deg = angle_rad * 180.0 / math.pi
+
+            # Position the plate at midpoint
+            plate_pad.Placement = App.Placement(
+                midpoint,
+                App.Rotation(App.Vector(0, 0, 1), angle_deg)
+            )
+
+            # Create axles as separate objects (20mm height)
+            axle_radius = 2.0
+            axle_height = 20.0
+
+            axle1 = Part.makeCylinder(axle_radius, axle_height, App.Vector(0, 0, 0), App.Vector(0, 0, 1), 360)
+            axle1_obj = doc.addObject("Part::Feature", f"Axle_{gear1_body_name}")
+            axle1_obj.Shape = axle1
+            axle1_obj.Placement = App.Placement(p1, App.Rotation(0, 0, 0))
+
+            axle2 = Part.makeCylinder(axle_radius, axle_height, App.Vector(0, 0, 0), App.Vector(0, 0, 1), 360)
+            axle2_obj = doc.addObject("Part::Feature", f"Axle_{gear2_body_name}")
+            axle2_obj.Shape = axle2
+            axle2_obj.Placement = App.Placement(p2, App.Rotation(0, 0, 0))
+
+            # Set visibility and appearance
+            if plate_pad.ViewObject:
+                plate_pad.ViewObject.Transparency = 40
+                plate_pad.ViewObject.ShapeColor = (0.7, 0.7, 0.7)
+            if axle1_obj.ViewObject:
+                axle1_obj.ViewObject.Transparency = 30
+                axle1_obj.ViewObject.ShapeColor = (0.6, 0.4, 0.2)
+            if axle2_obj.ViewObject:
+                axle2_obj.ViewObject.Transparency = 30
+                axle2_obj.ViewObject.ShapeColor = (0.6, 0.4, 0.2)
+
+            doc.recompute()
+
+            App.Console.PrintMessage(
+                f"Created scaffolding body '{scaffold_body_name}'\n"
+            )
+            App.Console.PrintMessage(
+                f"  Plate: oval with 2 holes, padded 5mm\n"
+            )
+            App.Console.PrintMessage(
+                f"  Axle 1: radius={axle_radius}mm, height={axle_height}mm\n"
+            )
+            App.Console.PrintMessage(
+                f"  Axle 2: radius={axle_radius}mm, height={axle_height}mm\n"
+            )
+
+            # Set visibility and appearance
+            if axle1_obj.ViewObject:
+                axle1_obj.ViewObject.Transparency = 30
+                axle1_obj.ViewObject.ShapeColor = (0.8, 0.8, 0.0)
+            if axle2_obj.ViewObject:
+                axle2_obj.ViewObject.Transparency = 30
+                axle2_obj.ViewObject.ShapeColor = (0.8, 0.8, 0.0)
+            if oval_obj.ViewObject:
+                oval_obj.ViewObject.Transparency = 50
+                oval_obj.ViewObject.ShapeColor = (0.5, 0.5, 0.5)
+
+            doc.recompute()
+
+            App.Console.PrintMessage(
+                f"Created scaffolding with axles and connecting oval\n"
+            )
+            App.Console.PrintMessage(
+                f"  Gear 1 axle '{axle1_name}': ({gear1_placement.x:.3f}, {gear1_placement.y:.3f}, {gear1_placement.z:.3f})\n"
+            )
+            App.Console.PrintMessage(
+                f"  Gear 2 axle '{axle2_name}': ({gear2_placement.x:.3f}, {gear2_placement.y:.3f}, {gear2_placement.z:.3f})\n"
+            )
+            App.Console.PrintMessage(
+                f"  Connecting oval '{oval_name}': length={distance:.3f}, major_radius={major_radius:.3f}\n"
+            )
+
+            # Constrain ellipse
+            oval_sketch.addConstraint(Sketcher.Constraint("Coincident", ellipse, 3, -1, 1))
+            oval_sketch.addConstraint(Sketcher.Constraint("RadiusX", ellipse, major_radius))
+            oval_sketch.addConstraint(Sketcher.Constraint("RadiusY", ellipse, minor_radius))
+
+            # Calculate rotation to align ellipse with gear axes
+            angle_rad = math.atan2(direction.y, direction.x)
+            angle_deg = angle_rad * 180.0 / math.pi
+
+            # Position and rotate the sketch
+            oval_sketch.Placement = App.Placement(
+                midpoint,
+                App.Rotation(App.Vector(0, 0, 1), angle_deg)
+            )
+
+            # Pad the oval to give it thickness
+            oval_pad = util.createPad(scaffold_body, oval_sketch, axle_height, "ConnectingOval")
+            oval_sketch.Visibility = False
+
+            # Set visibility
+            if axle1_obj.ViewObject:
+                axle1_obj.ViewObject.Transparency = 30
+                axle1_obj.ViewObject.LineWidth = 2
+            if axle2_obj.ViewObject:
+                axle2_obj.ViewObject.Transparency = 30
+                axle2_obj.ViewObject.LineWidth = 2
+            if oval_pad.ViewObject:
+                oval_pad.ViewObject.Transparency = 50
+                oval_pad.ViewObject.LineWidth = 1
+
+            doc.recompute()
+
+            App.Console.PrintMessage(
+                f"Created scaffolding body '{scaffold_body_name}' with axles and connecting oval\n"
+            )
+            App.Console.PrintMessage(
+                f"  Gear 1 axle: ({gear1_placement.x:.3f}, {gear1_placement.y:.3f}, {gear1_placement.z:.3f})\n"
+            )
+            App.Console.PrintMessage(
+                f"  Gear 2 axle: ({gear2_placement.x:.3f}, {gear2_placement.y:.3f}, {gear2_placement.z:.3f})\n"
+            )
+            App.Console.PrintMessage(
+                f"  Connecting oval: length={distance:.3f}, major_radius={major_radius:.3f}\n"
+            )
+
+            if App.GuiUp:
+                try:
+                    FreeCADGui.SendMsgToActiveView("ViewFit")
+                except Exception:
+                    pass
+
+        except Exception as e:
+            App.Console.PrintError(f"Error creating scaffolding: {e}\n")
+            QtGui.QMessageBox.critical(
+                None, "Scaffolding Error", f"Failed to create scaffolding:\n{str(e)}"
+            )
 
     def closeEvent(self, event):
         """Handle dialog close event - cleanup preview objects."""
@@ -900,15 +1353,20 @@ def positionGearBeside(
 
         gear1_body.Placement = new_placement
 
-        gear1_param_obj.OriginX = new_origin_x
-        gear1_param_obj.OriginY = new_origin_y
-        gear1_param_obj.OriginZ = new_origin_z
-        gear1_param_obj.Angle = new_rotation_angle
+        # Update parameter object properties if they exist
+        if hasattr(gear1_param_obj, "OriginX"):
+            gear1_param_obj.OriginX = new_origin_x
+        if hasattr(gear1_param_obj, "OriginY"):
+            gear1_param_obj.OriginY = new_origin_y
+        if hasattr(gear1_param_obj, "OriginZ"):
+            gear1_param_obj.OriginZ = new_origin_z
+        if hasattr(gear1_param_obj, "Angle"):
+            gear1_param_obj.Angle = new_rotation_angle
 
-    gear1_param_obj.Document.recompute()
-    App.Console.PrintMessage(
-        f"Positioned '{gear1_param_obj.BodyName}' beside '{gear2_param_obj.BodyName}' at center distance {center_distance:.3f} mm\n"
-    )
+        gear1_param_obj.Document.recompute()
+        App.Console.PrintMessage(
+            f"Positioned '{gear1_param_obj.BodyName}' beside '{gear2_param_obj.BodyName}' at center distance {center_distance:.3f} mm\n"
+        )
 
 
 class GearPositioningCommand:

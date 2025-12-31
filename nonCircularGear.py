@@ -225,6 +225,7 @@ class NonCircularGear():
         self.Type = 'NonCircularGear'
         self.Object = obj
         self.doc = App.ActiveDocument
+        self.last_body_name = obj.BodyName
         obj.Proxy = self
 
         # No direct derived read-only properties for non-circular in the same way
@@ -252,6 +253,17 @@ class NonCircularGear():
         """
         # Mark for recompute when any property changes
         self.Dirty = True
+
+        if prop == "BodyName":
+            old_name = self.last_body_name
+            new_name = fp.BodyName
+            if old_name != new_name:
+                doc = App.ActiveDocument
+                if doc:
+                    old_body = doc.getObject(old_name)
+                    if old_body:
+                        doc.removeObject(old_body)
+                self.last_body_name = new_name
 
         # For non-circular gears, read-only properties like diameters are not
         # directly calculated in the same way as involute gears.

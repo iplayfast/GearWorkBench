@@ -259,16 +259,29 @@ class CycloidGear():
         self.Type = 'CycloidGear'
         self.Object = obj
         self.doc = App.ActiveDocument
+        self.last_body_name = obj.BodyName
         obj.Proxy = self
-        
+
         self.onChanged(obj, "Module")
 
     def __getstate__(self): return self.Type
-    def __setstate__(self, state): 
+    def __setstate__(self, state):
         if state: self.Type = state
 
     def onChanged(self, fp, prop):
         self.Dirty = True
+        if prop == "BodyName":
+            old_name = self.last_body_name
+            new_name = fp.BodyName
+            if old_name != new_name:
+                doc = App.ActiveDocument
+                if doc:
+                    old_body = doc.getObject(old_name)
+                    if old_body:
+                        if hasattr(old_body, 'removeObjectsFromDocument'):
+                            old_body.removeObjectsFromDocument()
+                        doc.removeObject(old_name)
+                self.last_body_name = new_name
         if prop in ["Module", "NumberOfTeeth", "AddendumFactor", "DedendumFactor"]:
             try:
                 m = fp.Module.Value

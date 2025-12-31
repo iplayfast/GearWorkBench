@@ -377,11 +377,15 @@ class GenericInternalSpurGear:
 
         obj.addProperty("App::PropertyLength", "Module", "InternalSpurGear", "Normal module").Module = H["module"]
         obj.addProperty("App::PropertyInteger", "NumberOfTeeth", "InternalSpurGear", "Number of teeth").NumberOfTeeth = H["num_teeth"]
-        obj.addProperty("App::PropertyAngle", "PressureAngle", "InternalSpurGear", "Pressure angle").PressureAngle = H["pressure_angle"]
+        obj.addProperty("App::PropertyAngle", "PressureAngle", "InternalSpurGear", "Normal pressure angle").PressureAngle = H["pressure_angle"]
         obj.addProperty("App::PropertyFloat", "ProfileShift", "InternalSpurGear", "Profile shift coefficient").ProfileShift = H["profile_shift"]
         obj.addProperty("App::PropertyLength", "Height", "InternalSpurGear", "Gear height").Height = H["height"]
         obj.addProperty("App::PropertyLength", "RimThickness", "InternalSpurGear", "Rim thickness").RimThickness = H["rim_thickness"]
         obj.addProperty("App::PropertyString", "BodyName", "InternalSpurGear", "Body name").BodyName = "GenericInternalSpurGear"
+
+        # Store the actual body name created by gear generator
+        self.created_body_name = None
+        self.last_body_name = obj.BodyName
 
         self.Type = "GenericInternalSpurGear"
         self.Object = obj
@@ -390,6 +394,18 @@ class GenericInternalSpurGear:
 
     def onChanged(self, fp, prop):
         self.Dirty = True
+
+        if prop == "BodyName":
+            old_name = self.last_body_name
+            new_name = fp.BodyName
+            if old_name != new_name:
+                doc = App.ActiveDocument
+                if doc:
+                    old_body = doc.getObject(old_name)
+                    if old_body:
+                        doc.removeObject(old_body)
+                self.last_body_name = new_name
+
         if prop in ["Module", "NumberOfTeeth", "PressureAngle", "ProfileShift", "RimThickness"]:
             try:
                 module = fp.Module.Value
@@ -429,9 +445,38 @@ class GenericInternalSpurGear:
         if self.Dirty:
             try:
                 parameters = self.GetParameters()
-                genericInternalSpurGear(App.ActiveDocument, parameters)
-                self.Dirty = False
-                App.ActiveDocument.recompute()
+
+                # Get the actual body name that was created (from our stored value)
+                actual_body_name = self.created_body_name if hasattr(self, "created_body_name") else None
+
+                # Use the actual body name to delete the old one
+                body_name = actual_body_name if actual_body_name else parameters.get("body_name", "GenericInternalSpurGear")
+
+                doc = App.ActiveDocument
+                if not doc:
+                    App.Console.PrintError("No active document\n")
+                    return
+
+                # Delete old body if it exists and has same name
+                old_body = doc.getObject(body_name)
+                if old_body and old_body.isValid():
+                    # Delete the old body (which may have a different name from previous BodyName)
+                    doc.removeObject(body_name)
+                    App.Console.PrintMessage(f"Deleted old body: {body_name}\n")
+
+                # Create new body with parameters
+                genericInternalSpurGear(doc, parameters)
+
+                # Store the newly created body name
+                new_body = doc.getObject(parameters.get("body_name", "GenericInternalSpurGear"))
+                if new_body and new_body.isValid():
+                    self.created_body_name = parameters.get("body_name", "GenericInternalSpurGear")
+                    App.Console.PrintMessage(f"Created new body: {self.created_body_name}\n")
+
+                    # Restore placement if possible (only if it's not the first gear creation)
+                    # For now, just set the body name and let the gear generator handle placement
+                    self.Dirty = False
+                    App.ActiveDocument.recompute()
             except Exception as e:
                 App.Console.PrintError(f"Internal Spur Gear Error: {e}\n")
                 raise
@@ -471,11 +516,24 @@ class GenericInternalHelixGear:
 
         self.Type = "GenericInternalHelixGear"
         self.Object = obj
+        self.last_body_name = obj.BodyName
         obj.Proxy = self
         self.onChanged(obj, "Module")
 
     def onChanged(self, fp, prop):
         self.Dirty = True
+
+        if prop == "BodyName":
+            old_name = self.last_body_name
+            new_name = fp.BodyName
+            if old_name != new_name:
+                doc = App.ActiveDocument
+                if doc:
+                    old_body = doc.getObject(old_name)
+                    if old_body:
+                        doc.removeObject(old_body)
+                self.last_body_name = new_name
+
         if prop in ["Module", "NumberOfTeeth", "PressureAngle", "ProfileShift", "RimThickness", "HelixAngle"]:
             try:
                 module = fp.Module.Value
@@ -522,9 +580,44 @@ class GenericInternalHelixGear:
         if self.Dirty:
             try:
                 parameters = self.GetParameters()
-                genericInternalHelixGear(App.ActiveDocument, parameters, parameters["helix_angle"])
-                self.Dirty = False
-                App.ActiveDocument.recompute()
+
+                # Get body name from the actual object, not parameters dict
+                body_name_from_prop = str(self.Object.BodyName) if hasattr(self.Object, "BodyName") else None
+
+                # Use the property value if available
+                body_name = body_name_from_prop if body_name_from_prop else parameters.get("body_name", "GenericInternalHelixGear")
+
+                doc = App.ActiveDocument
+                if not doc:
+                    App.Console.PrintError("No active document\n")
+                    return
+
+                # Delete old body if it exists and has same name
+                old_body = doc.getObject(body_name)
+                if old_body and old_body.isValid():
+                    # Store current placement to reapply
+                    old_placement = old_body.Placement
+
+                    # Delete the old body
+                    doc.removeObject(body_name)
+                    App.Console.PrintMessage(f"Deleted old body: {body_name}\n")
+
+                    # Create new body with parameters
+                    genericInternalHelixGear(doc, parameters, parameters["helix_angle"])
+
+                    # Restore placement if possible
+                    new_body = doc.getObject(body_name)
+                    if new_body and hasattr(old_placement, "Base"):
+                        new_body.Placement = old_placement
+                        App.Console.PrintMessage(f"Restored placement for {body_name}\n")
+
+                    self.Dirty = False
+                    App.ActiveDocument.recompute()
+                else:
+                    # No old body, just create new one
+                    genericInternalHelixGear(doc, parameters, parameters["helix_angle"])
+                    self.Dirty = False
+                    App.ActiveDocument.recompute()
             except Exception as e:
                 App.Console.PrintError(f"Internal Helical Gear Error: {e}\n")
                 raise
@@ -564,11 +657,24 @@ class GenericInternalHerringboneGear:
 
         self.Type = "GenericInternalHerringboneGear"
         self.Object = obj
+        self.last_body_name = obj.BodyName
         obj.Proxy = self
         self.onChanged(obj, "Module")
 
     def onChanged(self, fp, prop):
         self.Dirty = True
+
+        if prop == "BodyName":
+            old_name = self.last_body_name
+            new_name = fp.BodyName
+            if old_name != new_name:
+                doc = App.ActiveDocument
+                if doc:
+                    old_body = doc.getObject(old_name)
+                    if old_body:
+                        doc.removeObject(old_body)
+                self.last_body_name = new_name
+
         if prop in ["Module", "NumberOfTeeth", "PressureAngle", "ProfileShift", "RimThickness", "HelixAngle"]:
             try:
                 module = fp.Module.Value
@@ -615,29 +721,46 @@ class GenericInternalHerringboneGear:
         if self.Dirty:
             try:
                 parameters = self.GetParameters()
-                helix_angle = parameters["helix_angle"]
-                # Calculate twist for herringbone (half height each direction)
-                mn = parameters["module"]
-                num_teeth = parameters["num_teeth"]
-                height = parameters["height"]
-                beta_rad = helix_angle * util.DEG_TO_RAD
 
-                if helix_angle != 0:
-                    mt = mn / math.cos(beta_rad)
-                    pitch_radius = mt * num_teeth / 2.0
-                    half_rotation_rad = (height / 2.0) * math.tan(beta_rad) / pitch_radius
-                    half_rotation_deg = half_rotation_rad * util.RAD_TO_DEG
+                # Get body name from the actual object, not parameters dict
+                body_name_from_prop = str(self.Object.BodyName) if hasattr(self.Object, "BodyName") else None
+
+                # Use the property value if available
+                body_name = body_name_from_prop if body_name_from_prop else parameters.get("body_name", "GenericInternalSpurGear")
+
+                doc = App.ActiveDocument
+                if not doc:
+                    App.Console.PrintError("No active document\n")
+                    return
+
+                # Delete old body if it exists and has same name
+                old_body = doc.getObject(body_name)
+                if old_body and old_body.isValid():
+                    # Store current placement to reapply
+                    old_placement = old_body.Placement
+
+                    # Delete the old body
+                    doc.removeObject(body_name)
+                    App.Console.PrintMessage(f"Deleted old body: {body_name}\n")
+
+                    # Create new body with parameters
+                    genericInternalHerringboneGear(doc, parameters)
+
+                    # Restore placement if possible
+                    new_body = doc.getObject(body_name)
+                    if new_body and hasattr(old_placement, "Base"):
+                        new_body.Placement = old_placement
+                        App.Console.PrintMessage(f"Restored placement for {body_name}\n")
+
+                    self.Dirty = False
+                    App.ActiveDocument.recompute()
                 else:
-                    half_rotation_deg = 0.0
-
-                # Herringbone: angle1 = +twist, angle2 = -twist (back to center)
-                genericInternalHerringboneGear(
-                    App.ActiveDocument, parameters, half_rotation_deg, -half_rotation_deg
-                )
-                self.Dirty = False
-                App.ActiveDocument.recompute()
+                    # No old body, just create new one
+                    genericInternalSpurGear(doc, parameters)
+                    self.Dirty = False
+                    App.ActiveDocument.recompute()
             except Exception as e:
-                App.Console.PrintError(f"Internal Herringbone Gear Error: {e}\n")
+                App.Console.PrintError(f"Internal Spur Gear Error: {e}\n")
                 raise
 
     def execute(self, obj):

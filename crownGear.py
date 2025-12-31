@@ -176,11 +176,24 @@ class CrownGear():
 
         self.Type = 'CrownGear'
         self.Object = obj
+        self.last_body_name = obj.BodyName
         obj.Proxy = self
         self.onChanged(obj, "Module")
 
     def onChanged(self, fp, prop):
         self.Dirty = True
+        if prop == "BodyName":
+            old_name = self.last_body_name
+            new_name = fp.BodyName
+            if old_name != new_name:
+                doc = App.ActiveDocument
+                if doc:
+                    old_body = doc.getObject(old_name)
+                    if old_body:
+                        if hasattr(old_body, 'removeObjectsFromDocument'):
+                            old_body.removeObjectsFromDocument()
+                        doc.removeObject(old_name)
+                self.last_body_name = new_name
         if prop in ["Module", "NumberOfTeeth"]:
             try:
                 m = fp.Module.Value

@@ -539,6 +539,7 @@ class GenericSpurGear:
 
         self.Type = "GenericSpurGear"
         self.Object = obj
+        self.last_body_name = obj.BodyName
         obj.Proxy = self
 
         # Trigger initial calculation
@@ -554,6 +555,19 @@ class GenericSpurGear:
     def onChanged(self, fp, prop):
         """Called when a property changes."""
         self.Dirty = True
+
+        if prop == "BodyName":
+            old_name = self.last_body_name
+            new_name = fp.BodyName
+            if old_name != new_name:
+                doc = App.ActiveDocument
+                if doc:
+                    old_body = doc.getObject(old_name)
+                    if old_body:
+                        if hasattr(old_body, 'removeObjectsFromDocument'):
+                            old_body.removeObjectsFromDocument()
+                        doc.removeObject(old_name)
+                self.last_body_name = new_name
 
         if prop in ["Module", "NumberOfTeeth", "PressureAngle", "ProfileShift"]:
             try:
@@ -805,6 +819,7 @@ class GenericHelixGear:
 
         self.Type = "GenericHelixGear"
         self.Object = obj
+        self.last_body_name = obj.BodyName
         obj.Proxy = self
 
         self.onChanged(obj, "Module")
@@ -819,6 +834,19 @@ class GenericHelixGear:
     def onChanged(self, fp, prop):
         """Called when a property changes."""
         self.Dirty = True
+
+        if prop == "BodyName":
+            old_name = self.last_body_name
+            new_name = fp.BodyName
+            if old_name != new_name:
+                doc = App.ActiveDocument
+                if doc:
+                    old_body = doc.getObject(old_name)
+                    if old_body:
+                        if hasattr(old_body, 'removeObjectsFromDocument'):
+                            old_body.removeObjectsFromDocument()
+                        doc.removeObject(old_name)
+                self.last_body_name = new_name
 
         if prop in ["Module", "NumberOfTeeth", "PressureAngle", "ProfileShift"]:
             try:
@@ -1078,6 +1106,7 @@ class GenericHerringboneGear:
 
         self.Type = "GenericHerringboneGear"
         self.Object = obj
+        self.last_body_name = obj.BodyName
         obj.Proxy = self
 
         self.onChanged(obj, "Module")
@@ -1092,6 +1121,19 @@ class GenericHerringboneGear:
     def onChanged(self, fp, prop):
         """Called when a property changes."""
         self.Dirty = True
+
+        if prop == "BodyName":
+            old_name = self.last_body_name
+            new_name = fp.BodyName
+            if old_name != new_name:
+                doc = App.ActiveDocument
+                if doc:
+                    old_body = doc.getObject(old_name)
+                    if old_body:
+                        if hasattr(old_body, 'removeObjectsFromDocument'):
+                            old_body.removeObjectsFromDocument()
+                        doc.removeObject(old_name)
+                self.last_body_name = new_name
 
         if prop in ["Module", "NumberOfTeeth", "PressureAngle", "ProfileShift"]:
             try:

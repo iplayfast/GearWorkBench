@@ -102,11 +102,23 @@ class GloboidWormGear():
 
         self.Type = 'GloboidWormGear'
         self.Object = obj
+        self.last_body_name = obj.BodyName
         obj.Proxy = self
         self.onChanged(obj, "Module")
 
     def onChanged(self, fp, prop):
         self.Dirty = True
+
+        if prop == "BodyName":
+            old_name = self.last_body_name
+            new_name = fp.BodyName
+            if old_name != new_name:
+                doc = App.ActiveDocument
+                if doc:
+                    old_body = doc.getObject(old_name)
+                    if old_body:
+                        doc.removeObject(old_body)
+                self.last_body_name = new_name
 
         # Update calculated read-only properties
         if prop in ["Module", "NumberOfThreads", "GearTeeth", "WormPitchDiameter"]:

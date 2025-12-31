@@ -409,6 +409,7 @@ class ScrewGear():
         self.Type = 'ScrewGear'
         self.Object = obj
         self.doc = App.ActiveDocument
+        self.last_body_name = obj.BodyName
         obj.Proxy = self
 
         # Trigger initial calculation of read-only properties
@@ -432,6 +433,17 @@ class ScrewGear():
         """
         # Mark for recompute when any property changes
         self.Dirty = True
+
+        if prop == "BodyName":
+            old_name = self.last_body_name
+            new_name = fp.BodyName
+            if old_name != new_name:
+                doc = App.ActiveDocument
+                if doc:
+                    old_body = doc.getObject(old_name)
+                    if old_body:
+                        doc.removeObject(old_body)
+                self.last_body_name = new_name
 
         # Update read-only calculated properties
         if prop in ["Module", "NumberOfTeeth", "PressureAngle", "HelixAngle", "FaceWidth"]:
