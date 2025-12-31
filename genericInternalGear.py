@@ -121,9 +121,13 @@ def generateInternalToothProfile(sketch, parameters):
         geo_list.append(sketch.addGeometry(bspline, False))
 
     # 2. Root arc (outer edge at df_internal)
-    p_root_right = right_flank_pts[-1]
-    p_root_left = left_flank_pts[0]
-    p_root_mid = App.Vector(0, df_internal / 2.0, 0)
+    # Project endpoints onto df_internal circle to ensure all 3 points are coplanar
+    r_root = df_internal / 2.0
+    angle_root_right = math.atan2(right_flank_pts[-1].y, right_flank_pts[-1].x)
+    angle_root_left = math.atan2(left_flank_pts[-1].y, left_flank_pts[-1].x)
+    p_root_right = App.Vector(r_root * math.cos(angle_root_right), r_root * math.sin(angle_root_right), 0)
+    p_root_left = App.Vector(r_root * math.cos(angle_root_left), r_root * math.sin(angle_root_left), 0)
+    p_root_mid = App.Vector(0, r_root, 0)
     root_arc = Part.Arc(p_root_right, p_root_mid, p_root_left)
     geo_list.append(sketch.addGeometry(root_arc, False))
 
@@ -134,9 +138,13 @@ def generateInternalToothProfile(sketch, parameters):
         geo_list.append(sketch.addGeometry(bspline, False))
 
     # 4. Tip arc (inner edge at da_internal)
-    p_tip_left = left_flank_pts[-1]
-    p_tip_right = right_flank_pts[0]
-    p_tip_mid = App.Vector(0, da_internal / 2.0, 0)
+    # Project endpoints onto da_internal circle to ensure all 3 points are coplanar
+    r_tip = da_internal / 2.0
+    angle_tip_left = math.atan2(left_flank_pts[-1].y, left_flank_pts[-1].x)
+    angle_tip_right = math.atan2(right_flank_pts[0].y, right_flank_pts[0].x)
+    p_tip_left = App.Vector(r_tip * math.cos(angle_tip_left), r_tip * math.sin(angle_tip_left), 0)
+    p_tip_right = App.Vector(r_tip * math.cos(angle_tip_right), r_tip * math.sin(angle_tip_right), 0)
+    p_tip_mid = App.Vector(0, r_tip, 0)
     tip_arc = Part.Arc(p_tip_left, p_tip_mid, p_tip_right)
     geo_list.append(sketch.addGeometry(tip_arc, False))
 

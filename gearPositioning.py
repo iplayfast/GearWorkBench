@@ -42,77 +42,8 @@ class GearPositionDialog(QtGui.QDialog):
         Returns:
             Dictionary with module, pressure_angle, helix_angle, and gear_type
         """
-        param_obj = gear_info["param_obj"]
-        specs = {
-            "module": 0.0,
-            "pressure_angle": 0.0,
-            "helix_angle": 0.0,
-            "gear_type": "unknown",
-            "is_internal": False,
-        }
-
-        try:
-            if hasattr(param_obj, "Module"):
-                specs["module"] = float(
-                    param_obj.Module.Value
-                    if hasattr(param_obj.Module, "Value")
-                    else param_obj.Module
-                )
-            if hasattr(param_obj, "PressureAngle"):
-                specs["pressure_angle"] = float(
-                    param_obj.PressureAngle.Value
-                    if hasattr(param_obj.PressureAngle, "Value")
-                    else param_obj.PressureAngle
-                )
-
-            obj_name = gear_info["name"]
-
-            # Check for internal gears first
-            if "Internal" in obj_name:
-                specs["is_internal"] = True
-                if "Spur" in obj_name:
-                    specs["gear_type"] = "spur"
-                    specs["helix_angle"] = 0.0
-                elif "Herringbone" in obj_name:
-                    specs["gear_type"] = "herringbone"
-                    if hasattr(param_obj, "HelixAngle"):
-                        specs["helix_angle"] = float(
-                            param_obj.HelixAngle.Value
-                            if hasattr(param_obj.HelixAngle, "Value")
-                            else param_obj.HelixAngle
-                        )
-                elif "Helix" in obj_name:
-                    specs["gear_type"] = "helical"
-                    if hasattr(param_obj, "HelixAngle"):
-                        specs["helix_angle"] = float(
-                            param_obj.HelixAngle.Value
-                            if hasattr(param_obj.HelixAngle, "Value")
-                            else param_obj.HelixAngle
-                        )
-            # External gears
-            elif "GenericSpur" in obj_name:
-                specs["gear_type"] = "spur"
-                specs["helix_angle"] = 0.0
-            elif "GenericHerringbone" in obj_name:
-                specs["gear_type"] = "herringbone"
-                if hasattr(param_obj, "Angle1"):
-                    specs["helix_angle"] = float(
-                        param_obj.Angle1.Value
-                        if hasattr(param_obj.Angle1, "Value")
-                        else param_obj.Angle1
-                    )
-            elif "GenericHelix" in obj_name:
-                specs["gear_type"] = "helical"
-                if hasattr(param_obj, "HelixAngle"):
-                    specs["helix_angle"] = float(
-                        param_obj.HelixAngle.Value
-                        if hasattr(param_obj.HelixAngle, "Value")
-                        else param_obj.HelixAngle
-                    )
-        except Exception:
-            pass
-
-        return specs
+        # Use the module-level function
+        return getGearSpecs(gear_info)
 
     def areGearsCompatible(self, gear1_info: Dict, gear2_info: Dict) -> bool:
         """Check if two gears are compatible for meshing.
@@ -171,30 +102,90 @@ class GearPositionDialog(QtGui.QDialog):
 
     def moveAndFinalize(self):
         """Move gear 2 to final position and delete preview."""
+        idx1 = self.gear1_combo.currentIndex()
         idx2_data = self.gear2_combo.itemData(self.gear2_combo.currentIndex())
-        if not self.preview_body or idx2_data is None:
+
+        if idx1 < 0 or idx2_data is None:
             return
 
+        gear1_info = self.gears[idx1]
         gear2_info = self.gears[idx2_data]
-        gear2_body_name = self.preview_body.Name
         real_gear2_body = gear2_info["body_obj"]
+        rotation_angle = self.angle_spinbox.value()
 
-        real_gear2_body.Placement = self.preview_body.Placement
-        real_gear2_body.Document.recompute()
+        # Check if there's a preview to use
+        if self.preview_objects and App.ActiveDocument:
+            # Get the latest preview object
+            latest_preview_name = self.preview_objects[-1]
+            preview_obj = App.ActiveDocument.getObject(latest_preview_name)
 
-        self.preview_body.Document.removeObject(gear2_body_name)
-        self.preview_body = None
+            if preview_obj and preview_obj.isValid():
+                # Use the preview's placement
+                real_gear2_body.Placement = preview_obj.Placement
+            else:
+                # No valid preview, recalculate position from angle
+                self._calculateAndApplyPosition(gear1_info, gear2_info, rotation_angle)
+        else:
+            # No preview exists, recalculate position from angle
+            self._calculateAndApplyPosition(gear1_info, gear2_info, rotation_angle)
 
+        # Update parameter object
         gear2_param = gear2_info["param_obj"]
         gear2_param.OriginX = real_gear2_body.Placement.Base.x
         gear2_param.OriginY = real_gear2_body.Placement.Base.y
         gear2_param.OriginZ = real_gear2_body.Placement.Base.z
-        gear2_param.Angle = real_gear2_body.Placement.Rotation.Angle
+
+        # Extract rotation angle from placement
+        rotation = real_gear2_body.Placement.Rotation
+        angle_deg = math.degrees(
+            math.atan2(
+                rotation.Axis.y * math.sin(math.radians(rotation.Angle)),
+                rotation.Axis.x * math.sin(math.radians(rotation.Angle)),
+            )
+        )
+        gear2_param.Angle = angle_deg
 
         gear2_param.Document.recompute()
+
+        # Clean up all previews
+        self.cleanupPreview()
+
         App.Console.PrintMessage(
-            f"Moved '{real_gear2_body.Name}' to final position\n"
+            f"Moved '{real_gear2_body.Name}' to final position at {rotation_angle:.1f}°\n"
         )
+
+    def _calculateAndApplyPosition(self, gear1_info, gear2_info, rotation_angle):
+        """Calculate and apply position for gear2 based on rotation angle around gear1."""
+        import math
+
+        gear1_body = gear1_info["body_obj"]
+        gear2_body = gear2_info["body_obj"]
+
+        center_origin = gear1_body.Placement.Base
+
+        # Get gear specs for center distance calculation
+        gear1_specs = self.getGearSpecs(gear1_info)
+        gear2_specs = self.getGearSpecs(gear2_info)
+
+        # Calculate center distance
+        center_distance = calculateCenterDistance(gear1_info, gear2_info, gear1_specs, gear2_specs)
+
+        # Calculate new position
+        angle_rad = rotation_angle * math.pi / 180.0
+        dx = center_distance * math.cos(angle_rad)
+        dy = center_distance * math.sin(angle_rad)
+
+        new_x = center_origin.x + dx
+        new_y = center_origin.y + dy
+        new_z = center_origin.z
+
+        # Apply new placement
+        new_placement = App.Placement(
+            App.Vector(new_x, new_y, new_z),
+            App.Rotation(App.Vector(0, 0, 1), rotation_angle),
+        )
+
+        gear2_body.Placement = new_placement
 
     def getCompatibleGears(self, selected_gear_idx: int) -> List[int]:
         """Get list of compatible gear indices.
@@ -378,19 +369,25 @@ class GearPositionDialog(QtGui.QDialog):
     def updateDistance(self):
         """Update calculated center distance based on selected gears."""
         idx1 = self.gear1_combo.currentIndex()
-        idx2 = self.gear2_combo.currentIndex()
+        idx2_data = self.gear2_combo.itemData(self.gear2_combo.currentIndex())
 
-        if idx1 >= 0 and idx2 >= 0:
+        if idx1 >= 0 and idx2_data is not None:
             gear1 = self.gears[idx1]
-            gear2 = self.gears[idx2]
+            gear2 = self.gears[idx2_data]
 
-            pitch1 = gear1.get("pitch_diameter", 0.0)
-            pitch2 = gear2.get("pitch_diameter", 0.0)
+            # Get gear specs for internal gear detection
+            gear1_specs = self.getGearSpecs(gear1)
+            gear2_specs = self.getGearSpecs(gear2)
 
-            center_distance = (pitch1 + pitch2) / 2.0
-            self.center_distance_label.setText(
-                f"Center Distance: {center_distance:.3f} mm"
-            )
+            try:
+                center_distance = calculateCenterDistance(gear1, gear2, gear1_specs, gear2_specs)
+                self.center_distance_label.setText(
+                    f"Center Distance: {center_distance:.3f} mm"
+                )
+            except Exception as e:
+                self.center_distance_label.setText(
+                    f"Center Distance: Error - {str(e)}"
+                )
 
     def positionFirstGear(self):
         """Position first gear beside second gear at specified angle."""
@@ -448,17 +445,10 @@ class GearPositionDialog(QtGui.QDialog):
                         gear2_body_name
                     )
 
-                    if original_gear2_origin:
-                        current_distance = original_gear2_origin.sub(center_origin)
-                        distance = (
-                            current_distance.x**2 + current_distance.y**2
-                        ) ** 0.5
-                    else:
-                        self.current_center_distance = (
-                            gear1_info.get("pitch_diameter", 0.0)
-                            + gear2_info.get("pitch_diameter", 0.0)
-                        ) / 2.0
-                        distance = self.current_center_distance
+                    # Always calculate center distance using gear specs for internal gear support
+                    gear1_specs = self.getGearSpecs(gear1_info)
+                    gear2_specs = self.getGearSpecs(gear2_info)
+                    distance = calculateCenterDistance(gear1_info, gear2_info, gear1_specs, gear2_specs)
 
                     angle_rad = rotation_angle * math.pi / 180.0
 
@@ -544,15 +534,15 @@ class GearPositionDialog(QtGui.QDialog):
                         gear2_body_name
                     ]
 
-                self.current_center_distance = (
-                    gear1_info.get("pitch_diameter", 0.0)
-                    + gear2_info.get("pitch_diameter", 0.0)
-                ) / 2.0
+                # Calculate center distance using gear specs for internal gear support
+                gear1_specs = self.getGearSpecs(gear1_info)
+                gear2_specs = self.getGearSpecs(gear2_info)
+                center_distance = calculateCenterDistance(gear1_info, gear2_info, gear1_specs, gear2_specs)
 
                 angle_rad = rotation_angle * math.pi / 180.0
 
-                dx = self.current_center_distance * math.cos(angle_rad)
-                dy = self.current_center_distance * math.sin(angle_rad)
+                dx = center_distance * math.cos(angle_rad)
+                dy = center_distance * math.sin(angle_rad)
 
                 new_x = center_origin.x + dx
                 new_y = center_origin.y + dy
@@ -674,6 +664,88 @@ def rotateGearAround(gear_to_rotate_param, center_gear_param, angle_deg: float):
     )
 
 
+def getGearSpecs(gear_info: Dict) -> Dict:
+    """Get gear specifications from gear info dict.
+
+    Args:
+        gear_info: Dictionary containing gear information (must have 'param_obj' and 'name')
+
+    Returns:
+        Dictionary with module, pressure_angle, helix_angle, gear_type, and is_internal
+    """
+    param_obj = gear_info["param_obj"]
+    specs = {
+        "module": 0.0,
+        "pressure_angle": 0.0,
+        "helix_angle": 0.0,
+        "gear_type": "unknown",
+        "is_internal": False,
+    }
+
+    try:
+        if hasattr(param_obj, "Module"):
+            specs["module"] = float(
+                param_obj.Module.Value
+                if hasattr(param_obj.Module, "Value")
+                else param_obj.Module
+            )
+        if hasattr(param_obj, "PressureAngle"):
+            specs["pressure_angle"] = float(
+                param_obj.PressureAngle.Value
+                if hasattr(param_obj.PressureAngle, "Value")
+                else param_obj.PressureAngle
+            )
+
+        obj_name = gear_info["name"]
+
+        # Check for internal gears first
+        if "Internal" in obj_name:
+            specs["is_internal"] = True
+            if "Spur" in obj_name:
+                specs["gear_type"] = "spur"
+                specs["helix_angle"] = 0.0
+            elif "Herringbone" in obj_name:
+                specs["gear_type"] = "herringbone"
+                if hasattr(param_obj, "HelixAngle"):
+                    specs["helix_angle"] = float(
+                        param_obj.HelixAngle.Value
+                        if hasattr(param_obj.HelixAngle, "Value")
+                        else param_obj.HelixAngle
+                    )
+            elif "Helix" in obj_name:
+                specs["gear_type"] = "helical"
+                if hasattr(param_obj, "HelixAngle"):
+                    specs["helix_angle"] = float(
+                        param_obj.HelixAngle.Value
+                        if hasattr(param_obj.HelixAngle, "Value")
+                        else param_obj.HelixAngle
+                    )
+        # External gears
+        elif "GenericSpur" in obj_name:
+            specs["gear_type"] = "spur"
+            specs["helix_angle"] = 0.0
+        elif "GenericHerringbone" in obj_name:
+            specs["gear_type"] = "herringbone"
+            if hasattr(param_obj, "Angle1"):
+                specs["helix_angle"] = float(
+                    param_obj.Angle1.Value
+                    if hasattr(param_obj.Angle1, "Value")
+                    else param_obj.Angle1
+                )
+        elif "GenericHelix" in obj_name:
+            specs["gear_type"] = "helical"
+            if hasattr(param_obj, "HelixAngle"):
+                specs["helix_angle"] = float(
+                    param_obj.HelixAngle.Value
+                    if hasattr(param_obj.HelixAngle, "Value")
+                    else param_obj.HelixAngle
+                )
+    except Exception:
+        pass
+
+    return specs
+
+
 def findGearsInDocument(doc) -> List[Dict]:
     """Find all gear parameter objects in document and map to their bodies.
 
@@ -727,19 +799,38 @@ def findGearsInDocument(doc) -> List[Dict]:
     return gears
 
 
-def calculateCenterDistance(gear1_params: Dict, gear2_params: Dict) -> float:
+def calculateCenterDistance(gear1_params: Dict, gear2_params: Dict, gear1_specs: Dict = None, gear2_specs: Dict = None) -> float:
     """Calculate center distance between two gears.
 
     Args:
         gear1_params: First gear parameters dict
         gear2_params: Second gear parameters dict
+        gear1_specs: First gear specifications (with is_internal flag)
+        gear2_specs: Second gear specifications (with is_internal flag)
 
     Returns:
         Center distance in mm
     """
     pitch1 = gear1_params.get("pitch_diameter", 0.0)
     pitch2 = gear2_params.get("pitch_diameter", 0.0)
-    return (pitch1 + pitch2) / 2.0
+
+    # Check if either gear is internal
+    is_internal1 = gear1_specs.get("is_internal", False) if gear1_specs else False
+    is_internal2 = gear2_specs.get("is_internal", False) if gear2_specs else False
+
+    # Calculate based on gear types
+    if is_internal1 and is_internal2:
+        # Internal + Internal doesn't make physical sense
+        raise Exception("Cannot mesh two internal gears together")
+    elif is_internal1 and not is_internal2:
+        # Internal + External: center distance = (pitch_internal - pitch_external) / 2
+        return (pitch1 - pitch2) / 2.0
+    elif not is_internal1 and is_internal2:
+        # External + Internal: center distance = (pitch_internal - pitch_external) / 2
+        return (pitch2 - pitch1) / 2.0
+    else:
+        # External + External: center distance = (pitch1 + pitch2) / 2
+        return (pitch1 + pitch2) / 2.0
 
 
 def positionGearBeside(
@@ -759,8 +850,12 @@ def positionGearBeside(
     pitch1 = gear1_params.get("pitch_diameter", 0.0)
     pitch2 = gear2_params.get("pitch_diameter", 0.0)
 
+    # Get gear specs to determine if internal
+    gear1_specs = getGearSpecs(gear1_params)
+    gear2_specs = getGearSpecs(gear2_params)
+
     # Use the calculateCenterDistance method for proper center distance calculation
-    center_distance = calculateCenterDistance(gear1_params, gear2_params)
+    center_distance = calculateCenterDistance(gear1_params, gear2_params, gear1_specs, gear2_specs)
 
     angle_rad = angle_deg * math.pi / 180.0
 
