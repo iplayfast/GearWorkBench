@@ -24,8 +24,6 @@ smWB_icons_path = os.path.join(smWBpath, 'icons')
 global mainIcon
 mainIcon = os.path.join(smWB_icons_path, 'cycloidGear.svg')
 
-# Debug: print icon path
-# App.Console.PrintMessage(f"Cycloid Gear icon path: {mainIcon}\n")
 if not os.path.exists(mainIcon):
     App.Console.PrintWarning(f"Cycloid Gear icon not found at: {mainIcon}\n")
 

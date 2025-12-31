@@ -4,10 +4,12 @@ This module provides a unified framework for creating internal (ring) gear types
 using a master herringbone gear builder that handles all cases through
 helix angle distribution parameters.
 
-Supports: Internal Spur, Internal Helical, Internal Herringbone gears
+Refactored to use Boolean Cut with EXTERNAL TOOTH PROFILE (The Gap).
+Fixes:
+- Adds clearance epsilon to cutter to prevent coincident face errors.
 
 Copyright 2025, Chris Bruner
-Version v1.0.0
+Version v1.3.0 
 License LGPL V2.1
 """
 
@@ -25,7 +27,7 @@ from PySide import QtCore
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, "icons")
 
-version = "Dec 29, 2025"
+version = "Dec 31, 2025"
 
 
 def QT_TRANSLATE_NOOP(scope, text):
@@ -47,124 +49,26 @@ def validateInternalParameters(parameters):
 
 
 # ============================================================================
-# INTERNAL TOOTH PROFILE GENERATORS
+# PROFILE GENERATORS
 # ============================================================================
 
-def generateInternalToothProfile(sketch, parameters):
+def generateInternalCutterProfile(sketch, parameters):
     """
-    Generate internal gear tooth profile (teeth pointing inward).
-    Uses B-splines for involute flanks, arcs for tip and root.
-
-    For internal gears, the involute is parameterized by roll angle (phi)
-    and positioned differently than external gears.
+    Generates the CUTTER profile.
+    For an internal gear, the 'Gap' is the shape of an EXTERNAL tooth.
+    So we call the standard external tooth generator here.
     """
-    module = parameters["module"]
-    num_teeth = parameters["num_teeth"]
-    pressure_angle_rad = parameters["pressure_angle"] * util.DEG_TO_RAD
-    profile_shift = parameters.get("profile_shift", 0.0)
-
-    # Internal gear diameter calculations
-    dw = module * num_teeth  # Pitch diameter
-    dg = dw * math.cos(pressure_angle_rad)  # Base diameter
-    rb = dg / 2.0  # Base radius
-
-    # For internal gears: addendum is INWARD (smaller), dedendum is OUTWARD (larger)
-    da_internal = dw - 2 * module * (gearMath.ADDENDUM_FACTOR + profile_shift)  # Inner tip diameter
-    df_internal = dw + 2 * module * (gearMath.DEDENDUM_FACTOR - profile_shift)  # Outer root diameter
-
-    # Tooth thickness angle calculation for internal gear
-    # beta is half the angular tooth thickness at pitch circle
-    beta = (math.pi / (2 * num_teeth)) + (2 * profile_shift * math.tan(pressure_angle_rad) / num_teeth)
-    inv_alpha = math.tan(pressure_angle_rad) - pressure_angle_rad
-    tooth_center_offset = beta - inv_alpha  # Note: MINUS for internal gear
-
-    # Generate involute points parameterized by roll angle (phi)
-    num_points = 20
-    epsilon = 0.001
-    start_radius = max(da_internal / 2.0, rb + epsilon)
-    end_radius = df_internal / 2.0
-
-    # Calculate phi range from radii
-    # r = rb * sqrt(1 + phi^2), so phi = sqrt((r/rb)^2 - 1)
-    phi_start = math.sqrt(max(0, (start_radius / rb)**2 - 1))
-    phi_end = math.sqrt(max(0, (end_radius / rb)**2 - 1))
-
-    right_flank_pts = []
-
-    for i in range(num_points):
-        t = i / (num_points - 1)
-        phi = phi_start + t * (phi_end - phi_start)
-
-        # Radius at this roll angle
-        r = rb * math.sqrt(1 + phi**2)
-
-        # Involute function: inv(phi) = phi - atan(phi) for internal gear parameterization
-        theta_inv = phi - math.atan(phi)
-
-        # Angle from Y-axis (tooth centered on Y-axis pointing up)
-        angle = (math.pi / 2.0) - tooth_center_offset - theta_inv
-
-        # Point on involute
-        x = r * math.cos(angle)
-        y = r * math.sin(angle)
-        right_flank_pts.append(App.Vector(x, y, 0))
-
-    # Mirror for left flank
-    left_flank_pts = util.mirrorPointsX(right_flank_pts)
-
-    geo_list = []
-
-    # 1. Right involute flank (B-spline)
-    if len(right_flank_pts) >= 2:
-        bspline = Part.BSplineCurve()
-        bspline.interpolate(right_flank_pts)
-        geo_list.append(sketch.addGeometry(bspline, False))
-
-    # 2. Root arc (outer edge at df_internal)
-    # Project endpoints onto df_internal circle to ensure all 3 points are coplanar
-    r_root = df_internal / 2.0
-    angle_root_right = math.atan2(right_flank_pts[-1].y, right_flank_pts[-1].x)
-    angle_root_left = math.atan2(left_flank_pts[-1].y, left_flank_pts[-1].x)
-    p_root_right = App.Vector(r_root * math.cos(angle_root_right), r_root * math.sin(angle_root_right), 0)
-    p_root_left = App.Vector(r_root * math.cos(angle_root_left), r_root * math.sin(angle_root_left), 0)
-    p_root_mid = App.Vector(0, r_root, 0)
-    root_arc = Part.Arc(p_root_right, p_root_mid, p_root_left)
-    geo_list.append(sketch.addGeometry(root_arc, False))
-
-    # 3. Left involute flank (B-spline)
-    if len(left_flank_pts) >= 2:
-        bspline = Part.BSplineCurve()
-        bspline.interpolate(left_flank_pts)
-        geo_list.append(sketch.addGeometry(bspline, False))
-
-    # 4. Tip arc (inner edge at da_internal)
-    # Project endpoints onto da_internal circle to ensure all 3 points are coplanar
-    r_tip = da_internal / 2.0
-    angle_tip_left = math.atan2(left_flank_pts[-1].y, left_flank_pts[-1].x)
-    angle_tip_right = math.atan2(right_flank_pts[0].y, right_flank_pts[0].x)
-    p_tip_left = App.Vector(r_tip * math.cos(angle_tip_left), r_tip * math.sin(angle_tip_left), 0)
-    p_tip_right = App.Vector(r_tip * math.cos(angle_tip_right), r_tip * math.sin(angle_tip_right), 0)
-    p_tip_mid = App.Vector(0, r_tip, 0)
-    tip_arc = Part.Arc(p_tip_left, p_tip_mid, p_tip_right)
-    geo_list.append(sketch.addGeometry(tip_arc, False))
-
-    util.finalizeSketchGeometry(sketch, geo_list)
+    gearMath.generateToothProfile(sketch, parameters)
 
 
-def generateInternalSpurGearProfile(sketch, parameters):
-    """Default profile function for internal spur gears."""
-    generateInternalToothProfile(sketch, parameters)
-
-
-def generateInternalHelicalGearProfile(sketch, parameters):
+def generateInternalHelicalCutterProfile(sketch, parameters):
     """
-    Profile function for internal helical/herringbone gears.
-    Converts from normal module (manufacturing standard) to transverse values.
+    Generates the Helical CUTTER profile (Transverse conversion).
     """
     helix_angle = parameters.get("helix_angle", 0.0)
 
     if helix_angle == 0:
-        generateInternalToothProfile(sketch, parameters)
+        generateInternalCutterProfile(sketch, parameters)
         return
 
     # Convert to transverse values
@@ -184,7 +88,8 @@ def generateInternalHelicalGearProfile(sketch, parameters):
     transverse_params["module"] = mt
     transverse_params["pressure_angle"] = alpha_t
 
-    generateInternalToothProfile(sketch, transverse_params)
+    # Generate the EXTERNAL tooth profile (which is the cutter for the gap)
+    gearMath.generateToothProfile(sketch, transverse_params)
 
 
 # ============================================================================
@@ -199,13 +104,7 @@ def genericInternalHerringboneGear(
     profile_func: Optional[Callable] = None,
 ):
     """
-    Master builder for all internal gear types using herringbone pattern.
-
-    Creates tooth using up to 3 sketches (bottom, middle, top) based on angles:
-    - If angle1 == 0: two-sketch mode (bottom→top)
-    - If angle1 != 0: three-sketch mode (bottom→middle→top)
-
-    Parameters use NORMAL module convention for helical/herringbone gears.
+    Master builder using Boolean Cut.
     """
     validateInternalParameters(parameters)
 
@@ -217,12 +116,11 @@ def genericInternalHerringboneGear(
     profile_shift = parameters.get("profile_shift", 0.0)
     rim_thickness = parameters.get("rim_thickness", 3.0)
 
-    # Ensure helix_angle is in parameters for profile function
     if "helix_angle" not in parameters:
         parameters = parameters.copy()
         parameters["helix_angle"] = abs(angle1) if angle1 != 0 else abs(angle2)
 
-    # Calculate dimensions using transverse module if helical
+    # Dimensions
     helix_angle = parameters.get("helix_angle", 0.0)
     module = parameters["module"]
     if helix_angle != 0:
@@ -232,66 +130,45 @@ def genericInternalHerringboneGear(
         mt = module
 
     dw = mt * num_teeth
+    
+    # CALCULATE DIAMETERS
+    # Tip Radius (Inner Hole): where the teeth END.
+    ra_internal = dw / 2.0 - mt * (gearMath.ADDENDUM_FACTOR + profile_shift)
+    
+    # Root Radius (Bottom of the cut): where the teeth START.
     rf_internal = dw / 2.0 + mt * (gearMath.DEDENDUM_FACTOR - profile_shift)
+    
+    # Outer Diameter of the Part
     outer_diameter = rf_internal * 2.0 + 2 * rim_thickness
 
     if profile_func is None:
-        profile_func = generateInternalHelicalGearProfile
+        profile_func = generateInternalHelicalCutterProfile
+
+    # CUTTER CONFIGURATION
+    # We extend the cutter slightly deeper than the nominal root to ensure clean boolean cuts.
+    # This prevents coincident faces at the bottom of the tooth gap.
+    cut_params = parameters.copy()
+    cut_params["tip_radius"] = rf_internal + (0.01 * module) 
 
     if angle1 == 0:
         return _createTwoSketchInternalGear(
-            body, parameters, height, num_teeth, angle2, rf_internal, outer_diameter, rim_thickness, profile_func
+            body, cut_params, height, num_teeth, angle2, ra_internal, outer_diameter, profile_func
         )
     else:
         return _createThreeSketchInternalGear(
-            body, parameters, height, num_teeth, angle1, angle2, rf_internal, outer_diameter, rim_thickness, profile_func
+            body, cut_params, height, num_teeth, angle1, angle2, ra_internal, outer_diameter, profile_func
         )
 
 
 def _createTwoSketchInternalGear(
-    body, parameters, height, num_teeth, angle2, rf_internal, outer_diameter, rim_thickness, profile_func
+    body, parameters, height, num_teeth, angle2, ra_internal, outer_diameter, profile_func
 ):
-    """Create internal gear with 2 sketches (angle1 == 0)."""
+    """Create internal gear with 2 sketches (Subtractive)."""
     doc = body.Document
 
-    # Bottom sketch
-    sketch_bottom = util.createSketch(body, "ToothProfile_Bottom")
-    sketch_bottom.Placement = App.Placement(App.Vector(0, 0, 0), App.Rotation(0, 0, 0))
-    profile_func(sketch_bottom, parameters)
-
-    # Top sketch with rotation
-    sketch_top = util.createSketch(body, "ToothProfile_Top")
-    sketch_top.Placement = App.Placement(
-        App.Vector(0, 0, height), App.Rotation(App.Vector(0, 0, 1), angle2)
-    )
-    profile_func(sketch_top, parameters)
-
-    # Loft the tooth
-    tooth_loft = body.newObject("PartDesign::AdditiveLoft", "SingleTooth")
-    tooth_loft.Profile = sketch_bottom
-    tooth_loft.Sections = [sketch_top]
-    tooth_loft.Ruled = True
-
-    # Polar pattern for all teeth - use body's Origin Z axis directly
-    gear_teeth = body.newObject("PartDesign::PolarPattern", "Teeth")
-    origin = body.Origin
-    z_axis = origin.OriginFeatures[2]  # Z axis
-    gear_teeth.Axis = (z_axis, [""])
-    gear_teeth.Angle = 360
-    gear_teeth.Occurrences = num_teeth
-    gear_teeth.Originals = [tooth_loft]
-
-    tooth_loft.Visibility = False
-    sketch_bottom.Visibility = False
-    sketch_top.Visibility = False
-    gear_teeth.Visibility = True
-    body.Tip = gear_teeth
-
-    # Recompute to ensure polar pattern is fully resolved before adding ring
-    doc.recompute()
-
-    # Outer ring
+    # 1. Base Ring
     ring_sketch = util.createSketch(body, "Ring")
+    
     outer_circle = ring_sketch.addGeometry(
         Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), outer_diameter / 2.0), False
     )
@@ -299,15 +176,50 @@ def _createTwoSketchInternalGear(
     ring_sketch.addConstraint(Sketcher.Constraint("Diameter", outer_circle, outer_diameter))
 
     inner_circle = ring_sketch.addGeometry(
-        Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), rf_internal), False
+        Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), ra_internal), False
     )
     ring_sketch.addConstraint(Sketcher.Constraint("Coincident", inner_circle, 3, -1, 1))
-    ring_sketch.addConstraint(Sketcher.Constraint("Diameter", inner_circle, rf_internal * 2.0))
+    ring_sketch.addConstraint(Sketcher.Constraint("Diameter", inner_circle, ra_internal * 2.0))
 
     ring_pad = util.createPad(body, ring_sketch, height, "Ring")
-    gear_teeth.Visibility = False
-    ring_pad.Visibility = True
-    body.Tip = ring_pad
+    
+    # 2. Cutters (The Gap)
+    sketch_bottom = util.createSketch(body, "ToothGap_Bottom")
+    sketch_bottom.Placement = App.Placement(App.Vector(0, 0, 0), App.Rotation(0, 0, 0))
+    sketch_bottom.MapMode = 'Deactivated'
+    profile_func(sketch_bottom, parameters)
+
+    sketch_top = util.createSketch(body, "ToothGap_Top")
+    sketch_top.Placement = App.Placement(
+        App.Vector(0, 0, height), App.Rotation(App.Vector(0, 0, 1), angle2)
+    )
+    sketch_top.MapMode = 'Deactivated'
+    profile_func(sketch_top, parameters)
+
+    # 3. Subtractive Loft
+    tooth_cut = body.newObject("PartDesign::SubtractiveLoft", "ToothGapCut")
+    tooth_cut.Profile = sketch_bottom
+    tooth_cut.Sections = [sketch_top]
+    tooth_cut.Ruled = True
+    tooth_cut.Refine = False
+
+    # 4. Pattern
+    gear_teeth = body.newObject("PartDesign::PolarPattern", "Teeth")
+    origin = body.Origin
+    z_axis = origin.OriginFeatures[2]
+    gear_teeth.Axis = (z_axis, [""])
+    gear_teeth.Angle = 360
+    gear_teeth.Occurrences = num_teeth
+    gear_teeth.Originals = [tooth_cut]
+
+    # Cleanup
+    ring_sketch.Visibility = False
+    sketch_bottom.Visibility = False
+    sketch_top.Visibility = False
+    tooth_cut.Visibility = False
+    ring_pad.Visibility = False
+    gear_teeth.Visibility = True
+    body.Tip = gear_teeth
 
     doc.recompute()
     if App.GuiUp:
@@ -320,62 +232,15 @@ def _createTwoSketchInternalGear(
 
 
 def _createThreeSketchInternalGear(
-    body, parameters, height, num_teeth, angle1, angle2, rf_internal, outer_diameter, rim_thickness, profile_func
+    body, parameters, height, num_teeth, angle1, angle2, ra_internal, outer_diameter, profile_func
 ):
-    """Create internal gear with 3 sketches (herringbone pattern)."""
+    """Create internal herringbone gear (Subtractive)."""
     doc = body.Document
     half_height = height / 2.0
 
-    # Bottom sketch
-    sketch_bottom = util.createSketch(body, "ToothProfile_Bottom")
-    sketch_bottom.Placement = App.Placement(App.Vector(0, 0, 0), App.Rotation(0, 0, 0))
-    profile_func(sketch_bottom, parameters)
-
-    # Middle sketch with angle1 rotation
-    sketch_middle = util.createSketch(body, "ToothProfile_Middle")
-    sketch_middle.Placement = App.Placement(
-        App.Vector(0, 0, half_height), App.Rotation(App.Vector(0, 0, 1), angle1)
-    )
-    profile_func(sketch_middle, parameters)
-
-    # Top sketch with angle1 + angle2 rotation
-    sketch_top = util.createSketch(body, "ToothProfile_Top")
-    sketch_top.Placement = App.Placement(
-        App.Vector(0, 0, height), App.Rotation(App.Vector(0, 0, 1), angle1 + angle2)
-    )
-    profile_func(sketch_top, parameters)
-
-    # Lower half loft
-    loft_lower = body.newObject("PartDesign::AdditiveLoft", "ToothLower")
-    loft_lower.Profile = sketch_bottom
-    loft_lower.Sections = [sketch_middle]
-    loft_lower.Ruled = True
-
-    # Upper half loft
-    loft_upper = body.newObject("PartDesign::AdditiveLoft", "ToothUpper")
-    loft_upper.Profile = sketch_middle
-    loft_upper.Sections = [sketch_top]
-    loft_upper.Ruled = True
-
-    # Polar pattern for all teeth
-    gear_teeth = body.newObject("PartDesign::PolarPattern", "Teeth")
-    origin = body.Origin
-    z_axis = origin.OriginFeatures[2]
-    gear_teeth.Axis = (z_axis, [""])
-    gear_teeth.Angle = 360
-    gear_teeth.Occurrences = num_teeth
-    gear_teeth.Originals = [loft_lower, loft_upper]
-
-    loft_lower.Visibility = False
-    loft_upper.Visibility = False
-    sketch_bottom.Visibility = False
-    sketch_middle.Visibility = False
-    sketch_top.Visibility = False
-    gear_teeth.Visibility = True
-    body.Tip = gear_teeth
-
-    # Outer ring
+    # 1. Base Ring
     ring_sketch = util.createSketch(body, "Ring")
+    
     outer_circle = ring_sketch.addGeometry(
         Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), outer_diameter / 2.0), False
     )
@@ -383,15 +248,67 @@ def _createThreeSketchInternalGear(
     ring_sketch.addConstraint(Sketcher.Constraint("Diameter", outer_circle, outer_diameter))
 
     inner_circle = ring_sketch.addGeometry(
-        Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), rf_internal), False
+        Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), ra_internal), False
     )
     ring_sketch.addConstraint(Sketcher.Constraint("Coincident", inner_circle, 3, -1, 1))
-    ring_sketch.addConstraint(Sketcher.Constraint("Diameter", inner_circle, rf_internal * 2.0))
+    ring_sketch.addConstraint(Sketcher.Constraint("Diameter", inner_circle, ra_internal * 2.0))
 
     ring_pad = util.createPad(body, ring_sketch, height, "Ring")
-    gear_teeth.Visibility = False
-    ring_pad.Visibility = True
-    body.Tip = ring_pad
+
+    # 2. Cutters
+    sketch_bottom = util.createSketch(body, "ToothGap_Bottom")
+    sketch_bottom.Placement = App.Placement(App.Vector(0, 0, 0), App.Rotation(0, 0, 0))
+    sketch_bottom.MapMode = 'Deactivated'
+    profile_func(sketch_bottom, parameters)
+
+    sketch_middle = util.createSketch(body, "ToothGap_Middle")
+    sketch_middle.Placement = App.Placement(
+        App.Vector(0, 0, half_height), App.Rotation(App.Vector(0, 0, 1), angle1)
+    )
+    sketch_middle.MapMode = 'Deactivated'
+    profile_func(sketch_middle, parameters)
+
+    sketch_top = util.createSketch(body, "ToothGap_Top")
+    sketch_top.Placement = App.Placement(
+        App.Vector(0, 0, height), App.Rotation(App.Vector(0, 0, 1), angle1 + angle2)
+    )
+    sketch_top.MapMode = 'Deactivated'
+    profile_func(sketch_top, parameters)
+
+    # 3. Cuts
+    cut_lower = body.newObject("PartDesign::SubtractiveLoft", "ToothGapLower")
+    cut_lower.Profile = sketch_bottom
+    cut_lower.Sections = [sketch_middle]
+    cut_lower.Ruled = True
+    cut_lower.Refine = False
+
+
+    cut_upper = body.newObject("PartDesign::SubtractiveLoft", "ToothGapUpper")
+    cut_upper.Profile = sketch_middle
+    cut_upper.Sections = [sketch_top]
+    
+    cut_upper.Ruled = True    
+    cut_upper.Refine = False
+
+
+    # 4. Pattern
+    gear_teeth = body.newObject("PartDesign::PolarPattern", "Teeth")
+    origin = body.Origin
+    z_axis = origin.OriginFeatures[2]
+    gear_teeth.Axis = (z_axis, [""])
+    gear_teeth.Angle = 360
+    gear_teeth.Occurrences = num_teeth
+    gear_teeth.Originals = [cut_lower, cut_upper]
+
+    ring_sketch.Visibility = False
+    sketch_bottom.Visibility = False
+    sketch_middle.Visibility = False
+    sketch_top.Visibility = False
+    cut_lower.Visibility = False
+    cut_upper.Visibility = False
+    ring_pad.Visibility = False
+    gear_teeth.Visibility = True
+    body.Tip = gear_teeth
 
     doc.recompute()
     if App.GuiUp:
@@ -410,17 +327,12 @@ def _createThreeSketchInternalGear(
 def genericInternalHelixGear(
     doc, parameters, helix_angle: float, profile_func: Optional[Callable] = None
 ):
-    """
-    Create an internal helical gear (single helix angle).
-    Uses two-sketch mode with calculated total rotation.
-    """
     if profile_func is None:
-        profile_func = generateInternalHelicalGearProfile
+        profile_func = generateInternalHelicalCutterProfile
 
     params_with_helix = parameters.copy()
     params_with_helix["helix_angle"] = helix_angle
 
-    # Calculate total rotation for top sketch
     mn = parameters["module"]
     num_teeth = parameters["num_teeth"]
     height = parameters["height"]
@@ -440,12 +352,8 @@ def genericInternalHelixGear(
 
 
 def genericInternalSpurGear(doc, parameters, profile_func: Optional[Callable] = None):
-    """
-    Create an internal spur gear (zero helix angle).
-    Uses two-sketch mode with no rotation.
-    """
     if profile_func is None:
-        profile_func = generateInternalSpurGearProfile
+        profile_func = generateInternalCutterProfile  # Use External profile as cutter
 
     return genericInternalHerringboneGear(doc, parameters, 0.0, 0.0, profile_func)
 
@@ -558,7 +466,7 @@ class GenericInternalHelixGear:
         obj.addProperty("App::PropertyFloat", "ProfileShift", "InternalHelicalGear", "Profile shift coefficient").ProfileShift = H["profile_shift"]
         obj.addProperty("App::PropertyLength", "Height", "InternalHelicalGear", "Gear height").Height = H["height"]
         obj.addProperty("App::PropertyLength", "RimThickness", "InternalHelicalGear", "Rim thickness").RimThickness = H["rim_thickness"]
-        obj.addProperty("App::PropertyAngle", "HelixAngle", "InternalHelicalGear", "Helix angle").HelixAngle = 15.0
+        obj.addProperty("App::PropertyAngle", "HelixAngle", "InternalHelicalGear", "Helix angle").HelixAngle = -15.0
         obj.addProperty("App::PropertyString", "BodyName", "InternalHelicalGear", "Body name").BodyName = "GenericInternalHelixGear"
 
         self.Type = "GenericInternalHelixGear"
@@ -577,7 +485,6 @@ class GenericInternalHelixGear:
                 rim_thickness = fp.RimThickness.Value
                 helix_angle = fp.HelixAngle.Value
 
-                # Use transverse values for display
                 if helix_angle != 0:
                     mt = module / math.cos(helix_angle * util.DEG_TO_RAD)
                 else:
@@ -652,7 +559,7 @@ class GenericInternalHerringboneGear:
         obj.addProperty("App::PropertyFloat", "ProfileShift", "InternalHerringboneGear", "Profile shift coefficient").ProfileShift = H["profile_shift"]
         obj.addProperty("App::PropertyLength", "Height", "InternalHerringboneGear", "Gear height").Height = H["height"]
         obj.addProperty("App::PropertyLength", "RimThickness", "InternalHerringboneGear", "Rim thickness").RimThickness = H["rim_thickness"]
-        obj.addProperty("App::PropertyAngle", "HelixAngle", "InternalHerringboneGear", "Helix angle").HelixAngle = 30.0
+        obj.addProperty("App::PropertyAngle", "HelixAngle", "InternalHerringboneGear", "Helix angle").HelixAngle = -30.0
         obj.addProperty("App::PropertyString", "BodyName", "InternalHerringboneGear", "Body name").BodyName = "GenericInternalHerringboneGear"
 
         self.Type = "GenericInternalHerringboneGear"
