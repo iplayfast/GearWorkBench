@@ -16,6 +16,7 @@ import Sketcher
 import os
 import math
 from PySide import QtCore
+import genericNonCircular
 
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, 'icons')
@@ -27,7 +28,7 @@ version = 'Nov 30, 2025'
 def QT_TRANSLATE_NOOP(scope, text): return text
 
 # ============================================================================
-# GENERATION LOGIC 
+# GENERATION LOGIC
 # ============================================================================
 
 def validateNonCircularParameters(parameters):
@@ -35,60 +36,59 @@ def validateNonCircularParameters(parameters):
     if parameters["number_of_lobes"] < 1: raise gearMath.GearParameterError("Number of lobes must be at least 1")
     if parameters["major_radius"] <= 0: raise gearMath.GearParameterError("Major radius must be positive")
 
-def generateNonCircularGearPart(doc, parameters):
-    validateNonCircularParameters(parameters)
-    
-    body_name = parameters.get("body_name", "NonCircularGear")
-    body = util.readyPart(doc, body_name)
-    
+def generateLobedProfile(parameters):
+    """Generate a lobed profile using a sinusoidal radius function.
+
+    Uses the function: R(theta) = R_avg + Amplitude * cos(N * theta)
+    where N is the number of lobes.
+
+    Args:
+        parameters: Dictionary containing:
+            - number_of_lobes: Number of lobes in the profile
+            - major_radius: Maximum radius
+            - minor_radius: Minimum radius
+
+    Returns:
+        List of App.Vector points defining the profile
+    """
     number_of_lobes = parameters["number_of_lobes"]
     major_radius = parameters["major_radius"]
     minor_radius = parameters["minor_radius"]
-    height = parameters["height"]
-    bore_type = parameters.get("bore_type", "none")
-    
-    # 1. Generate Profile Points
-    # Use a sinusoidal function for the radius: R(theta) = R_avg + Amplitude * cos(N * theta)
-    # R_avg = (Major + Minor) / 2
-    # Amplitude = (Major - Minor) / 2
+
+    # Calculate average radius and amplitude
     r_avg = (major_radius + minor_radius) / 2.0
     amplitude = (major_radius - minor_radius) / 2.0
-    
-    num_points = 120 # Resolution
+
+    num_points = 120  # Resolution
     profile_points = []
-    
+
     for i in range(num_points):
         theta = (2 * math.pi * i) / num_points
         # The radius function
         r = r_avg + amplitude * math.cos(number_of_lobes * theta)
-        
+
         x = r * math.cos(theta)
         y = r * math.sin(theta)
         profile_points.append(App.Vector(x, y, 0))
-    
-    # Close the loop explicitly
-    profile_points.append(profile_points[0])
 
-    # 2. Create Sketch
-    sketch = util.createSketch(body, 'LobedProfile')
-    
-    # Create a B-Spline from the points
-    bspline = Part.BSplineCurve()
-    bspline.interpolate(profile_points, True) # Periodic/Closed
-    sketch.addGeometry(bspline, False)
-    
-    # 3. Extrude (Pad)
-    pad = util.createPad(body, sketch, height, 'GearBody')
-    body.Tip = pad
+    return profile_points
 
-    # 4. Bore
-    if bore_type != "none":
-        util.createBore(body, parameters, height)
+def generateNonCircularGearPart(doc, parameters):
+    """Generate non-circular gear using the generic non-circular system.
 
-    doc.recompute()
-    if App.GuiUp:
-        try: FreeCADGui.SendMsgToActiveView("ViewFit")
-        except Exception: pass
+    Non-circular gears have varying radius and are used for applications
+    requiring non-constant velocity ratios.
+    """
+    validateNonCircularParameters(parameters)
+
+    # Use the generic non-circular builder with lobed profile
+    result = genericNonCircular.genericNonCircularGear(
+        doc,
+        parameters,
+        profile_func=generateLobedProfile
+    )
+
+    return result
 
 class NonCircularGearCreateObject():
     """Command to create a new non-circular gear object."""

@@ -1,59 +1,40 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <svg
-   xmlns:dc="http://purl.org/dc/elements/1.1/"
-   xmlns:cc="http://creativecommons.org/ns#"
-   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
-   xmlns:svg="http://www.w3.org/2000/svg"
    xmlns="http://www.w3.org/2000/svg"
-   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
-   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
-   width="24"
-   height="24"
-   viewBox="0 0 24 24"
-   version="1.1"
-   id="svg8"
-   sodipodi:docname="HelicalGear.svg"
-   inkscape:version="1.0.1 (3bc2e813f5, 2020-09-07)">
-  <metadata
-     id="metadata14">
-    <rdf:RDF>
-      <cc:Work
-         rdf:about="">
-        <dc:format>image/svg+xml</dc:format>
-        <dc:type
-           rdf:resource="http://purl.org/dc/dcmitype/StillImage" />
-        <dc:title></dc:title>
-      </cc:Work>
-    </rdf:RDF>
-  </metadata>
-  <defs
-     id="defs12" />
-  <sodipodi:namedview
-     pagecolor="#ffffff"
-     bordercolor="#666666"
-     borderopacity="1"
-     objecttolerance="10"
-     gridtolerance="10"
-     guidetolerance="10"
-     inkscape:pageshadow="2"
-     inkscape:pageopacity="0"
-     inkscape:pagecheckerboard="0"
-     inkscape:document-units="px"
-     showgrid="false"
-     inkscape:zoom="34.037583"
-     inkscape:cx="10.887884"
-     inkscape:cy="11.457813"
-     inkscape:window-width="1920"
-     inkscape:window-height="1016"
-     inkscape:window-x="0"
-     inkscape:window-y="0"
-     inkscape:window-maximized="1"
-     inkscape:current-layer="svg8" />
-  <path
-     d="M12 2c-5.523 0-10 4.477-10 10s4.477 10 10 10 10-4.477 10-10-4.477-10-10-10zm0 18c-4.418 0-8-3.582-8-8s3.582-8 8-8 8 3.582 8 8-3.582 8-8 8zm-1-13h2v8h-2zm0 6h2v8h-2z"
-     fill="#4a90e2"
-     stroke="#2c5aa0"
-     stroke-width="1"
-     id="path2"
-     style="fill:#4a90e2;stroke:#2c5aa0;stroke-width:1" />
+   width="64"
+   height="64"
+   viewBox="0 0 64 64"
+   version="1.1">
+  <defs>
+    <style type="text/css">
+      .gear-body { fill:#4a90e2; stroke:#2c5aa0; stroke-width:2; }
+      .gear-hole { fill:#ffffff; }
+      .helix-line { stroke:#2c5aa0; stroke-width:1.5; fill:none; }
+    </style>
+  </defs>
+
+  <!-- Helical gear body with angled teeth -->
+  <g transform="translate(32,32)">
+    <!-- Teeth as angled rectangles in circular pattern (helical effect) -->
+    <g class="gear-body">
+      <rect x="18" y="-3" width="10" height="6" rx="1" transform="skewY(-15)" />
+      <rect x="18" y="-3" width="10" height="6" rx="1" transform="rotate(45) skewY(-15)" />
+      <rect x="18" y="-3" width="10" height="6" rx="1" transform="rotate(90) skewY(-15)" />
+      <rect x="18" y="-3" width="10" height="6" rx="1" transform="rotate(135) skewY(-15)" />
+      <rect x="18" y="-3" width="10" height="6" rx="1" transform="rotate(180) skewY(-15)" />
+      <rect x="18" y="-3" width="10" height="6" rx="1" transform="rotate(225) skewY(-15)" />
+      <rect x="18" y="-3" width="10" height="6" rx="1" transform="rotate(270) skewY(-15)" />
+      <rect x="18" y="-3" width="10" height="6" rx="1" transform="rotate(315) skewY(-15)" />
+
+      <!-- Inner ring -->
+      <circle cx="0" cy="0" r="18" />
+    </g>
+
+    <!-- Diagonal lines to show helix angle -->
+    <line x1="-14" y1="-14" x2="-10" y2="14" class="helix-line" />
+    <line x1="10" y1="-14" x2="14" y2="14" class="helix-line" />
+
+    <!-- Center hole -->
+    <circle cx="0" cy="0" r="8" class="gear-hole" />
+  </g>
 </svg>

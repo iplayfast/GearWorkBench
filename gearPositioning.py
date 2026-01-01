@@ -50,59 +50,24 @@ class GearPositionDialog(QtGui.QDialog):
     def areGearsCompatible(self, gear1_info: Dict, gear2_info: Dict) -> bool:
         """Check if two gears are compatible for meshing.
 
+        Now simplified to only check if modules match. This allows users to
+        experiment with different gear type combinations and decide if they work.
+
         Args:
             gear1_info: First gear information
             gear2_info: Second gear information
 
         Returns:
-            True if gears are compatible, False otherwise
+            True if gears have matching module, False otherwise
         """
         specs1 = self.getGearSpecs(gear1_info)
         specs2 = self.getGearSpecs(gear2_info)
 
         module_diff = abs(specs1["module"] - specs2["module"])
-        pressure_diff = abs(specs1["pressure_angle"] - specs2["pressure_angle"])
-
         module_compatible = module_diff < 0.001
-        pressure_compatible = pressure_diff < 0.001
 
-        if not (module_compatible and pressure_compatible):
-            return False
-
-        type1 = specs1["gear_type"]
-        type2 = specs2["gear_type"]
-        helix1 = specs1["helix_angle"]
-        helix2 = specs2["helix_angle"]
-
-        if type1 == "spur" and type2 == "spur":
-            return True
-
-        if type1 == "helical" and type2 == "helical":
-            # Compare magnitudes since gears can be used upside down or right-side up
-            helix_diff = abs(abs(helix1) - abs(helix2))
-            return helix_diff < 1.0
-
-        if type1 == "herringbone" and type2 == "herringbone":
-            # Compare magnitudes since gears can be used upside down or right-side up
-            helix_diff = abs(abs(helix1) - abs(helix2))
-            return helix_diff < 1.0
-
-        if (type1 == "spur" or type2 == "spur") and (
-            type1 != "spur" or type2 != "spur"
-        ):
-            return False
-
-        if (type1 == "helical" or type2 == "helical") and (
-            type1 != "helical" or type2 != "helical"
-        ):
-            return False
-
-        if (type1 == "herringbone" or type2 == "herringbone") and (
-            type1 != "herringbone" or type2 != "herringbone"
-        ):
-            return False
-
-        return False
+        # Only require matching module - let user decide if the combination works
+        return module_compatible
 
     def moveAndFinalize(self):
         """Move gear 1 to final position and delete preview."""
