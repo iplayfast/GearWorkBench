@@ -18,6 +18,7 @@ import Sketcher
 import os
 import math
 from PySide import QtCore
+import genericRack
 
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, 'icons')
@@ -98,66 +99,20 @@ def generateCycloidRackToothProfile(sketch, parameters):
     util.finalizeSketchGeometry(sketch, geo_list)
 
 def generateCycloidRackPart(doc, parameters):
-    validateCycloidRackParameters(parameters)
-    
-    body_name = parameters.get("body_name", "CycloidRack")
-    body = util.readyPart(doc, body_name)
-    
-    module = parameters["module"]
-    num_teeth = parameters["num_teeth"]
-    height = parameters["height"]
-    base_thickness = parameters["base_thickness"]
-    
-    pitch = math.pi * module
-    dedendum = module * parameters["dedendum_factor"]
+    """Generate cycloid rack using the generic rack system.
 
-    tooth_sketch = util.createSketch(body, 'ToothProfile')
-    generateCycloidRackToothProfile(tooth_sketch, parameters)
-    tooth_pad = util.createPad(body, tooth_sketch, height, 'Tooth')
-    
-    pattern = body.newObject('PartDesign::LinearPattern', 'TeethPattern')
-    pattern.Originals = [tooth_pad]
-    pattern.Direction = (tooth_sketch, ['H_Axis'])
-    pattern.Occurrences = num_teeth
-    if num_teeth > 1:
-        pattern.Length = (num_teeth - 1) * pitch
-    else:
-        pattern.Length = 0
-        
-    tooth_pad.Visibility = False
-    pattern.Visibility = True
-    body.Tip = pattern
-    
-    start_x = -pitch / 2.0
-    end_x = (num_teeth - 1) * pitch + pitch / 2.0
-    
-    base_sketch = util.createSketch(body, 'BaseProfile')
-    y_root = -dedendum
-    y_base = -dedendum - base_thickness
-    
-    p_tl = App.Vector(start_x, y_root, 0)
-    p_tr = App.Vector(end_x, y_root, 0)
-    p_br = App.Vector(end_x, y_base, 0)
-    p_bl = App.Vector(start_x, y_base, 0)
-    
-    points = [p_tl, p_tr, p_br, p_bl, p_tl]
-    for i in range(4):
-        line = Part.LineSegment(points[i], points[i+1])
-        idx = base_sketch.addGeometry(line, False)
-        base_sketch.addConstraint(Sketcher.Constraint('Block', idx))
-    for i in range(4):
-        base_sketch.addConstraint(Sketcher.Constraint('Coincident', i, 2, (i+1)%4, 1))
-        
-    base_pad = util.createPad(body, base_sketch, height, 'Base')
-    
-    pattern.Visibility = False
-    base_pad.Visibility = True
-    body.Tip = base_pad
-    
-    doc.recompute()
-    if App.GuiUp:
-        try: FreeCADGui.SendMsgToActiveView("ViewFit")
-        except Exception: pass
+    Cycloid racks use a custom tooth profile based on rolling curves.
+    """
+    validateCycloidRackParameters(parameters)
+
+    # Use the generic rack builder with cycloid profile
+    result = genericRack.genericRackGear(
+        doc,
+        parameters,
+        profile_func=generateCycloidRackToothProfile
+    )
+
+    return result
 
 class CycloidRackCreateObject():
     """Command to create a new cycloid rack object."""

@@ -124,7 +124,9 @@ def genericHerringboneGear(
         mt = module
 
     dw = mt * num_teeth
-    df = dw - 2 * mt * (gearMath.DEDENDUM_FACTOR - profile_shift)
+    # Use custom dedendum factor if provided (for cycloid and other special gears)
+    dedendum_factor = parameters.get("dedendum_factor", gearMath.DEDENDUM_FACTOR)
+    df = dw - 2 * mt * (dedendum_factor - profile_shift)
 
     if profile_func is None:
         profile_func = gearMath.generateHelicalGearProfile

@@ -18,6 +18,7 @@ import Sketcher
 import os
 import math
 from PySide import QtCore
+import genericGear
 
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, 'icons')
@@ -153,43 +154,27 @@ def generateCycloidToothProfile(sketch, parameters):
     util.finalizeSketchGeometry(sketch, geo_list)
 
 def generateCycloidGearPart(doc, parameters):
+    """Generate cycloid gear using the generic gear system.
+
+    Cycloid gears are always spur gears (angle1=0, angle2=0) since they
+    don't support helical or herringbone configurations.
+    """
     validateCycloidParameters(parameters)
-    
-    body_name = parameters.get("body_name", "CycloidGear")
-    body = util.readyPart(doc, body_name)
-    
-    module = parameters["module"]
-    num_teeth = parameters["num_teeth"]
-    height = parameters["height"]
-    dedendum_factor = parameters["dedendum_factor"]
-    
-    Rf = (module * num_teeth) / 2.0 - (module * dedendum_factor)
-    
-    sketch = util.createSketch(body, 'ToothProfile')
-    generateCycloidToothProfile(sketch, parameters)
-    tooth_pad = util.createPad(body, sketch, height, 'Tooth')
-    
-    polar = util.createPolar(body, tooth_pad, sketch, num_teeth, 'Teeth')
-    polar.Originals = [tooth_pad]
-    tooth_pad.Visibility = False
-    polar.Visibility = True
-    body.Tip = polar
-    
-    ded_sketch = util.createSketch(body, 'DedendumCircle')
-    circle = ded_sketch.addGeometry(Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), Rf + 0.01), False)
-    ded_sketch.addConstraint(Sketcher.Constraint('Coincident', circle, 3, -1, 1))
-    ded_sketch.addConstraint(Sketcher.Constraint('Diameter', circle, (Rf + 0.01)*2))
-    
-    ded_pad = util.createPad(body, ded_sketch, height, 'DedendumCircle')
-    body.Tip = ded_pad
-    
-    if parameters.get("bore_type", "none") != "none":
-        util.createBore(body, parameters, height)
-        
-    doc.recompute()
-    if App.GuiUp:
-        try: FreeCADGui.SendMsgToActiveView("ViewFit")
-        except Exception: pass
+
+    # Cycloid gears are spur gears (no helix)
+    angle1 = 0.0
+    angle2 = 0.0
+
+    # Use the generic herringbone gear builder with cycloid profile
+    result = genericGear.genericHerringboneGear(
+        doc,
+        parameters,
+        angle1,
+        angle2,
+        profile_func=generateCycloidToothProfile
+    )
+
+    return result
 
 class CycloidGearCreateObject():
     """Command to create a new cycloid gear object."""
