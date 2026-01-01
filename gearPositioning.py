@@ -667,8 +667,40 @@ class GearPositionDialog(QtGui.QDialog):
                     None, "Move Error", f"Failed to move gear:\n{str(e)}"
                 )
 
+    def findExistingScaffold(self, gear_position, tolerance=1.0):
+        """Find existing scaffold that contains an axle at the given position.
+
+        Args:
+            gear_position: App.Vector position to check
+            tolerance: Distance tolerance in mm
+
+        Returns:
+            Tuple of (scaffold_body, axle_positions_list) or (None, None)
+        """
+        doc = App.ActiveDocument
+        if not doc:
+            return None, None
+
+        # Find all scaffold bodies
+        for obj in doc.Objects:
+            if obj.Name.startswith("GearScaffolding") and hasattr(obj, "Group"):
+                # This is a scaffold body, check its axles
+                axle_positions = []
+                for feature in obj.Group:
+                    if feature.Name.startswith("Axle") and hasattr(feature, "Placement"):
+                        axle_pos = feature.Placement.Base
+                        axle_positions.append(axle_pos)
+
+                        # Check if this axle is at the gear position
+                        distance = (App.Vector(axle_pos.x, axle_pos.y, 0) -
+                                  App.Vector(gear_position.x, gear_position.y, 0)).Length
+                        if distance < tolerance:
+                            return obj, axle_positions
+
+        return None, None
+
     def createScaffolding(self):
-        """Create scaffolding body with gear axis circles as reference points."""
+        """Create scaffolding with axles extending down from gears and oval surrounding them."""
         idx1 = self.gear1_combo.currentIndex()
         idx2_data = self.gear2_combo.itemData(self.gear2_combo.currentIndex())
 
@@ -689,7 +721,7 @@ class GearPositionDialog(QtGui.QDialog):
                 )
                 return
 
-            # Re-fetch bodies from document by name (not from cached references)
+            # Re-fetch bodies from document by name
             gear1_param = gear1_info["param_obj"]
             gear2_param = gear2_info["param_obj"]
 
@@ -703,29 +735,22 @@ class GearPositionDialog(QtGui.QDialog):
             gear1_body = doc.getObject(gear1_body_name)
             gear2_body = doc.getObject(gear2_body_name)
 
-            gear1_valid = gear1_body is not None
-            if gear1_valid:
-                try:
-                    gear1_valid = gear1_body.isValid()
-                except Exception:
-                    gear1_valid = False
-
-            gear2_valid = gear2_body is not None
-            if gear2_valid:
-                try:
-                    gear2_valid = gear2_body.isValid()
-                except Exception:
-                    gear2_valid = False
-
-            if not gear1_valid:
-                App.Console.PrintError(f"Gear 1 body '{gear1_body_name}' not valid\n")
+            if not gear1_body or not gear2_body:
+                App.Console.PrintError("Cannot find gear bodies\n")
                 return
 
-            if not gear2_valid:
-                App.Console.PrintError(f"Gear 2 body '{gear2_body_name}' not valid\n")
-                return
+            # Get gear positions
+            p1 = gear1_body.Placement.Base
+            p2 = gear2_body.Placement.Base
 
-            # Create new body for scaffolding
+            App.Console.PrintMessage(f"Gear 1 at: ({p1.x:.2f}, {p1.y:.2f}, {p1.z:.2f})\n")
+            App.Console.PrintMessage(f"Gear 2 at: ({p2.x:.2f}, {p2.y:.2f}, {p2.z:.2f})\n")
+
+            # Get gear specs to detect internal gears
+            gear1_specs = self.getGearSpecs(gear1_info)
+            gear2_specs = self.getGearSpecs(gear2_info)
+
+            # Create PartDesign Body
             scaffold_body_name = "GearScaffolding"
             existing = doc.getObject(scaffold_body_name)
             if existing:
@@ -736,293 +761,146 @@ class GearPositionDialog(QtGui.QDialog):
 
             scaffold_body = util.readyPart(doc, scaffold_body_name)
 
-            gear1_placement = gear1_body.Placement.Base
-            gear2_placement = gear2_body.Placement.Base
+            # Constants
+            axle_radius = 5.0
+            axle_height = 30.0
+            shell_wall_thickness = 5.0
 
-            # Calculate gear center positions
-            p1 = App.Vector(gear1_placement.x, gear1_placement.y, gear1_placement.z)
-            p2 = App.Vector(gear2_placement.x, gear2_placement.y, gear2_placement.z)
-
-            # Calculate direction vector from p1 to p2
+            # Calculate dimensions
             direction = p2 - p1
-            distance = direction.Length
+            distance = math.sqrt(direction.x**2 + direction.y**2)
 
-            # Calculate midpoint
-            midpoint = (p1 + p2) / 2.0
+            # Oval dimensions
+            major_radius = distance / 2.0 + 40.0
+            minor_radius = 40.0
+            plate_thickness = 5.0
 
-            # Calculate oval/plate dimensions
-            major_radius = distance / 2.0 + 5.0
-            minor_radius = distance / 2.0 + 5.0
+            # Positions
+            center_x = (p1.x + p2.x) / 2.0
+            center_y = (p1.y + p2.y) / 2.0
+            plate_z = min(p1.z, p2.z) - axle_height - 5.0
 
-            # Calculate axle radius and height
-            axle_radius = 2.0
-            axle_height = 20.0
-
-            # Create sketch for oval plate (no holes in sketch)
-            sketch = util.createSketch(scaffold_body, "ScaffoldingPlate")
-            sketch.Placement = App.Placement(
-                App.Vector(0, 0, 0), App.Rotation(0, 0, 0)
-            )
-
-            # Add outer oval (plate boundary only, no holes in this sketch)
-            ellipse = sketch.addGeometry(
-                Part.Ellipse(
-                    App.Vector(0, 0, 0),
-                    App.Vector(major_radius, 0, 0),
-                    App.Vector(0, minor_radius, 0),
-                    App.Vector(0, 0, 1)
-                ),
-                False
-            )
-            sketch.addConstraint(Sketcher.Constraint("Coincident", ellipse, 3, -1, 1))
-            sketch.addConstraint(Sketcher.Constraint("RadiusX", ellipse, major_radius))
-            sketch.addConstraint(Sketcher.Constraint("RadiusY", ellipse, minor_radius))
-
-            # Pad the oval sketch to create the plate (5mm thickness)
-            plate_pad = util.createPad(scaffold_body, sketch, 5.0, "ScaffoldingPlate")
-            sketch.Visibility = False
-
-            # Calculate rotation to align plate with gear axes
+            # Rotation angle
             angle_rad = math.atan2(direction.y, direction.x)
             angle_deg = angle_rad * 180.0 / math.pi
 
-            # Position the plate at midpoint
-            plate_pad.Placement = App.Placement(
-                midpoint,
-                App.Rotation(App.Vector(0, 0, 1), angle_deg)
-            )
-
-            # Create sketch for axle 1
-            sketch_axle1 = util.createSketch(scaffold_body, "Axle1Sketch")
-            sketch_axle1.Placement = App.Placement(App.Vector(0, 0, 0), App.Rotation(0, 0, 0))
-
-            circle_axle1 = sketch_axle1.addGeometry(
-                Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), axle_radius),
-                False
-            )
-            sketch_axle1.addConstraint(Sketcher.Constraint("Coincident", circle_axle1, 3, -1, 1))
-            sketch_axle1.addConstraint(Sketcher.Constraint("Diameter", circle_axle1, axle_radius * 2.0))
-
-            # Pad axle 1 sketch (20mm height)
-            axle1_pad = util.createPad(scaffold_body, sketch_axle1, axle_height, "Axle1")
-            sketch_axle1.Visibility = False
-
-            # Position axle 1 at gear 1 center
-            axle1_pad.Placement = App.Placement(p1, App.Rotation(0, 0, 0))
-
-            # Create sketch for axle 2
-            sketch_axle2 = util.createSketch(scaffold_body, "Axle2Sketch")
-            sketch_axle2.Placement = App.Placement(App.Vector(0, 0, 0), App.Rotation(0, 0, 0))
-
-            circle_axle2 = sketch_axle2.addGeometry(
-                Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), axle_radius),
-                False
-            )
-            sketch_axle2.addConstraint(Sketcher.Constraint("Coincident", circle_axle2, 3, -1, 1))
-            sketch_axle2.addConstraint(Sketcher.Constraint("Diameter", circle_axle2, axle_radius * 2.0))
-
-            # Pad axle 2 sketch (20mm height)
-            axle2_pad = util.createPad(scaffold_body, sketch_axle2, axle_height, "Axle2")
-            sketch_axle2.Visibility = False
-
-            # Position axle 2 at gear 2 center
-            axle2_pad.Placement = App.Placement(p2, App.Rotation(0, 0, 0))
-
-            # Set visibility and appearance
-            if plate_pad.ViewObject:
-                plate_pad.ViewObject.Transparency = 40
-                plate_pad.ViewObject.ShapeColor = (0.7, 0.7, 0.7)
-            if axle1_pad.ViewObject:
-                axle1_pad.ViewObject.Transparency = 30
-                axle1_pad.ViewObject.ShapeColor = (0.6, 0.4, 0.2)
-            if axle2_pad.ViewObject:
-                axle2_pad.ViewObject.Transparency = 30
-                axle2_pad.ViewObject.ShapeColor = (0.6, 0.4, 0.2)
-
-            doc.recompute()
-
-            App.Console.PrintMessage(
-                f"Created scaffolding body '{scaffold_body_name}'\n"
-            )
-            App.Console.PrintMessage(
-                f"  Plate: oval, padded 5mm\n"
-            )
-            App.Console.PrintMessage(
-                f"  Axle 1 sketch: circle, padded 20mm at {gear1_body_name}\n"
-            )
-            App.Console.PrintMessage(
-                f"  Axle 2 sketch: circle, padded 20mm at {gear2_body_name}\n"
-            )
-
-            # Add outer oval (plate boundary)
-            ellipse = sketch.addGeometry(
-                Part.Ellipse(
-                    App.Vector(0, 0, 0),
-                    App.Vector(major_radius, 0, 0),
-                    App.Vector(0, minor_radius, 0),
-                    App.Vector(0, 0, 1)
-                ),
-                False
-            )
-            sketch.addConstraint(Sketcher.Constraint("Coincident", ellipse, 3, -1, 1))
-            sketch.addConstraint(Sketcher.Constraint("RadiusX", ellipse, major_radius))
-            sketch.addConstraint(Sketcher.Constraint("RadiusY", ellipse, minor_radius))
-
-            # Add hole for gear 1 axle (relative to ellipse center)
-            # Position holes on the major axis, offset from center
-            hole1_x = -distance / 2.0
-            hole1_y = 0.0
-
-            circle1 = sketch.addGeometry(
-                Part.Circle(App.Vector(hole1_x, hole1_y, 0), App.Vector(0, 0, 1), hole_radius),
-                False
-            )
-            sketch.addConstraint(Sketcher.Constraint("Coincident", circle1, 3, -1, 1))
-            sketch.addConstraint(Sketcher.Constraint("Diameter", circle1, hole_radius * 2.0))
-
-            # Add hole for gear 2 axle
-            hole2_x = distance / 2.0
-            hole2_y = 0.0
-
-            circle2 = sketch.addGeometry(
-                Part.Circle(App.Vector(hole2_x, hole2_y, 0), App.Vector(0, 0, 1), hole_radius),
-                False
-            )
-            sketch.addConstraint(Sketcher.Constraint("Coincident", circle2, 3, -1, 1))
-            sketch.addConstraint(Sketcher.Constraint("Diameter", circle2, hole_radius * 2.0))
-
-            # Constrain holes to be on major axis
-            sketch.addConstraint(Sketcher.Constraint("Vertical", circle1, 3, ellipse, 3))
-            sketch.addConstraint(Sketcher.Constraint("Vertical", circle2, 3, ellipse, 3))
-
-            # Constrain holes to be at specific distances from center
-            sketch.addConstraint(Sketcher.Constraint("DistanceX", circle1, 3, -1, 1, abs(hole1_x)))
-            sketch.addConstraint(Sketcher.Constraint("DistanceX", circle2, 3, -1, 1, abs(hole2_x)))
-
-            # Pad the sketch to create the plate (5mm thickness)
-            plate_pad = util.createPad(scaffold_body, sketch, 5.0, "ScaffoldingPlate")
-            sketch.Visibility = False
-
-            # Calculate rotation to align plate with gear axes
-            angle_rad = math.atan2(direction.y, direction.x)
-            angle_deg = angle_rad * 180.0 / math.pi
-
-            # Position the plate at midpoint
-            plate_pad.Placement = App.Placement(
-                midpoint,
-                App.Rotation(App.Vector(0, 0, 1), angle_deg)
-            )
-
-            # Create axles as separate objects (20mm height)
-            axle_radius = 2.0
-            axle_height = 20.0
-
-            axle1 = Part.makeCylinder(axle_radius, axle_height, App.Vector(0, 0, 0), App.Vector(0, 0, 1), 360)
-            axle1_obj = doc.addObject("Part::Feature", f"Axle_{gear1_body_name}")
-            axle1_obj.Shape = axle1
-            axle1_obj.Placement = App.Placement(p1, App.Rotation(0, 0, 0))
-
-            axle2 = Part.makeCylinder(axle_radius, axle_height, App.Vector(0, 0, 0), App.Vector(0, 0, 1), 360)
-            axle2_obj = doc.addObject("Part::Feature", f"Axle_{gear2_body_name}")
-            axle2_obj.Shape = axle2
-            axle2_obj.Placement = App.Placement(p2, App.Rotation(0, 0, 0))
-
-            # Set visibility and appearance
-            if plate_pad.ViewObject:
-                plate_pad.ViewObject.Transparency = 40
-                plate_pad.ViewObject.ShapeColor = (0.7, 0.7, 0.7)
-            if axle1_obj.ViewObject:
-                axle1_obj.ViewObject.Transparency = 30
-                axle1_obj.ViewObject.ShapeColor = (0.6, 0.4, 0.2)
-            if axle2_obj.ViewObject:
-                axle2_obj.ViewObject.Transparency = 30
-                axle2_obj.ViewObject.ShapeColor = (0.6, 0.4, 0.2)
-
-            doc.recompute()
-
-            App.Console.PrintMessage(
-                f"Created scaffolding body '{scaffold_body_name}'\n"
-            )
-            App.Console.PrintMessage(
-                f"  Plate: oval with 2 holes, padded 5mm\n"
-            )
-            App.Console.PrintMessage(
-                f"  Axle 1: radius={axle_radius}mm, height={axle_height}mm\n"
-            )
-            App.Console.PrintMessage(
-                f"  Axle 2: radius={axle_radius}mm, height={axle_height}mm\n"
-            )
-
-            # Set visibility and appearance
-            if axle1_obj.ViewObject:
-                axle1_obj.ViewObject.Transparency = 30
-                axle1_obj.ViewObject.ShapeColor = (0.8, 0.8, 0.0)
-            if axle2_obj.ViewObject:
-                axle2_obj.ViewObject.Transparency = 30
-                axle2_obj.ViewObject.ShapeColor = (0.8, 0.8, 0.0)
-            if oval_obj.ViewObject:
-                oval_obj.ViewObject.Transparency = 50
-                oval_obj.ViewObject.ShapeColor = (0.5, 0.5, 0.5)
-
-            doc.recompute()
-
-            App.Console.PrintMessage(
-                f"Created scaffolding with axles and connecting oval\n"
-            )
-            App.Console.PrintMessage(
-                f"  Gear 1 axle '{axle1_name}': ({gear1_placement.x:.3f}, {gear1_placement.y:.3f}, {gear1_placement.z:.3f})\n"
-            )
-            App.Console.PrintMessage(
-                f"  Gear 2 axle '{axle2_name}': ({gear2_placement.x:.3f}, {gear2_placement.y:.3f}, {gear2_placement.z:.3f})\n"
-            )
-            App.Console.PrintMessage(
-                f"  Connecting oval '{oval_name}': length={distance:.3f}, major_radius={major_radius:.3f}\n"
-            )
-
-            # Constrain ellipse
-            oval_sketch.addConstraint(Sketcher.Constraint("Coincident", ellipse, 3, -1, 1))
-            oval_sketch.addConstraint(Sketcher.Constraint("RadiusX", ellipse, major_radius))
-            oval_sketch.addConstraint(Sketcher.Constraint("RadiusY", ellipse, minor_radius))
-
-            # Calculate rotation to align ellipse with gear axes
-            angle_rad = math.atan2(direction.y, direction.x)
-            angle_deg = angle_rad * 180.0 / math.pi
-
-            # Position and rotate the sketch
+            # --- CREATE OVAL SKETCH AND PAD ---
+            oval_sketch = util.createSketch(scaffold_body, "OvalSketch")
+            # Position sketch at oval location with rotation
             oval_sketch.Placement = App.Placement(
-                midpoint,
+                App.Vector(center_x, center_y, plate_z),
                 App.Rotation(App.Vector(0, 0, 1), angle_deg)
             )
 
-            # Pad the oval to give it thickness
-            oval_pad = util.createPad(scaffold_body, oval_sketch, axle_height, "ConnectingOval")
+            # Add ellipse to sketch
+            ellipse = oval_sketch.addGeometry(
+                Part.Ellipse(
+                    App.Vector(major_radius, 0, 0),
+                    App.Vector(0, minor_radius, 0),
+                    App.Vector(0, 0, 0)
+                ),
+                False
+            )
+            oval_sketch.addConstraint(Sketcher.Constraint("Coincident", ellipse, 3, -1, 1))
+
+            # Pad the oval
+            oval_pad = util.createPad(scaffold_body, oval_sketch, plate_thickness, "OvalPlate")
             oval_sketch.Visibility = False
 
-            # Set visibility
-            if axle1_obj.ViewObject:
-                axle1_obj.ViewObject.Transparency = 30
-                axle1_obj.ViewObject.LineWidth = 2
-            if axle2_obj.ViewObject:
-                axle2_obj.ViewObject.Transparency = 30
-                axle2_obj.ViewObject.LineWidth = 2
+            App.Console.PrintMessage(f"Created oval at ({center_x:.2f}, {center_y:.2f}, {plate_z:.2f})\n")
+
+            # --- CREATE AXLE 1 SKETCH AND PAD ---
+            axle1_sketch = util.createSketch(scaffold_body, "Axle1Sketch")
+            axle1_position = App.Vector(p1.x, p1.y, p1.z - axle_height)
+            axle1_sketch.Placement = App.Placement(axle1_position, App.Rotation(0, 0, 0))
+
+            if gear1_specs["is_internal"]:
+                outer_radius = gear1_info.get("pitch_diameter", 0.0) / 2.0
+                inner_radius = outer_radius + 2.0
+                outer_shell_radius = inner_radius + shell_wall_thickness
+
+                circle_outer = axle1_sketch.addGeometry(
+                    Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), outer_shell_radius),
+                    False
+                )
+                axle1_sketch.addConstraint(Sketcher.Constraint("Coincident", circle_outer, 3, -1, 1))
+
+                circle_inner = axle1_sketch.addGeometry(
+                    Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), inner_radius),
+                    False
+                )
+                axle1_sketch.addConstraint(Sketcher.Constraint("Coincident", circle_inner, 3, -1, 1))
+            else:
+                circle = axle1_sketch.addGeometry(
+                    Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), axle_radius),
+                    False
+                )
+                axle1_sketch.addConstraint(Sketcher.Constraint("Coincident", circle, 3, -1, 1))
+
+            axle1_pad = util.createPad(scaffold_body, axle1_sketch, axle_height, "Axle1")
+            axle1_sketch.Visibility = False
+
+            App.Console.PrintMessage(f"Created Axle1 at ({axle1_position.x:.2f}, {axle1_position.y:.2f}, {axle1_position.z:.2f})\n")
+
+            # --- CREATE AXLE 2 SKETCH AND PAD ---
+            axle2_sketch = util.createSketch(scaffold_body, "Axle2Sketch")
+            axle2_position = App.Vector(p2.x, p2.y, p2.z - axle_height)
+            axle2_sketch.Placement = App.Placement(axle2_position, App.Rotation(0, 0, 0))
+
+            if gear2_specs["is_internal"]:
+                outer_radius = gear2_info.get("pitch_diameter", 0.0) / 2.0
+                inner_radius = outer_radius + 2.0
+                outer_shell_radius = inner_radius + shell_wall_thickness
+
+                circle_outer = axle2_sketch.addGeometry(
+                    Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), outer_shell_radius),
+                    False
+                )
+                axle2_sketch.addConstraint(Sketcher.Constraint("Coincident", circle_outer, 3, -1, 1))
+
+                circle_inner = axle2_sketch.addGeometry(
+                    Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), inner_radius),
+                    False
+                )
+                axle2_sketch.addConstraint(Sketcher.Constraint("Coincident", circle_inner, 3, -1, 1))
+            else:
+                circle = axle2_sketch.addGeometry(
+                    Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), axle_radius),
+                    False
+                )
+                axle2_sketch.addConstraint(Sketcher.Constraint("Coincident", circle, 3, -1, 1))
+
+            axle2_pad = util.createPad(scaffold_body, axle2_sketch, axle_height, "Axle2")
+            axle2_sketch.Visibility = False
+
+            App.Console.PrintMessage(f"Created Axle2 at ({axle2_position.x:.2f}, {axle2_position.y:.2f}, {axle2_position.z:.2f})\n")
+
+            # Set appearance
             if oval_pad.ViewObject:
                 oval_pad.ViewObject.Transparency = 50
-                oval_pad.ViewObject.LineWidth = 1
+                oval_pad.ViewObject.ShapeColor = (0.0, 1.0, 0.0)
+            if axle1_pad.ViewObject:
+                axle1_pad.ViewObject.Transparency = 0
+                axle1_pad.ViewObject.ShapeColor = (1.0, 0.0, 0.0)
+            if axle2_pad.ViewObject:
+                axle2_pad.ViewObject.Transparency = 0
+                axle2_pad.ViewObject.ShapeColor = (0.0, 0.0, 1.0)
 
             doc.recompute()
 
-            App.Console.PrintMessage(
-                f"Created scaffolding body '{scaffold_body_name}' with axles and connecting oval\n"
-            )
-            App.Console.PrintMessage(
-                f"  Gear 1 axle: ({gear1_placement.x:.3f}, {gear1_placement.y:.3f}, {gear1_placement.z:.3f})\n"
-            )
-            App.Console.PrintMessage(
-                f"  Gear 2 axle: ({gear2_placement.x:.3f}, {gear2_placement.y:.3f}, {gear2_placement.z:.3f})\n"
-            )
-            App.Console.PrintMessage(
-                f"  Connecting oval: length={distance:.3f}, major_radius={major_radius:.3f}\n"
-            )
+            # Verify all objects are in the scaffold
+            App.Console.PrintMessage(f"\nScaffold '{scaffold_body_name}' contains:\n")
+            for obj in scaffold_body.Group:
+                visibility = "VISIBLE" if (obj.ViewObject and obj.ViewObject.Visibility) else "HIDDEN"
+                has_shape = "HAS SHAPE" if (hasattr(obj, "Shape") and obj.Shape and not obj.Shape.isNull()) else "NO SHAPE"
+                App.Console.PrintMessage(f"  - {obj.Name}: {visibility}, {has_shape}\n")
+                if hasattr(obj, "Placement"):
+                    App.Console.PrintMessage(f"      Placement: {obj.Placement.Base}\n")
+
+            App.Console.PrintMessage(f"\nCreated scaffolding '{scaffold_body_name}' using PartDesign\n")
+            App.Console.PrintMessage(f"  Oval: GREEN, semi-transparent\n")
+            App.Console.PrintMessage(f"  Axle 1: RED at gear 1\n")
+            App.Console.PrintMessage(f"  Axle 2: BLUE at gear 2\n")
 
             if App.GuiUp:
                 try:
@@ -1032,6 +910,8 @@ class GearPositionDialog(QtGui.QDialog):
 
         except Exception as e:
             App.Console.PrintError(f"Error creating scaffolding: {e}\n")
+            import traceback
+            App.Console.PrintError(traceback.format_exc())
             QtGui.QMessageBox.critical(
                 None, "Scaffolding Error", f"Failed to create scaffolding:\n{str(e)}"
             )
