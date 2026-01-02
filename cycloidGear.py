@@ -7,6 +7,7 @@ Copyright 2025, Chris Bruner
 Version v0.1
 License LGPL V2.1
 """
+
 from __future__ import division
 
 import FreeCAD as App
@@ -21,90 +22,100 @@ from PySide import QtCore
 import genericGear
 
 smWBpath = os.path.dirname(gearMath.__file__)
-smWB_icons_path = os.path.join(smWBpath, 'icons')
+smWB_icons_path = os.path.join(smWBpath, "icons")
 global mainIcon
-mainIcon = os.path.join(smWB_icons_path, 'cycloidGear.svg')
+mainIcon = os.path.join(smWB_icons_path, "cycloidGear.svg")
 
 if not os.path.exists(mainIcon):
     App.Console.PrintWarning(f"Cycloid Gear icon not found at: {mainIcon}\n")
 
-version = 'Nov 30, 2025'
+version = "Nov 30, 2025"
 
 
 def QT_TRANSLATE_NOOP(scope, text):
     return text
 
+
 # ============================================================================
 # GENERATION LOGIC (Moved from gearMath.py)
 # ============================================================================
 
+
 def validateCycloidParameters(parameters):
-    if parameters["module"] < gearMath.MIN_MODULE: raise gearMath.GearParameterError(f"Module < {gearMath.MIN_MODULE}")
-    if parameters["num_teeth"] < 3: raise gearMath.GearParameterError("Teeth must be >= 3")
-    if parameters["height"] <= 0: raise gearMath.GearParameterError("Height must be positive")
+    if parameters["module"] < gearMath.MIN_MODULE:
+        raise gearMath.GearParameterError(f"Module < {gearMath.MIN_MODULE}")
+    if parameters["num_teeth"] < 3:
+        raise gearMath.GearParameterError("Teeth must be >= 3")
+    if parameters["height"] <= 0:
+        raise gearMath.GearParameterError("Height must be positive")
+
 
 def generateCycloidToothProfile(sketch, parameters):
     module = parameters["module"]
     num_teeth = parameters["num_teeth"]
     addendum = module * parameters["addendum_factor"]
     dedendum = module * parameters["dedendum_factor"]
-    
-    R = (module * num_teeth) / 2.0 
-    Ra = R + addendum 
-    Rf = R - dedendum 
-    r_roll = 2.5 * module 
+
+    R = (module * num_teeth) / 2.0
+    Ra = R + addendum
+    Rf = R - dedendum
+    r_roll = 2.5 * module
     half_tooth_angle = math.pi / (2.0 * num_teeth)
 
     def get_epi_point(t):
-        cx = (R + r_roll) * math.cos(t) - r_roll * math.cos((R + r_roll)/r_roll * t)
-        cy = (R + r_roll) * math.sin(t) - r_roll * math.sin((R + r_roll)/r_roll * t)
+        cx = (R + r_roll) * math.cos(t) - r_roll * math.cos((R + r_roll) / r_roll * t)
+        cy = (R + r_roll) * math.sin(t) - r_roll * math.sin((R + r_roll) / r_roll * t)
         return cx, cy
 
     def get_hypo_point(t):
-        cx = (R - r_roll) * math.cos(t) + r_roll * math.cos((R - r_roll)/r_roll * t)
-        cy = -( (R - r_roll) * math.sin(t) - r_roll * math.sin((R - r_roll)/r_roll * t) )
+        cx = (R - r_roll) * math.cos(t) + r_roll * math.cos((R - r_roll) / r_roll * t)
+        cy = -(
+            (R - r_roll) * math.sin(t) - r_roll * math.sin((R - r_roll) / r_roll * t)
+        )
         return cx, cy
-    
+
     # 1. Epicycloid (Tip)
     epi_pts = []
     steps = 50
     step_size = 0.5 / steps
-    
+
     for i in range(steps + 1):
         t = i * step_size
         cx, cy = get_epi_point(t)
-        r_cur = math.sqrt(cx*cx + cy*cy)
-        
+        r_cur = math.sqrt(cx * cx + cy * cy)
+
         if r_cur > Ra:
             # Refine t to hit Ra exactly
             t_low = (i - 1) * step_size
             t_high = t
-            for _ in range(10): # Binary search
+            for _ in range(10):  # Binary search
                 t_mid = (t_low + t_high) / 2.0
                 mx, my = get_epi_point(t_mid)
-                mr = math.sqrt(mx*mx + my*my)
-                if mr > Ra: t_high = t_mid
-                else: t_low = t_mid
-            cx, cy = get_epi_point(t_low) # Use lower bound to be safe/close
+                mr = math.sqrt(mx * mx + my * my)
+                if mr > Ra:
+                    t_high = t_mid
+                else:
+                    t_low = t_mid
+            cx, cy = get_epi_point(t_low)  # Use lower bound to be safe/close
             epi_pts.append(App.Vector(cx, cy, 0))
             break
-            
+
         epi_pts.append(App.Vector(cx, cy, 0))
-    
+
     rot_bias = (math.pi / 2.0) - half_tooth_angle
     right_addendum_geo = []
     for p in epi_pts:
         xn = p.x * math.cos(rot_bias) - p.y * math.sin(rot_bias)
         yn = p.x * math.sin(rot_bias) + p.y * math.cos(rot_bias)
         right_addendum_geo.append(App.Vector(xn, yn, 0))
-        
+
     # 2. Hypocycloid (Root)
     hypo_pts = []
     for i in range(steps + 1):
         t = i * step_size
         cx, cy = get_hypo_point(t)
-        r_cur = math.sqrt(cx*cx + cy*cy)
-        
+        r_cur = math.sqrt(cx * cx + cy * cy)
+
         if r_cur < Rf:
             # Refine t to hit Rf exactly
             t_low = (i - 1) * step_size
@@ -112,13 +123,15 @@ def generateCycloidToothProfile(sketch, parameters):
             for _ in range(10):
                 t_mid = (t_low + t_high) / 2.0
                 mx, my = get_hypo_point(t_mid)
-                mr = math.sqrt(mx*mx + my*my)
-                if mr < Rf: t_high = t_mid # Too deep
-                else: t_low = t_mid
+                mr = math.sqrt(mx * mx + my * my)
+                if mr < Rf:
+                    t_high = t_mid  # Too deep
+                else:
+                    t_low = t_mid
             cx, cy = get_hypo_point(t_low)
             hypo_pts.append(App.Vector(cx, cy, 0))
             break
-            
+
         hypo_pts.append(App.Vector(cx, cy, 0))
 
     right_dedendum_geo = []
@@ -127,31 +140,32 @@ def generateCycloidToothProfile(sketch, parameters):
         yn = p.x * math.sin(rot_bias) + p.y * math.cos(rot_bias)
         right_dedendum_geo.append(App.Vector(xn, yn, 0))
 
-    right_flank_full = list(reversed(right_dedendum_geo)) + right_addendum_geo[1:] 
+    right_flank_full = list(reversed(right_dedendum_geo)) + right_addendum_geo[1:]
     left_flank_full = util.mirrorPointsX(right_flank_full)
-    
+
     geo_list = []
-    
+
     bspline_right = Part.BSplineCurve()
     bspline_right.interpolate(right_flank_full)
     geo_list.append(sketch.addGeometry(bspline_right, False))
-    
+
     p_tip_right = right_flank_full[-1]
     p_tip_left = left_flank_full[0]
     p_tip_mid = App.Vector(0, Ra, 0)
     tip_arc = Part.Arc(p_tip_right, p_tip_mid, p_tip_left)
     geo_list.append(sketch.addGeometry(tip_arc, False))
-    
+
     bspline_left = Part.BSplineCurve()
     bspline_left.interpolate(left_flank_full)
     geo_list.append(sketch.addGeometry(bspline_left, False))
-    
+
     p_root_left = left_flank_full[-1]
     p_root_right = right_flank_full[0]
     root_line = Part.LineSegment(p_root_left, p_root_right)
     geo_list.append(sketch.addGeometry(root_line, False))
-    
+
     util.finalizeSketchGeometry(sketch, geo_list)
+
 
 def generateCycloidGearPart(doc, parameters):
     """Generate cycloid gear using the generic gear system.
@@ -166,31 +180,28 @@ def generateCycloidGearPart(doc, parameters):
     angle2 = 0.0
 
     # Use the generic herringbone gear builder with cycloid profile
-    result = genericGear.genericHerringboneGear(
-        doc,
-        parameters,
-        angle1,
-        angle2,
-        profile_func=generateCycloidToothProfile
+    result = genericGear.herringboneGear(
+        doc, parameters, angle1, angle2, profile_func=generateCycloidToothProfile
     )
 
     return result
 
-class CycloidGearCreateObject():
+
+class CycloidGearCreateObject:
     """Command to create a new cycloid gear object."""
 
     def GetResources(self):
         return {
-            'Pixmap': mainIcon,
-            'MenuText': "&Create Cycloid Gear",
-            'ToolTip': "Create parametric cycloidal gear.\nUse Case: Clocks, watches, and low-friction mechanisms.\nNOT for high-torque power transmission."
+            "Pixmap": mainIcon,
+            "MenuText": "&Create Cycloid Gear",
+            "ToolTip": "Create parametric cycloidal gear.\nUse Case: Clocks, watches, and low-friction mechanisms.\nNOT for high-torque power transmission.",
         }
 
     def Activated(self):
         if not App.ActiveDocument:
             App.newDocument()
         doc = App.ActiveDocument
-        
+
         # Unique Body Name
         base_name = "CycloidGear"
         unique_name = base_name
@@ -201,9 +212,9 @@ class CycloidGearCreateObject():
 
         gear_obj = doc.addObject("Part::FeaturePython", "CycloidGearParameters")
         cycloid_gear = CycloidGear(gear_obj)
-        
+
         gear_obj.BodyName = unique_name
-        
+
         doc.recompute()
         FreeCADGui.SendMsgToActiveView("ViewFit")
         FreeCADGui.ActiveDocument.ActiveView.viewIsometric()
@@ -213,7 +224,7 @@ class CycloidGearCreateObject():
         return True
 
 
-class CycloidGear():
+class CycloidGear:
     """FeaturePython object for parametric cycloid gear."""
 
     def __init__(self, obj):
@@ -221,27 +232,91 @@ class CycloidGear():
         H = gearMath.generateDefaultCycloidParameters()
 
         # Read-only
-        obj.addProperty("App::PropertyString", "Version", "read only", QT_TRANSLATE_NOOP("App::Property", "Version"), 1).Version = version
-        obj.addProperty("App::PropertyLength", "PitchDiameter", "read only", QT_TRANSLATE_NOOP("App::Property", "Pitch diameter"), 1)
-        obj.addProperty("App::PropertyLength", "OuterDiameter", "read only", QT_TRANSLATE_NOOP("App::Property", "Tip diameter"), 1)
-        obj.addProperty("App::PropertyLength", "RootDiameter", "read only", QT_TRANSLATE_NOOP("App::Property", "Root diameter"), 1)
+        obj.addProperty(
+            "App::PropertyString",
+            "Version",
+            "read only",
+            QT_TRANSLATE_NOOP("App::Property", "Version"),
+            1,
+        ).Version = version
+        obj.addProperty(
+            "App::PropertyLength",
+            "PitchDiameter",
+            "read only",
+            QT_TRANSLATE_NOOP("App::Property", "Pitch diameter"),
+            1,
+        )
+        obj.addProperty(
+            "App::PropertyLength",
+            "OuterDiameter",
+            "read only",
+            QT_TRANSLATE_NOOP("App::Property", "Tip diameter"),
+            1,
+        )
+        obj.addProperty(
+            "App::PropertyLength",
+            "RootDiameter",
+            "read only",
+            QT_TRANSLATE_NOOP("App::Property", "Root diameter"),
+            1,
+        )
 
         # Parameters
-        obj.addProperty("App::PropertyLength", "Module", "CycloidGear", QT_TRANSLATE_NOOP("App::Property", "Module")).Module = H["module"]
-        obj.addProperty("App::PropertyInteger", "NumberOfTeeth", "CycloidGear", QT_TRANSLATE_NOOP("App::Property", "Number of teeth")).NumberOfTeeth = H["num_teeth"]
-        obj.addProperty("App::PropertyLength", "Height", "CycloidGear", QT_TRANSLATE_NOOP("App::Property", "Gear thickness")).Height = H["height"]
-        obj.addProperty("App::PropertyFloat", "AddendumFactor", "CycloidGear", QT_TRANSLATE_NOOP("App::Property", "Head height factor (standard ~1.4)")).AddendumFactor = H["addendum_factor"]
-        obj.addProperty("App::PropertyFloat", "DedendumFactor", "CycloidGear", QT_TRANSLATE_NOOP("App::Property", "Root depth factor (standard ~1.6)")).DedendumFactor = H["dedendum_factor"]
-        
-        obj.addProperty("App::PropertyString", "BodyName", "CycloidGear", QT_TRANSLATE_NOOP("App::Property", "Body Name")).BodyName = H["body_name"]
+        obj.addProperty(
+            "App::PropertyLength",
+            "Module",
+            "CycloidGear",
+            QT_TRANSLATE_NOOP("App::Property", "Module"),
+        ).Module = H["module"]
+        obj.addProperty(
+            "App::PropertyInteger",
+            "NumberOfTeeth",
+            "CycloidGear",
+            QT_TRANSLATE_NOOP("App::Property", "Number of teeth"),
+        ).NumberOfTeeth = H["num_teeth"]
+        obj.addProperty(
+            "App::PropertyLength",
+            "Height",
+            "CycloidGear",
+            QT_TRANSLATE_NOOP("App::Property", "Gear thickness"),
+        ).Height = H["height"]
+        obj.addProperty(
+            "App::PropertyFloat",
+            "AddendumFactor",
+            "CycloidGear",
+            QT_TRANSLATE_NOOP("App::Property", "Head height factor (standard ~1.4)"),
+        ).AddendumFactor = H["addendum_factor"]
+        obj.addProperty(
+            "App::PropertyFloat",
+            "DedendumFactor",
+            "CycloidGear",
+            QT_TRANSLATE_NOOP("App::Property", "Root depth factor (standard ~1.6)"),
+        ).DedendumFactor = H["dedendum_factor"]
+
+        obj.addProperty(
+            "App::PropertyString",
+            "BodyName",
+            "CycloidGear",
+            QT_TRANSLATE_NOOP("App::Property", "Body Name"),
+        ).BodyName = H["body_name"]
 
         # Bore
-        obj.addProperty("App::PropertyEnumeration", "BoreType", "Bore", QT_TRANSLATE_NOOP("App::Property", "Type of center hole"))
+        obj.addProperty(
+            "App::PropertyEnumeration",
+            "BoreType",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Type of center hole"),
+        )
         obj.BoreType = ["none", "circular", "square", "hexagonal", "keyway"]
         obj.BoreType = H["bore_type"]
-        obj.addProperty("App::PropertyLength", "BoreDiameter", "Bore", QT_TRANSLATE_NOOP("App::Property", "Bore diameter")).BoreDiameter = H["bore_diameter"]
+        obj.addProperty(
+            "App::PropertyLength",
+            "BoreDiameter",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Bore diameter"),
+        ).BoreDiameter = H["bore_diameter"]
 
-        self.Type = 'CycloidGear'
+        self.Type = "CycloidGear"
         self.Object = obj
         self.doc = App.ActiveDocument
         self.last_body_name = obj.BodyName
@@ -249,9 +324,12 @@ class CycloidGear():
 
         self.onChanged(obj, "Module")
 
-    def __getstate__(self): return self.Type
+    def __getstate__(self):
+        return self.Type
+
     def __setstate__(self, state):
-        if state: self.Type = state
+        if state:
+            self.Type = state
 
     def onChanged(self, fp, prop):
         self.Dirty = True
@@ -263,7 +341,7 @@ class CycloidGear():
                 if doc:
                     old_body = doc.getObject(old_name)
                     if old_body:
-                        if hasattr(old_body, 'removeObjectsFromDocument'):
+                        if hasattr(old_body, "removeObjectsFromDocument"):
                             old_body.removeObjectsFromDocument()
                         doc.removeObject(old_name)
                 self.last_body_name = new_name
@@ -273,11 +351,12 @@ class CycloidGear():
                 z = fp.NumberOfTeeth
                 ha = fp.AddendumFactor
                 hf = fp.DedendumFactor
-                
+
                 fp.PitchDiameter = m * z
                 fp.OuterDiameter = m * z + 2 * (m * ha)
                 fp.RootDiameter = m * z - 2 * (m * hf)
-            except: pass
+            except:
+                pass
 
     def GetParameters(self):
         return {
@@ -306,6 +385,7 @@ class CycloidGear():
             except Exception as e:
                 App.Console.PrintError(f"Cycloid Gear Error: {str(e)}\n")
                 import traceback
+
                 App.Console.PrintError(traceback.format_exc())
 
     def execute(self, obj):
@@ -322,24 +402,46 @@ class ViewProviderCycloidGear:
         self.ViewObject = obj
         self.Object = obj.Object
 
-    def updateData(self, fp, prop): return
-    def getDisplayModes(self, obj): return ["Shaded", "Wireframe", "Flat Lines"]
-    def getDefaultDisplayMode(self): return "Shaded"
-    def setDisplayMode(self, mode): return mode
-    def onChanged(self, vobj, prop): return
-    def getIcon(self): return self.iconfile
-    def doubleClicked(self, vobj): return True
+    def updateData(self, fp, prop):
+        return
+
+    def getDisplayModes(self, obj):
+        return ["Shaded", "Wireframe", "Flat Lines"]
+
+    def getDefaultDisplayMode(self):
+        return "Shaded"
+
+    def setDisplayMode(self, mode):
+        return mode
+
+    def onChanged(self, vobj, prop):
+        return
+
+    def getIcon(self):
+        return self.iconfile
+
+    def doubleClicked(self, vobj):
+        return True
+
     def setupContextMenu(self, vobj, menu):
         from PySide import QtGui
+
         action = QtGui.QAction("Regenerate Gear", menu)
         action.triggered.connect(lambda: self.regenerate())
         menu.addAction(action)
+
     def regenerate(self):
-        if hasattr(self.Object, 'Proxy'): self.Object.Proxy.force_Recompute()
-    def __getstate__(self): return self.iconfile
+        if hasattr(self.Object, "Proxy"):
+            self.Object.Proxy.force_Recompute()
+
+    def __getstate__(self):
+        return self.iconfile
+
     def __setstate__(self, state):
         self.iconfile = state if state else mainIcon
 
+
 try:
-    FreeCADGui.addCommand('CycloidGearCreateObject', CycloidGearCreateObject())
-except Exception: pass
+    FreeCADGui.addCommand("CycloidGearCreateObject", CycloidGearCreateObject())
+except Exception:
+    pass

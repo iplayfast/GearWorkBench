@@ -61,13 +61,13 @@ class GearWorkbenchWB(Workbench):
             # Generic gears replace old implementations
             gear_items = [
                 # External gears
-                "GenericSpurGearCommand",
-                "GenericHelixGearCommand",
-                "GenericHerringboneGearCommand",
+                "SpurGearCommand",
+                "HelixGearCommand",
+                "HerringboneGearCommand",
                 # Internal gears
-                "GenericInternalSpurGearCommand",
-                "GenericInternalHelixGearCommand",
-                "GenericInternalHerringboneGearCommand",
+                "InternalSpurGearCommand",
+                "InternalHelixGearCommand",
+                "InternalHerringboneGearCommand",
                 # Other gear types
                 "RackGearCreateObject",
                 "CycloidGearCreateObject",

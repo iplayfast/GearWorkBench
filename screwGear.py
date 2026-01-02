@@ -10,23 +10,32 @@ from PySide import QtCore
 import genericScrew
 
 smWBpath = os.path.dirname(gearMath.__file__)
-smWB_icons_path = os.path.join(smWBpath, 'icons')
+smWB_icons_path = os.path.join(smWBpath, "icons")
 global mainIcon
-mainIcon = os.path.join(smWB_icons_path, 'ScrewGear.svg') 
+mainIcon = os.path.join(smWB_icons_path, "ScrewGear.svg")
 
-version = 'Nov 30, 2025'
+version = "Nov 30, 2025"
 
-def QT_TRANSLATE_NOOP(scope, text): return text
+
+def QT_TRANSLATE_NOOP(scope, text):
+    return text
+
 
 # ============================================================================
 # GENERATION LOGIC
 # ============================================================================
 
+
 def validateScrewParameters(parameters):
-    if parameters["module"] < gearMath.MIN_MODULE: raise gearMath.GearParameterError(f"Module < {gearMath.MIN_MODULE}")
-    if parameters["num_teeth"] < gearMath.MIN_TEETH: raise gearMath.GearParameterError(f"Teeth < {gearMath.MIN_TEETH}")
-    if parameters["face_width"] <= 0: raise gearMath.GearParameterError("Face Width must be positive")
-    if parameters["helix_angle"] <= 0: raise gearMath.GearParameterError("Helix angle must be positive")
+    if parameters["module"] < gearMath.MIN_MODULE:
+        raise gearMath.GearParameterError(f"Module < {gearMath.MIN_MODULE}")
+    if parameters["num_teeth"] < gearMath.MIN_TEETH:
+        raise gearMath.GearParameterError(f"Teeth < {gearMath.MIN_TEETH}")
+    if parameters["face_width"] <= 0:
+        raise gearMath.GearParameterError("Face Width must be positive")
+    if parameters["helix_angle"] <= 0:
+        raise gearMath.GearParameterError("Helix angle must be positive")
+
 
 def generateScrewGearPart(doc, parameters):
     """Generate screw gear using the generic screw system.
@@ -38,22 +47,21 @@ def generateScrewGearPart(doc, parameters):
     validateScrewParameters(parameters)
 
     # Use the generic screw builder with involute tooth profile
-    result = genericScrew.genericScrewGear(
-        doc,
-        parameters,
-        profile_func=gearMath.generateToothProfile
+    result = genericScrew.screwGear(
+        doc, parameters, profile_func=gearMath.generateToothProfile
     )
 
     return result
 
-class ScrewGearCreateObject():
+
+class ScrewGearCreateObject:
     """Command to create a new screw gear object."""
 
     def GetResources(self):
         return {
-            'Pixmap': mainIcon,
-            'MenuText': "&Create Screw Gear",
-            'ToolTip': "Create parametric screw (crossed-helical) gear"
+            "Pixmap": mainIcon,
+            "MenuText": "&Create Screw Gear",
+            "ToolTip": "Create parametric screw (crossed-helical) gear",
         }
 
     def __init__(self):
@@ -64,7 +72,7 @@ class ScrewGearCreateObject():
         if not App.ActiveDocument:
             App.newDocument()
         doc = App.ActiveDocument
-        
+
         # --- Generate Unique Body Name ---
         base_name = "ScrewGear"
         unique_name = base_name
@@ -72,13 +80,13 @@ class ScrewGearCreateObject():
         while doc.getObject(unique_name):
             unique_name = f"{base_name}{count:03d}"
             count += 1
-            
+
         gear_obj = doc.addObject("Part::FeaturePython", "ScrewGearParameters")
         screw_gear = ScrewGear(gear_obj)
-        
+
         # Assign unique name to the property so gearMath uses it
         gear_obj.BodyName = unique_name
-        
+
         doc.recompute()
         FreeCADGui.SendMsgToActiveView("ViewFit")
         FreeCADGui.ActiveDocument.ActiveView.viewIsometric()
@@ -97,7 +105,7 @@ class ScrewGearCreateObject():
         pass
 
 
-class ScrewGear():
+class ScrewGear:
     """FeaturePython object for parametric screw gear."""
 
     def __init__(self, obj):
@@ -111,116 +119,155 @@ class ScrewGear():
 
         # Read-only properties
         obj.addProperty(
-            "App::PropertyString", "Version", "read only",
+            "App::PropertyString",
+            "Version",
+            "read only",
             QT_TRANSLATE_NOOP("App::Property", "Workbench version"),
-            1
+            1,
         ).Version = version
 
         obj.addProperty(
-            "App::PropertyLength", "PitchDiameter", "read only",
+            "App::PropertyLength",
+            "PitchDiameter",
+            "read only",
             QT_TRANSLATE_NOOP("App::Property", "Pitch diameter (transverse)"),
-            1
+            1,
         )
 
         obj.addProperty(
-            "App::PropertyLength", "BaseDiameter", "read only",
+            "App::PropertyLength",
+            "BaseDiameter",
+            "read only",
             QT_TRANSLATE_NOOP("App::Property", "Base circle diameter (transverse)"),
-            1
+            1,
         )
 
         obj.addProperty(
-            "App::PropertyLength", "OuterDiameter", "read only",
+            "App::PropertyLength",
+            "OuterDiameter",
+            "read only",
             QT_TRANSLATE_NOOP("App::Property", "Outer diameter (transverse)"),
-            1
+            1,
         )
 
         obj.addProperty(
-            "App::PropertyLength", "RootDiameter", "read only",
+            "App::PropertyLength",
+            "RootDiameter",
+            "read only",
             QT_TRANSLATE_NOOP("App::Property", "Root diameter (transverse)"),
-            1
+            1,
         )
 
         # Core gear parameters
         obj.addProperty(
-            "App::PropertyLength", "Module", "ScrewGear",
-            QT_TRANSLATE_NOOP("App::Property", "Normal module (tooth size)")
+            "App::PropertyLength",
+            "Module",
+            "ScrewGear",
+            QT_TRANSLATE_NOOP("App::Property", "Normal module (tooth size)"),
         ).Module = H["module"]
 
         obj.addProperty(
-            "App::PropertyInteger", "NumberOfTeeth", "ScrewGear",
-            QT_TRANSLATE_NOOP("App::Property", "Number of teeth")
+            "App::PropertyInteger",
+            "NumberOfTeeth",
+            "ScrewGear",
+            QT_TRANSLATE_NOOP("App::Property", "Number of teeth"),
         ).NumberOfTeeth = H["num_teeth"]
 
         obj.addProperty(
-            "App::PropertyAngle", "PressureAngle", "ScrewGear",
-            QT_TRANSLATE_NOOP("App::Property", "Normal pressure angle (normally 20°)")
+            "App::PropertyAngle",
+            "PressureAngle",
+            "ScrewGear",
+            QT_TRANSLATE_NOOP("App::Property", "Normal pressure angle (normally 20°)"),
         ).PressureAngle = H["pressure_angle"]
 
         obj.addProperty(
-            "App::PropertyFloat", "ProfileShift", "ScrewGear",
-            QT_TRANSLATE_NOOP("App::Property", "Normal profile shift coefficient (-1 to +1)")
+            "App::PropertyFloat",
+            "ProfileShift",
+            "ScrewGear",
+            QT_TRANSLATE_NOOP(
+                "App::Property", "Normal profile shift coefficient (-1 to +1)"
+            ),
         ).ProfileShift = H["profile_shift"]
 
         # Screw Gear specific properties
         obj.addProperty(
-            "App::PropertyAngle", "HelixAngle", "ScrewGear",
-            QT_TRANSLATE_NOOP("App::Property", "Helix angle of the teeth")
-        ).HelixAngle = 30.0 # Default helix angle
+            "App::PropertyAngle",
+            "HelixAngle",
+            "ScrewGear",
+            QT_TRANSLATE_NOOP("App::Property", "Helix angle of the teeth"),
+        ).HelixAngle = 30.0  # Default helix angle
 
         obj.addProperty(
-            "App::PropertyLength", "FaceWidth", "ScrewGear",
-            QT_TRANSLATE_NOOP("App::Property", "Width of the gear face")
+            "App::PropertyLength",
+            "FaceWidth",
+            "ScrewGear",
+            QT_TRANSLATE_NOOP("App::Property", "Width of the gear face"),
         ).FaceWidth = 10.0
 
         obj.addProperty(
-            "App::PropertyEnumeration", "Handedness", "ScrewGear",
-            QT_TRANSLATE_NOOP("App::Property", "Handedness of helix")
+            "App::PropertyEnumeration",
+            "Handedness",
+            "ScrewGear",
+            QT_TRANSLATE_NOOP("App::Property", "Handedness of helix"),
         )
         obj.Handedness = ["Right", "Left"]
         obj.Handedness = "Right"
 
         # --- NEW: Body Name Property ---
         obj.addProperty(
-            "App::PropertyString", "BodyName", "ScrewGear",
-            QT_TRANSLATE_NOOP("App::Property", "Name of the generated body")
+            "App::PropertyString",
+            "BodyName",
+            "ScrewGear",
+            QT_TRANSLATE_NOOP("App::Property", "Name of the generated body"),
         ).BodyName = H["body_name"]
         obj.BodyName = "ScrewGear"
 
         # Bore parameters
         obj.addProperty(
-            "App::PropertyEnumeration", "BoreType", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Type of center hole")
+            "App::PropertyEnumeration",
+            "BoreType",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Type of center hole"),
         )
         obj.BoreType = ["none", "circular", "square", "hexagonal", "keyway"]
         obj.BoreType = H["bore_type"]
 
         obj.addProperty(
-            "App::PropertyLength", "BoreDiameter", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Diameter of center bore")
+            "App::PropertyLength",
+            "BoreDiameter",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Diameter of center bore"),
         ).BoreDiameter = H["bore_diameter"]
 
         obj.addProperty(
-            "App::PropertyLength", "SquareCornerRadius", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Corner radius for square bore")
+            "App::PropertyLength",
+            "SquareCornerRadius",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Corner radius for square bore"),
         ).SquareCornerRadius = 0.5
 
         obj.addProperty(
-            "App::PropertyLength", "HexCornerRadius", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Corner radius for hexagonal bore")
+            "App::PropertyLength",
+            "HexCornerRadius",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Corner radius for hexagonal bore"),
         ).HexCornerRadius = 0.5
 
         obj.addProperty(
-            "App::PropertyLength", "KeywayWidth", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Width of keyway (DIN 6885)")
+            "App::PropertyLength",
+            "KeywayWidth",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Width of keyway (DIN 6885)"),
         ).KeywayWidth = 2.0
 
         obj.addProperty(
-            "App::PropertyLength", "KeywayDepth", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Depth of keyway")
+            "App::PropertyLength",
+            "KeywayDepth",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Depth of keyway"),
         ).KeywayDepth = 1.0
 
-
-        self.Type = 'ScrewGear'
+        self.Type = "ScrewGear"
         self.Object = obj
         self.doc = App.ActiveDocument
         self.last_body_name = obj.BodyName
@@ -260,7 +307,13 @@ class ScrewGear():
                 self.last_body_name = new_name
 
         # Update read-only calculated properties
-        if prop in ["Module", "NumberOfTeeth", "PressureAngle", "HelixAngle", "FaceWidth"]:
+        if prop in [
+            "Module",
+            "NumberOfTeeth",
+            "PressureAngle",
+            "HelixAngle",
+            "FaceWidth",
+        ]:
             try:
                 module = fp.Module.Value
                 num_teeth = fp.NumberOfTeeth
@@ -270,13 +323,13 @@ class ScrewGear():
                 # Calculations for screw gear often involve transverse plane
                 # First, get transverse module and pressure angle
                 transverse_module = gearMath.transverse_module(module, helix_angle)
-                
+
                 # Pitch diameter in transverse plane
                 pitch_dia = gearMath.pitch_diameter(transverse_module, num_teeth)
-                
+
                 # Base diameter in transverse plane (using transverse pressure angle, which can be derived)
                 # For simplicity, using normal pressure angle for now, this needs to be revisited for accuracy
-                base_dia = gearMath.calcBaseDiameter(pitch_dia, pressure_angle) 
+                base_dia = gearMath.calcBaseDiameter(pitch_dia, pressure_angle)
 
                 # Outer and Root diameters also in transverse plane
                 outer_dia = gearMath.calcAddendumDiameter(pitch_dia, transverse_module)
@@ -339,6 +392,7 @@ class ScrewGear():
             except Exception as e:
                 App.Console.PrintError(f"Screw Gear Error: {str(e)}\n")
                 import traceback
+
                 App.Console.PrintError(traceback.format_exc())
                 raise
 
@@ -463,7 +517,7 @@ class ViewProviderScrewGear:
 
     def regenerate(self):
         """Force regeneration of the gear."""
-        if hasattr(self.Object, 'Proxy'):
+        if hasattr(self.Object, "Proxy"):
             self.Object.Proxy.force_Recompute()
 
     def __getstate__(self):
@@ -489,9 +543,10 @@ class ViewProviderScrewGear:
 
 # Register command with FreeCAD
 try:
-    FreeCADGui.addCommand('ScrewGearCreateObject', ScrewGearCreateObject())
+    FreeCADGui.addCommand("ScrewGearCreateObject", ScrewGearCreateObject())
     # App.Console.PrintMessage("ScrewGearCreateObject command registered successfully\n")
 except Exception as e:
     App.Console.PrintError(f"Failed to register ScrewGearCreateObject: {e}\n")
     import traceback
+
     App.Console.PrintError(traceback.format_exc())

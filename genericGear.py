@@ -72,7 +72,7 @@ def _applyOriginAndAngle(body, parameters):
 # ============================================================================
 
 
-def genericHerringboneGear(
+def herringboneGear(
     doc,
     parameters,
     angle1: float,
@@ -290,7 +290,7 @@ def _createThreeSketchHerringbone(
 # ============================================================================
 
 
-def genericHelixGear(
+def helixGear(
     doc, parameters, helix_angle: float, profile_func: Optional[Callable] = None
 ):
     """
@@ -337,12 +337,12 @@ def genericHelixGear(
         total_rotation_deg = 0.0
 
     # Use two-sketch mode: angle1=0 triggers bottom→top loft without middle sketch
-    return genericHerringboneGear(
+    return herringboneGear(
         doc, params_with_helix, 0.0, total_rotation_deg, profile_func
     )
 
 
-def genericSpurGear(doc, parameters, profile_func: Optional[Callable] = None):
+def spurGear(doc, parameters, profile_func: Optional[Callable] = None):
     """
     Create a spur gear (zero helix angle).
 
@@ -360,7 +360,7 @@ def genericSpurGear(doc, parameters, profile_func: Optional[Callable] = None):
     if profile_func is None:
         profile_func = gearMath.generateSpurGearProfile
 
-    return genericHerringboneGear(doc, parameters, 0.0, 0.0, profile_func)
+    return herringboneGear(doc, parameters, 0.0, 0.0, profile_func)
 
 
 # ============================================================================
@@ -370,11 +370,11 @@ def genericSpurGear(doc, parameters, profile_func: Optional[Callable] = None):
 version = "Dec 29, 2025"
 
 
-class GenericSpurGear:
-    """FeaturePython object for parametric generic spur gear."""
+class SpurGear:
+    """FeaturePython object for parametric spur gear."""
 
     def __init__(self, obj):
-        """Initialize generic spur gear with default parameters."""
+        """Initialize spur gear with default parameters."""
         self.Dirty = False
         H = gearMath.generateDefaultParameters()
 
@@ -425,42 +425,42 @@ class GenericSpurGear:
         obj.addProperty(
             "App::PropertyInteger",
             "NumberOfTeeth",
-            "GenericSpurGear",
+            "SpurGear",
             QT_TRANSLATE_NOOP("App::Property", "Number of teeth"),
         ).NumberOfTeeth = H["num_teeth"]
 
         obj.addProperty(
             "App::PropertyLength",
             "Module",
-            "GenericSpurGear",
+            "SpurGear",
             QT_TRANSLATE_NOOP("App::Property", "Gear module (tooth size)"),
         ).Module = H["module"]
 
         obj.addProperty(
             "App::PropertyLength",
             "Height",
-            "GenericSpurGear",
+            "SpurGear",
             QT_TRANSLATE_NOOP("App::Property", "Gear thickness/height"),
         ).Height = H["height"]
 
         obj.addProperty(
             "App::PropertyAngle",
             "PressureAngle",
-            "GenericSpurGear",
+            "SpurGear",
             QT_TRANSLATE_NOOP("App::Property", "Pressure angle (normally 20°)"),
         ).PressureAngle = H["pressure_angle"]
 
         obj.addProperty(
             "App::PropertyFloat",
             "ProfileShift",
-            "GenericSpurGear",
+            "SpurGear",
             QT_TRANSLATE_NOOP("App::Property", "Profile shift coefficient (-1 to +1)"),
         ).ProfileShift = H["profile_shift"]
 
         obj.addProperty(
             "App::PropertyString",
             "BodyName",
-            "GenericSpurGear",
+            "SpurGear",
             QT_TRANSLATE_NOOP("App::Property", "Name of the generated body"),
         ).BodyName = H["body_name"]
 
@@ -539,7 +539,7 @@ class GenericSpurGear:
             ),
         ).Angle = 0.0
 
-        self.Type = "GenericSpurGear"
+        self.Type = "SpurGear"
         self.Object = obj
         self.last_body_name = obj.BodyName
         obj.Proxy = self
@@ -566,7 +566,7 @@ class GenericSpurGear:
                 if doc:
                     old_body = doc.getObject(old_name)
                     if old_body:
-                        if hasattr(old_body, 'removeObjectsFromDocument'):
+                        if hasattr(old_body, "removeObjectsFromDocument"):
                             old_body.removeObjectsFromDocument()
                         doc.removeObject(old_name)
                 self.last_body_name = new_name
@@ -627,7 +627,7 @@ class GenericSpurGear:
         if self.Dirty:
             try:
                 parameters = self.GetParameters()
-                genericSpurGear(App.ActiveDocument, parameters)
+                spurGear(App.ActiveDocument, parameters)
                 self.Dirty = False
                 App.ActiveDocument.recompute()
             except Exception as e:
@@ -643,11 +643,11 @@ class GenericSpurGear:
         t.singleShot(50, self.recompute)
 
 
-class GenericHelixGear:
-    """FeaturePython object for parametric generic helical gear."""
+class HelixGear:
+    """FeaturePython object for parametric helical gear."""
 
     def __init__(self, obj):
-        """Initialize generic helical gear with default parameters."""
+        """Initialize helical gear with default parameters."""
         self.Dirty = False
         H = gearMath.generateDefaultParameters()
 
@@ -698,49 +698,49 @@ class GenericHelixGear:
         obj.addProperty(
             "App::PropertyInteger",
             "NumberOfTeeth",
-            "GenericHelixGear",
+            "HelixGear",
             QT_TRANSLATE_NOOP("App::Property", "Number of teeth"),
         ).NumberOfTeeth = H["num_teeth"]
 
         obj.addProperty(
             "App::PropertyLength",
             "Module",
-            "GenericHelixGear",
+            "HelixGear",
             QT_TRANSLATE_NOOP("App::Property", "Gear module (tooth size)"),
         ).Module = H["module"]
 
         obj.addProperty(
             "App::PropertyLength",
             "Height",
-            "GenericHelixGear",
+            "HelixGear",
             QT_TRANSLATE_NOOP("App::Property", "Gear thickness/height"),
         ).Height = H["height"]
 
         obj.addProperty(
             "App::PropertyAngle",
             "PressureAngle",
-            "GenericHelixGear",
+            "HelixGear",
             QT_TRANSLATE_NOOP("App::Property", "Pressure angle (normally 20°)"),
         ).PressureAngle = H["pressure_angle"]
 
         obj.addProperty(
             "App::PropertyFloat",
             "ProfileShift",
-            "GenericHelixGear",
+            "HelixGear",
             QT_TRANSLATE_NOOP("App::Property", "Profile shift coefficient (-1 to +1)"),
         ).ProfileShift = H["profile_shift"]
 
         obj.addProperty(
             "App::PropertyAngle",
             "HelixAngle",
-            "GenericHelixGear",
+            "HelixGear",
             QT_TRANSLATE_NOOP("App::Property", "Helix angle in degrees"),
         ).HelixAngle = 15.0
 
         obj.addProperty(
             "App::PropertyString",
             "BodyName",
-            "GenericHelixGear",
+            "HelixGear",
             QT_TRANSLATE_NOOP("App::Property", "Name of the generated body"),
         ).BodyName = H["body_name"]
 
@@ -819,7 +819,7 @@ class GenericHelixGear:
             ),
         ).Angle = 0.0
 
-        self.Type = "GenericHelixGear"
+        self.Type = "HelixGear"
         self.Object = obj
         self.last_body_name = obj.BodyName
         obj.Proxy = self
@@ -845,7 +845,7 @@ class GenericHelixGear:
                 if doc:
                     old_body = doc.getObject(old_name)
                     if old_body:
-                        if hasattr(old_body, 'removeObjectsFromDocument'):
+                        if hasattr(old_body, "removeObjectsFromDocument"):
                             old_body.removeObjectsFromDocument()
                         doc.removeObject(old_name)
                 self.last_body_name = new_name
@@ -907,7 +907,7 @@ class GenericHelixGear:
             try:
                 parameters = self.GetParameters()
                 helix_angle = float(self.Object.HelixAngle.Value)
-                genericHelixGear(App.ActiveDocument, parameters, helix_angle)
+                helixGear(App.ActiveDocument, parameters, helix_angle)
                 self.Dirty = False
                 App.ActiveDocument.recompute()
             except Exception as e:
@@ -923,11 +923,11 @@ class GenericHelixGear:
         t.singleShot(50, self.recompute)
 
 
-class GenericHerringboneGear:
-    """FeaturePython object for parametric generic herringbone gear."""
+class HerringboneGear:
+    """FeaturePython object for parametric herringbone gear."""
 
     def __init__(self, obj):
-        """Initialize generic herringbone gear with default parameters."""
+        """Initialize herringbone gear with default parameters."""
         self.Dirty = False
         H = gearMath.generateDefaultParameters()
 
@@ -978,56 +978,56 @@ class GenericHerringboneGear:
         obj.addProperty(
             "App::PropertyInteger",
             "NumberOfTeeth",
-            "GenericHerringboneGear",
+            "HerringboneGear",
             QT_TRANSLATE_NOOP("App::Property", "Number of teeth"),
         ).NumberOfTeeth = H["num_teeth"]
 
         obj.addProperty(
             "App::PropertyLength",
             "Module",
-            "GenericHerringboneGear",
+            "HerringboneGear",
             QT_TRANSLATE_NOOP("App::Property", "Gear module (tooth size)"),
         ).Module = H["module"]
 
         obj.addProperty(
             "App::PropertyLength",
             "Height",
-            "GenericHerringboneGear",
+            "HerringboneGear",
             QT_TRANSLATE_NOOP("App::Property", "Gear thickness/height"),
         ).Height = H["height"]
 
         obj.addProperty(
             "App::PropertyAngle",
             "PressureAngle",
-            "GenericHerringboneGear",
+            "HerringboneGear",
             QT_TRANSLATE_NOOP("App::Property", "Pressure angle (normally 20°)"),
         ).PressureAngle = H["pressure_angle"]
 
         obj.addProperty(
             "App::PropertyFloat",
             "ProfileShift",
-            "GenericHerringboneGear",
+            "HerringboneGear",
             QT_TRANSLATE_NOOP("App::Property", "Profile shift coefficient (-1 to +1)"),
         ).ProfileShift = H["profile_shift"]
 
         obj.addProperty(
             "App::PropertyAngle",
             "Angle1",
-            "GenericHerringboneGear",
+            "HerringboneGear",
             QT_TRANSLATE_NOOP("App::Property", "First helix angle (bottom to middle)"),
         ).Angle1 = 15.0
 
         obj.addProperty(
             "App::PropertyAngle",
             "Angle2",
-            "GenericHerringboneGear",
+            "HerringboneGear",
             QT_TRANSLATE_NOOP("App::Property", "Second helix angle (middle to top)"),
         ).Angle2 = -15.0
 
         obj.addProperty(
             "App::PropertyString",
             "BodyName",
-            "GenericHerringboneGear",
+            "HerringboneGear",
             QT_TRANSLATE_NOOP("App::Property", "Name of the generated body"),
         ).BodyName = H["body_name"]
 
@@ -1106,7 +1106,7 @@ class GenericHerringboneGear:
             ),
         ).Angle = 0.0
 
-        self.Type = "GenericHerringboneGear"
+        self.Type = "HerringboneGear"
         self.Object = obj
         self.last_body_name = obj.BodyName
         obj.Proxy = self
@@ -1132,7 +1132,7 @@ class GenericHerringboneGear:
                 if doc:
                     old_body = doc.getObject(old_name)
                     if old_body:
-                        if hasattr(old_body, 'removeObjectsFromDocument'):
+                        if hasattr(old_body, "removeObjectsFromDocument"):
                             old_body.removeObjectsFromDocument()
                         doc.removeObject(old_name)
                 self.last_body_name = new_name
@@ -1195,7 +1195,7 @@ class GenericHerringboneGear:
                 parameters = self.GetParameters()
                 angle1 = float(self.Object.Angle1.Value)
                 angle2 = float(self.Object.Angle2.Value)
-                genericHerringboneGear(App.ActiveDocument, parameters, angle1, angle2)
+                herringboneGear(App.ActiveDocument, parameters, angle1, angle2)
                 self.Dirty = False
                 App.ActiveDocument.recompute()
             except Exception as e:
@@ -1288,14 +1288,14 @@ class ViewProviderGenericGear:
 # ============================================================================
 
 
-class GenericSpurGearCommand:
-    """Command to create a new generic spur gear object."""
+class SpurGearCommand:
+    """Command to create a new spur gear object."""
 
     def GetResources(self):
         return {
             "Pixmap": os.path.join(smWB_icons_path, "spurGear.svg"),
-            "MenuText": "&Create Generic Spur Gear",
-            "ToolTip": "Create parametric involute spur gear using generic framework",
+            "MenuText": "&Create Spur Gear",
+            "ToolTip": "Create parametric involute spur gear",
         }
 
     def __init__(self):
@@ -1308,15 +1308,15 @@ class GenericSpurGearCommand:
         doc = App.ActiveDocument
 
         # Generate unique body name
-        base_name = "GenericSpurGear"
+        base_name = "SpurGear"
         unique_name = base_name
         count = 1
         while doc.getObject(unique_name):
             unique_name = f"{base_name}{count:03d}"
             count += 1
 
-        gear_obj = doc.addObject("Part::FeaturePython", "GenericSpurGearParameters")
-        spur_gear = GenericSpurGear(gear_obj)
+        gear_obj = doc.addObject("Part::FeaturePython", "SpurGearParameters")
+        spur_gear = SpurGear(gear_obj)
         ViewProviderGenericGear(
             gear_obj.ViewObject, os.path.join(smWB_icons_path, "spurGear.svg")
         )
@@ -1340,14 +1340,14 @@ class GenericSpurGearCommand:
         pass
 
 
-class GenericHelixGearCommand:
-    """Command to create a new generic helical gear object."""
+class HelixGearCommand:
+    """Command to create a new helical gear object."""
 
     def GetResources(self):
         return {
             "Pixmap": os.path.join(smWB_icons_path, "HelicalGear.svg"),
-            "MenuText": "&Create Generic Helical Gear",
-            "ToolTip": "Create parametric involute helical gear using generic framework",
+            "MenuText": "&Create Helical Gear",
+            "ToolTip": "Create parametric involute helical gear",
         }
 
     def __init__(self):
@@ -1360,15 +1360,15 @@ class GenericHelixGearCommand:
         doc = App.ActiveDocument
 
         # Generate unique body name
-        base_name = "GenericHelicalGear"
+        base_name = "HelicalGear"
         unique_name = base_name
         count = 1
         while doc.getObject(unique_name):
             unique_name = f"{base_name}{count:03d}"
             count += 1
 
-        gear_obj = doc.addObject("Part::FeaturePython", "GenericHelixGearParameters")
-        helix_gear = GenericHelixGear(gear_obj)
+        gear_obj = doc.addObject("Part::FeaturePython", "HelixGearParameters")
+        helix_gear = HelixGear(gear_obj)
         ViewProviderGenericGear(
             gear_obj.ViewObject, os.path.join(smWB_icons_path, "HelicalGear.svg")
         )
@@ -1392,14 +1392,14 @@ class GenericHelixGearCommand:
         pass
 
 
-class GenericHerringboneGearCommand:
-    """Command to create a new generic herringbone gear object."""
+class HerringboneGearCommand:
+    """Command to create a new herringbone gear object."""
 
     def GetResources(self):
         return {
             "Pixmap": os.path.join(smWB_icons_path, "DoubleHelicalGear.svg"),
-            "MenuText": "&Create Generic Herringbone Gear",
-            "ToolTip": "Create parametric involute herringbone gear using generic framework",
+            "MenuText": "&Create Herringbone Gear",
+            "ToolTip": "Create parametric involute herringbone gear",
         }
 
     def __init__(self):
@@ -1412,17 +1412,15 @@ class GenericHerringboneGearCommand:
         doc = App.ActiveDocument
 
         # Generate unique body name
-        base_name = "GenericHerringboneGear"
+        base_name = "HerringboneGear"
         unique_name = base_name
         count = 1
         while doc.getObject(unique_name):
             unique_name = f"{base_name}{count:03d}"
             count += 1
 
-        gear_obj = doc.addObject(
-            "Part::FeaturePython", "GenericHerringboneGearParameters"
-        )
-        herringbone_gear = GenericHerringboneGear(gear_obj)
+        gear_obj = doc.addObject("Part::FeaturePython", "HerringboneGearParameters")
+        herringbone_gear = HerringboneGear(gear_obj)
         ViewProviderGenericGear(
             gear_obj.ViewObject, os.path.join(smWB_icons_path, "DoubleHelicalGear.svg")
         )
@@ -1448,11 +1446,9 @@ class GenericHerringboneGearCommand:
 
 # Register commands with FreeCAD
 try:
-    FreeCADGui.addCommand("GenericSpurGearCommand", GenericSpurGearCommand())
-    FreeCADGui.addCommand("GenericHelixGearCommand", GenericHelixGearCommand())
-    FreeCADGui.addCommand(
-        "GenericHerringboneGearCommand", GenericHerringboneGearCommand()
-    )
+    FreeCADGui.addCommand("SpurGearCommand", SpurGearCommand())
+    FreeCADGui.addCommand("HelixGearCommand", HelixGearCommand())
+    FreeCADGui.addCommand("HerringboneGearCommand", HerringboneGearCommand())
 except Exception as e:
     App.Console.PrintError(f"Failed to register generic gear commands: {e}\n")
     import traceback

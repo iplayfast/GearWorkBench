@@ -1,4 +1,4 @@
-"""Generic Internal Gear Framework for FreeCAD
+"""Internal Gear Framework for FreeCAD
 
 This module provides a unified framework for creating internal (ring) gear types
 using a master herringbone gear builder that handles all cases through
@@ -9,7 +9,7 @@ Fixes:
 - Adds clearance epsilon to cutter to prevent coincident face errors.
 
 Copyright 2025, Chris Bruner
-Version v1.3.0 
+Version v1.3.0
 License LGPL V2.1
 """
 
@@ -38,6 +38,7 @@ def QT_TRANSLATE_NOOP(scope, text):
 # VALIDATION
 # ============================================================================
 
+
 def validateInternalParameters(parameters):
     """Validate common internal gear parameters."""
     if parameters["module"] < gearMath.MIN_MODULE:
@@ -52,18 +53,34 @@ def validateInternalParameters(parameters):
 # PROFILE GENERATORS
 # ============================================================================
 
+
 def generateInternalCutterProfile(sketch, parameters):
     """
     Generates the CUTTER profile.
     For an internal gear, the 'Gap' is the shape of an EXTERNAL tooth.
     So we call the standard external tooth generator here.
+
+    IMPORTANT: We add a small positive profile shift to the cutter to create
+    backlash clearance, allowing the external gear to fit into the gap.
     """
-    gearMath.generateToothProfile(sketch, parameters)
+    # Add backlash clearance by increasing the cutter's profile shift
+    # This makes the tooth gap slightly larger than the mating tooth
+    cutter_params = parameters.copy()
+
+    # Use backlash parameter (default 0.15 for 3D printing, typical range 0.05-0.25)
+    backlash = parameters.get("backlash", 0.15)
+    original_shift = parameters.get("profile_shift", 0.0)
+    cutter_params["profile_shift"] = original_shift + backlash
+
+    gearMath.generateToothProfile(sketch, cutter_params)
 
 
 def generateInternalHelicalCutterProfile(sketch, parameters):
     """
     Generates the Helical CUTTER profile (Transverse conversion).
+
+    IMPORTANT: We add a small positive profile shift to the cutter to create
+    backlash clearance, allowing the external gear to fit into the gap.
     """
     helix_angle = parameters.get("helix_angle", 0.0)
 
@@ -88,6 +105,12 @@ def generateInternalHelicalCutterProfile(sketch, parameters):
     transverse_params["module"] = mt
     transverse_params["pressure_angle"] = alpha_t
 
+    # Add backlash clearance by increasing the cutter's profile shift
+    # This makes the tooth gap slightly larger than the mating tooth
+    backlash = parameters.get("backlash", 0.15)
+    original_shift = parameters.get("profile_shift", 0.0)
+    transverse_params["profile_shift"] = original_shift + backlash
+
     # Generate the EXTERNAL tooth profile (which is the cutter for the gap)
     gearMath.generateToothProfile(sketch, transverse_params)
 
@@ -96,7 +119,8 @@ def generateInternalHelicalCutterProfile(sketch, parameters):
 # MASTER INTERNAL GEAR BUILDER
 # ============================================================================
 
-def genericInternalHerringboneGear(
+
+def internalHerringboneGear(
     doc,
     parameters,
     angle1: float,
@@ -108,7 +132,7 @@ def genericInternalHerringboneGear(
     """
     validateInternalParameters(parameters)
 
-    body_name = parameters.get("body_name", "GenericInternalGear")
+    body_name = parameters.get("body_name", "InternalGear")
     body = util.readyPart(doc, body_name)
 
     num_teeth = parameters["num_teeth"]
@@ -130,14 +154,14 @@ def genericInternalHerringboneGear(
         mt = module
 
     dw = mt * num_teeth
-    
+
     # CALCULATE DIAMETERS
     # Tip Radius (Inner Hole): where the teeth END.
     ra_internal = dw / 2.0 - mt * (gearMath.ADDENDUM_FACTOR + profile_shift)
-    
+
     # Root Radius (Bottom of the cut): where the teeth START.
     rf_internal = dw / 2.0 + mt * (gearMath.DEDENDUM_FACTOR - profile_shift)
-    
+
     # Outer Diameter of the Part
     outer_diameter = rf_internal * 2.0 + 2 * rim_thickness
 
@@ -148,69 +172,117 @@ def genericInternalHerringboneGear(
     # We extend the cutter slightly deeper than the nominal root to ensure clean boolean cuts.
     # This prevents coincident faces at the bottom of the tooth gap.
     cut_params = parameters.copy()
-    cut_params["tip_radius"] = rf_internal + (0.01 * module) 
+    cut_params["tip_radius"] = rf_internal + (0.01 * module)
 
     if angle1 == 0:
         return _createTwoSketchInternalGear(
-            body, cut_params, height, num_teeth, angle2, ra_internal, outer_diameter, profile_func
+            body,
+            cut_params,
+            height,
+            num_teeth,
+            angle2,
+            ra_internal,
+            outer_diameter,
+            profile_func,
         )
     else:
         return _createThreeSketchInternalGear(
-            body, cut_params, height, num_teeth, angle1, angle2, ra_internal, outer_diameter, profile_func
+            body,
+            cut_params,
+            height,
+            num_teeth,
+            angle1,
+            angle2,
+            ra_internal,
+            outer_diameter,
+            profile_func,
         )
 
 
 def _createTwoSketchInternalGear(
-    body, parameters, height, num_teeth, angle2, ra_internal, outer_diameter, profile_func
+    body,
+    parameters,
+    height,
+    num_teeth,
+    angle2,
+    ra_internal,
+    outer_diameter,
+    profile_func,
 ):
-    """Create internal gear with 2 sketches (Subtractive)."""
+    """Create internal gear with 2 sketches (Subtractive).
+
+    Creates full ring, then one tooth gap, then patterns the cut.
+    Much faster than patterning ring segments.
+    """
     doc = body.Document
 
-    # 1. Base Ring
+    # 1. Create FULL Ring (360-degree annulus)
     ring_sketch = util.createSketch(body, "Ring")
-    
-    outer_circle = ring_sketch.addGeometry(
-        Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), outer_diameter / 2.0), False
-    )
-    ring_sketch.addConstraint(Sketcher.Constraint("Coincident", outer_circle, 3, -1, 1))
-    ring_sketch.addConstraint(Sketcher.Constraint("Diameter", outer_circle, outer_diameter))
 
-    inner_circle = ring_sketch.addGeometry(
-        Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), ra_internal), False
+    # Create full circles
+    outer_circle_geom = Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), outer_diameter / 2.0)
+    inner_circle_geom = Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), ra_internal)
+
+    outer_circle_idx = ring_sketch.addGeometry(outer_circle_geom, False)
+    ring_sketch.addConstraint(Sketcher.Constraint("Coincident", outer_circle_idx, 3, -1, 1))
+    ring_sketch.addConstraint(
+        Sketcher.Constraint("Diameter", outer_circle_idx, outer_diameter)
     )
-    ring_sketch.addConstraint(Sketcher.Constraint("Coincident", inner_circle, 3, -1, 1))
-    ring_sketch.addConstraint(Sketcher.Constraint("Diameter", inner_circle, ra_internal * 2.0))
+
+    inner_circle_idx = ring_sketch.addGeometry(inner_circle_geom, False)
+    ring_sketch.addConstraint(Sketcher.Constraint("Coincident", inner_circle_idx, 3, -1, 1))
+    ring_sketch.addConstraint(
+        Sketcher.Constraint("Diameter", inner_circle_idx, ra_internal * 2.0)
+    )
 
     ring_pad = util.createPad(body, ring_sketch, height, "Ring")
-    
-    # 2. Cutters (The Gap)
+
+    # Show progress in FreeCAD Report View
+    App.Console.PrintMessage("Internal gear: Created ring base...\n")
+    if App.GuiUp:
+        QtCore.QCoreApplication.processEvents()
+
+    # 2. Create Cutters for ONE tooth gap
     sketch_bottom = util.createSketch(body, "ToothGap_Bottom")
     sketch_bottom.Placement = App.Placement(App.Vector(0, 0, 0), App.Rotation(0, 0, 0))
-    sketch_bottom.MapMode = 'Deactivated'
+    sketch_bottom.MapMode = "Deactivated"
     profile_func(sketch_bottom, parameters)
 
     sketch_top = util.createSketch(body, "ToothGap_Top")
     sketch_top.Placement = App.Placement(
         App.Vector(0, 0, height), App.Rotation(App.Vector(0, 0, 1), angle2)
     )
-    sketch_top.MapMode = 'Deactivated'
+    sketch_top.MapMode = "Deactivated"
     profile_func(sketch_top, parameters)
 
-    # 3. Subtractive Loft
+    # 3. Subtractive Loft for ONE tooth gap
     tooth_cut = body.newObject("PartDesign::SubtractiveLoft", "ToothGapCut")
     tooth_cut.Profile = sketch_bottom
     tooth_cut.Sections = [sketch_top]
     tooth_cut.Ruled = True
     tooth_cut.Refine = False
 
-    # 4. Pattern
+    # Show progress in FreeCAD Report View
+    App.Console.PrintMessage("Internal gear: Created tooth gap cut...\n")
+    if App.GuiUp:
+        QtCore.QCoreApplication.processEvents()
+
+    # 4. Pattern the CUT operation (not the ring)
+    App.Console.PrintMessage(f"Internal gear: Creating polar pattern for {num_teeth} teeth (this may take a while)...\n")
+    if App.GuiUp:
+        QtCore.QCoreApplication.processEvents()
     gear_teeth = body.newObject("PartDesign::PolarPattern", "Teeth")
     origin = body.Origin
     z_axis = origin.OriginFeatures[2]
-    gear_teeth.Axis = (z_axis, [""])
+    gear_teeth.Axis = (z_axis, ["N_Axis"])
     gear_teeth.Angle = 360
     gear_teeth.Occurrences = num_teeth
     gear_teeth.Originals = [tooth_cut]
+
+    # Show progress in FreeCAD Report View
+    App.Console.PrintMessage("Internal gear: Polar pattern created, finalizing...\n")
+    if App.GuiUp:
+        QtCore.QCoreApplication.processEvents()
 
     # Cleanup
     ring_sketch.Visibility = False
@@ -222,7 +294,11 @@ def _createTwoSketchInternalGear(
     body.Tip = gear_teeth
 
     doc.recompute()
+
+    # Show completion in FreeCAD Report View
+    App.Console.PrintMessage(f"✓ Internal gear with {num_teeth} teeth created successfully!\n")
     if App.GuiUp:
+        QtCore.QCoreApplication.processEvents()
         try:
             FreeCADGui.SendMsgToActiveView("ViewFit")
         except Exception:
@@ -232,74 +308,106 @@ def _createTwoSketchInternalGear(
 
 
 def _createThreeSketchInternalGear(
-    body, parameters, height, num_teeth, angle1, angle2, ra_internal, outer_diameter, profile_func
+    body,
+    parameters,
+    height,
+    num_teeth,
+    angle1,
+    angle2,
+    ra_internal,
+    outer_diameter,
+    profile_func,
 ):
-    """Create internal herringbone gear (Subtractive)."""
+    """Create internal herringbone gear (Subtractive).
+
+    Creates full ring, then one tooth gap with two lofts, then patterns the cuts.
+    Much faster than patterning ring segments.
+    """
     doc = body.Document
     half_height = height / 2.0
 
-    # 1. Base Ring
+    # 1. Create FULL Ring (360-degree annulus)
     ring_sketch = util.createSketch(body, "Ring")
-    
-    outer_circle = ring_sketch.addGeometry(
-        Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), outer_diameter / 2.0), False
-    )
-    ring_sketch.addConstraint(Sketcher.Constraint("Coincident", outer_circle, 3, -1, 1))
-    ring_sketch.addConstraint(Sketcher.Constraint("Diameter", outer_circle, outer_diameter))
 
-    inner_circle = ring_sketch.addGeometry(
-        Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), ra_internal), False
+    # Create full circles
+    outer_circle_geom = Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), outer_diameter / 2.0)
+    inner_circle_geom = Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), ra_internal)
+
+    outer_circle_idx = ring_sketch.addGeometry(outer_circle_geom, False)
+    ring_sketch.addConstraint(Sketcher.Constraint("Coincident", outer_circle_idx, 3, -1, 1))
+    ring_sketch.addConstraint(
+        Sketcher.Constraint("Diameter", outer_circle_idx, outer_diameter)
     )
-    ring_sketch.addConstraint(Sketcher.Constraint("Coincident", inner_circle, 3, -1, 1))
-    ring_sketch.addConstraint(Sketcher.Constraint("Diameter", inner_circle, ra_internal * 2.0))
+
+    inner_circle_idx = ring_sketch.addGeometry(inner_circle_geom, False)
+    ring_sketch.addConstraint(Sketcher.Constraint("Coincident", inner_circle_idx, 3, -1, 1))
+    ring_sketch.addConstraint(
+        Sketcher.Constraint("Diameter", inner_circle_idx, ra_internal * 2.0)
+    )
 
     ring_pad = util.createPad(body, ring_sketch, height, "Ring")
 
-    # 2. Cutters
+    # Show progress in FreeCAD Report View
+    App.Console.PrintMessage("Internal herringbone: Created ring base...\n")
+    if App.GuiUp:
+        QtCore.QCoreApplication.processEvents()
+
+    # 2. Create Cutters for ONE tooth gap (The Gap)
     sketch_bottom = util.createSketch(body, "ToothGap_Bottom")
     sketch_bottom.Placement = App.Placement(App.Vector(0, 0, 0), App.Rotation(0, 0, 0))
-    sketch_bottom.MapMode = 'Deactivated'
+    sketch_bottom.MapMode = "Deactivated"
     profile_func(sketch_bottom, parameters)
 
     sketch_middle = util.createSketch(body, "ToothGap_Middle")
     sketch_middle.Placement = App.Placement(
         App.Vector(0, 0, half_height), App.Rotation(App.Vector(0, 0, 1), angle1)
     )
-    sketch_middle.MapMode = 'Deactivated'
+    sketch_middle.MapMode = "Deactivated"
     profile_func(sketch_middle, parameters)
 
     sketch_top = util.createSketch(body, "ToothGap_Top")
     sketch_top.Placement = App.Placement(
         App.Vector(0, 0, height), App.Rotation(App.Vector(0, 0, 1), angle1 + angle2)
     )
-    sketch_top.MapMode = 'Deactivated'
+    sketch_top.MapMode = "Deactivated"
     profile_func(sketch_top, parameters)
 
-    # 3. Cuts
+    # 3. Apply Subtractive Lofts for ONE tooth gap
     cut_lower = body.newObject("PartDesign::SubtractiveLoft", "ToothGapLower")
     cut_lower.Profile = sketch_bottom
     cut_lower.Sections = [sketch_middle]
     cut_lower.Ruled = True
     cut_lower.Refine = False
 
-
     cut_upper = body.newObject("PartDesign::SubtractiveLoft", "ToothGapUpper")
     cut_upper.Profile = sketch_middle
     cut_upper.Sections = [sketch_top]
-    
-    cut_upper.Ruled = True    
+    cut_upper.Ruled = True
     cut_upper.Refine = False
 
+    # Show progress in FreeCAD Report View
+    App.Console.PrintMessage("Internal herringbone: Created tooth gap cuts...\n")
+    if App.GuiUp:
+        QtCore.QCoreApplication.processEvents()
 
-    # 4. Pattern
+    # 4. Pattern BOTH CUT operations together (faster than separate patterns)
+    App.Console.PrintMessage(f"Internal herringbone: Creating polar pattern for {num_teeth} teeth (this may take a while)...\n")
+    if App.GuiUp:
+        QtCore.QCoreApplication.processEvents()
     gear_teeth = body.newObject("PartDesign::PolarPattern", "Teeth")
     origin = body.Origin
     z_axis = origin.OriginFeatures[2]
-    gear_teeth.Axis = (z_axis, [""])
+    gear_teeth.Axis = (z_axis, ["N_Axis"])
     gear_teeth.Angle = 360
     gear_teeth.Occurrences = num_teeth
     gear_teeth.Originals = [cut_lower, cut_upper]
 
+    # Show progress in FreeCAD Report View
+    App.Console.PrintMessage("Internal herringbone: Polar pattern created, finalizing...\n")
+    if App.GuiUp:
+        QtCore.QCoreApplication.processEvents()
+
+    # Cleanup
     ring_sketch.Visibility = False
     sketch_bottom.Visibility = False
     sketch_middle.Visibility = False
@@ -311,7 +419,11 @@ def _createThreeSketchInternalGear(
     body.Tip = gear_teeth
 
     doc.recompute()
+
+    # Show completion in FreeCAD Report View
+    App.Console.PrintMessage(f"✓ Internal herringbone gear with {num_teeth} teeth created successfully!\n")
     if App.GuiUp:
+        QtCore.QCoreApplication.processEvents()
         try:
             FreeCADGui.SendMsgToActiveView("ViewFit")
         except Exception:
@@ -324,7 +436,8 @@ def _createThreeSketchInternalGear(
 # SPECIALIZED INTERNAL GEAR FUNCTIONS
 # ============================================================================
 
-def genericInternalHelixGear(
+
+def internalHelixGear(
     doc, parameters, helix_angle: float, profile_func: Optional[Callable] = None
 ):
     if profile_func is None:
@@ -346,48 +459,75 @@ def genericInternalHelixGear(
     else:
         total_rotation_deg = 0.0
 
-    return genericInternalHerringboneGear(
+    return internalHerringboneGear(
         doc, params_with_helix, 0.0, total_rotation_deg, profile_func
     )
 
 
-def genericInternalSpurGear(doc, parameters, profile_func: Optional[Callable] = None):
+def internalSpurGear(doc, parameters, profile_func: Optional[Callable] = None):
     if profile_func is None:
         profile_func = generateInternalCutterProfile  # Use External profile as cutter
 
-    return genericInternalHerringboneGear(doc, parameters, 0.0, 0.0, profile_func)
+    return internalHerringboneGear(doc, parameters, 0.0, 0.0, profile_func)
 
 
 # ============================================================================
 # FEATUREPYTHON CLASSES
 # ============================================================================
 
-class GenericInternalSpurGear:
+
+class InternalSpurGear:
     """FeaturePython object for parametric internal spur gear."""
 
     def __init__(self, obj):
         self.Dirty = False
+        self.recomputing = False  # Guard against concurrent recompute calls
         H = gearMath.generateDefaultInternalParameters()
 
-        obj.addProperty("App::PropertyString", "Version", "read only", "", 1).Version = version
+        obj.addProperty(
+            "App::PropertyString", "Version", "read only", "", 1
+        ).Version = version
         obj.addProperty("App::PropertyLength", "PitchDiameter", "read only", "", 1)
         obj.addProperty("App::PropertyLength", "BaseDiameter", "read only", "", 1)
         obj.addProperty("App::PropertyLength", "InnerDiameter", "read only", "", 1)
         obj.addProperty("App::PropertyLength", "OuterDiameter", "read only", "", 1)
 
-        obj.addProperty("App::PropertyLength", "Module", "InternalSpurGear", "Normal module").Module = H["module"]
-        obj.addProperty("App::PropertyInteger", "NumberOfTeeth", "InternalSpurGear", "Number of teeth").NumberOfTeeth = H["num_teeth"]
-        obj.addProperty("App::PropertyAngle", "PressureAngle", "InternalSpurGear", "Normal pressure angle").PressureAngle = H["pressure_angle"]
-        obj.addProperty("App::PropertyFloat", "ProfileShift", "InternalSpurGear", "Profile shift coefficient").ProfileShift = H["profile_shift"]
-        obj.addProperty("App::PropertyLength", "Height", "InternalSpurGear", "Gear height").Height = H["height"]
-        obj.addProperty("App::PropertyLength", "RimThickness", "InternalSpurGear", "Rim thickness").RimThickness = H["rim_thickness"]
-        obj.addProperty("App::PropertyString", "BodyName", "InternalSpurGear", "Body name").BodyName = "GenericInternalSpurGear"
+        obj.addProperty(
+            "App::PropertyLength", "Module", "InternalSpurGear", "Normal module"
+        ).Module = H["module"]
+        obj.addProperty(
+            "App::PropertyInteger",
+            "NumberOfTeeth",
+            "InternalSpurGear",
+            "Number of teeth",
+        ).NumberOfTeeth = H["num_teeth"]
+        obj.addProperty(
+            "App::PropertyAngle",
+            "PressureAngle",
+            "InternalSpurGear",
+            "Normal pressure angle",
+        ).PressureAngle = H["pressure_angle"]
+        obj.addProperty(
+            "App::PropertyFloat",
+            "ProfileShift",
+            "InternalSpurGear",
+            "Profile shift coefficient",
+        ).ProfileShift = H["profile_shift"]
+        obj.addProperty(
+            "App::PropertyLength", "Height", "InternalSpurGear", "Gear height"
+        ).Height = H["height"]
+        obj.addProperty(
+            "App::PropertyLength", "RimThickness", "InternalSpurGear", "Rim thickness"
+        ).RimThickness = H["rim_thickness"]
+        obj.addProperty(
+            "App::PropertyString", "BodyName", "InternalSpurGear", "Body name"
+        ).BodyName = "InternalSpurGear"
 
         # Store the actual body name created by gear generator
         self.created_body_name = None
         self.last_body_name = obj.BodyName
 
-        self.Type = "GenericInternalSpurGear"
+        self.Type = "InternalSpurGear"
         self.Object = obj
         obj.Proxy = self
         self.onChanged(obj, "Module")
@@ -406,7 +546,13 @@ class GenericInternalSpurGear:
                         doc.removeObject(old_body)
                 self.last_body_name = new_name
 
-        if prop in ["Module", "NumberOfTeeth", "PressureAngle", "ProfileShift", "RimThickness"]:
+        if prop in [
+            "Module",
+            "NumberOfTeeth",
+            "PressureAngle",
+            "ProfileShift",
+            "RimThickness",
+        ]:
             try:
                 module = fp.Module.Value
                 num_teeth = fp.NumberOfTeeth
@@ -416,8 +562,12 @@ class GenericInternalSpurGear:
 
                 pitch_dia = gearMath.calcPitchDiameter(module, num_teeth)
                 base_dia = gearMath.calcBaseDiameter(pitch_dia, pressure_angle)
-                inner_dia = gearMath.calcInternalAddendumDiameter(pitch_dia, module, profile_shift)
-                outer_dia = gearMath.calcInternalDedendumDiameter(pitch_dia, module, profile_shift, rim_thickness)
+                inner_dia = gearMath.calcInternalAddendumDiameter(
+                    pitch_dia, module, profile_shift
+                )
+                outer_dia = gearMath.calcInternalDedendumDiameter(
+                    pitch_dia, module, profile_shift, rim_thickness
+                )
 
                 fp.PitchDiameter = pitch_dia
                 fp.BaseDiameter = base_dia
@@ -442,15 +592,24 @@ class GenericInternalSpurGear:
         self.recompute()
 
     def recompute(self):
-        if self.Dirty:
+        if self.Dirty and not self.recomputing:
             try:
+                self.recomputing = True  # Mark as recomputing
                 parameters = self.GetParameters()
 
                 # Get the actual body name that was created (from our stored value)
-                actual_body_name = self.created_body_name if hasattr(self, "created_body_name") else None
+                actual_body_name = (
+                    self.created_body_name
+                    if hasattr(self, "created_body_name")
+                    else None
+                )
 
                 # Use the actual body name to delete the old one
-                body_name = actual_body_name if actual_body_name else parameters.get("body_name", "GenericInternalSpurGear")
+                body_name = (
+                    actual_body_name
+                    if actual_body_name
+                    else parameters.get("body_name", "InternalSpurGear")
+                )
 
                 doc = App.ActiveDocument
                 if not doc:
@@ -460,24 +619,31 @@ class GenericInternalSpurGear:
                 # Delete old body if it exists and has same name
                 old_body = doc.getObject(body_name)
                 if old_body and old_body.isValid():
-                    # Delete the old body (which may have a different name from previous BodyName)
+                    # Delete old body (which may have a different name from previous BodyName)
                     doc.removeObject(body_name)
                     App.Console.PrintMessage(f"Deleted old body: {body_name}\n")
 
                 # Create new body with parameters
-                genericInternalSpurGear(doc, parameters)
+                internalSpurGear(doc, parameters)
 
                 # Store the newly created body name
-                new_body = doc.getObject(parameters.get("body_name", "GenericInternalSpurGear"))
+                new_body = doc.getObject(
+                    parameters.get("body_name", "InternalSpurGear")
+                )
                 if new_body and new_body.isValid():
-                    self.created_body_name = parameters.get("body_name", "GenericInternalSpurGear")
-                    App.Console.PrintMessage(f"Created new body: {self.created_body_name}\n")
+                    self.created_body_name = parameters.get(
+                        "body_name", "InternalSpurGear"
+                    )
+                    App.Console.PrintMessage(
+                        f"Created new body: {self.created_body_name}\n"
+                    )
 
-                    # Restore placement if possible (only if it's not the first gear creation)
-                    # For now, just set the body name and let the gear generator handle placement
+                    # (recompute is already called at end of internalSpurGear function)
+
                     self.Dirty = False
-                    App.ActiveDocument.recompute()
+                    self.recomputing = False
             except Exception as e:
+                self.recomputing = False  # Clear recomputing flag on error
                 App.Console.PrintError(f"Internal Spur Gear Error: {e}\n")
                 raise
 
@@ -492,29 +658,60 @@ class GenericInternalSpurGear:
             self.Type = state
 
 
-class GenericInternalHelixGear:
+class InternalHelixGear:
     """FeaturePython object for parametric internal helical gear."""
 
     def __init__(self, obj):
         self.Dirty = False
+        self.recomputing = False  # Guard against concurrent recompute calls
         H = gearMath.generateDefaultInternalParameters()
 
-        obj.addProperty("App::PropertyString", "Version", "read only", "", 1).Version = version
+        obj.addProperty(
+            "App::PropertyString", "Version", "read only", "", 1
+        ).Version = version
         obj.addProperty("App::PropertyLength", "PitchDiameter", "read only", "", 1)
         obj.addProperty("App::PropertyLength", "BaseDiameter", "read only", "", 1)
         obj.addProperty("App::PropertyLength", "InnerDiameter", "read only", "", 1)
         obj.addProperty("App::PropertyLength", "OuterDiameter", "read only", "", 1)
 
-        obj.addProperty("App::PropertyLength", "Module", "InternalHelicalGear", "Normal module").Module = H["module"]
-        obj.addProperty("App::PropertyInteger", "NumberOfTeeth", "InternalHelicalGear", "Number of teeth").NumberOfTeeth = H["num_teeth"]
-        obj.addProperty("App::PropertyAngle", "PressureAngle", "InternalHelicalGear", "Normal pressure angle").PressureAngle = H["pressure_angle"]
-        obj.addProperty("App::PropertyFloat", "ProfileShift", "InternalHelicalGear", "Profile shift coefficient").ProfileShift = H["profile_shift"]
-        obj.addProperty("App::PropertyLength", "Height", "InternalHelicalGear", "Gear height").Height = H["height"]
-        obj.addProperty("App::PropertyLength", "RimThickness", "InternalHelicalGear", "Rim thickness").RimThickness = H["rim_thickness"]
-        obj.addProperty("App::PropertyAngle", "HelixAngle", "InternalHelicalGear", "Helix angle").HelixAngle = -15.0
-        obj.addProperty("App::PropertyString", "BodyName", "InternalHelicalGear", "Body name").BodyName = "GenericInternalHelixGear"
+        obj.addProperty(
+            "App::PropertyLength", "Module", "InternalHelicalGear", "Normal module"
+        ).Module = H["module"]
+        obj.addProperty(
+            "App::PropertyInteger",
+            "NumberOfTeeth",
+            "InternalHelicalGear",
+            "Number of teeth",
+        ).NumberOfTeeth = H["num_teeth"]
+        obj.addProperty(
+            "App::PropertyAngle",
+            "PressureAngle",
+            "InternalHelicalGear",
+            "Normal pressure angle",
+        ).PressureAngle = H["pressure_angle"]
+        obj.addProperty(
+            "App::PropertyFloat",
+            "ProfileShift",
+            "InternalHelicalGear",
+            "Profile shift coefficient",
+        ).ProfileShift = H["profile_shift"]
+        obj.addProperty(
+            "App::PropertyLength", "Height", "InternalHelicalGear", "Gear height"
+        ).Height = H["height"]
+        obj.addProperty(
+            "App::PropertyLength",
+            "RimThickness",
+            "InternalHelicalGear",
+            "Rim thickness",
+        ).RimThickness = H["rim_thickness"]
+        obj.addProperty(
+            "App::PropertyAngle", "HelixAngle", "InternalHelicalGear", "Helix angle"
+        ).HelixAngle = -15.0
+        obj.addProperty(
+            "App::PropertyString", "BodyName", "InternalHelicalGear", "Body name"
+        ).BodyName = "InternalHelixGear"
 
-        self.Type = "GenericInternalHelixGear"
+        self.Type = "InternalHelixGear"
         self.Object = obj
         self.last_body_name = obj.BodyName
         obj.Proxy = self
@@ -534,7 +731,14 @@ class GenericInternalHelixGear:
                         doc.removeObject(old_body)
                 self.last_body_name = new_name
 
-        if prop in ["Module", "NumberOfTeeth", "PressureAngle", "ProfileShift", "RimThickness", "HelixAngle"]:
+        if prop in [
+            "Module",
+            "NumberOfTeeth",
+            "PressureAngle",
+            "ProfileShift",
+            "RimThickness",
+            "HelixAngle",
+        ]:
             try:
                 module = fp.Module.Value
                 num_teeth = fp.NumberOfTeeth
@@ -550,8 +754,12 @@ class GenericInternalHelixGear:
 
                 pitch_dia = gearMath.calcPitchDiameter(mt, num_teeth)
                 base_dia = gearMath.calcBaseDiameter(pitch_dia, pressure_angle)
-                inner_dia = gearMath.calcInternalAddendumDiameter(pitch_dia, mt, profile_shift)
-                outer_dia = gearMath.calcInternalDedendumDiameter(pitch_dia, mt, profile_shift, rim_thickness)
+                inner_dia = gearMath.calcInternalAddendumDiameter(
+                    pitch_dia, mt, profile_shift
+                )
+                outer_dia = gearMath.calcInternalDedendumDiameter(
+                    pitch_dia, mt, profile_shift, rim_thickness
+                )
 
                 fp.PitchDiameter = pitch_dia
                 fp.BaseDiameter = base_dia
@@ -577,15 +785,24 @@ class GenericInternalHelixGear:
         self.recompute()
 
     def recompute(self):
-        if self.Dirty:
+        if self.Dirty and not self.recomputing:
             try:
+                self.recomputing = True  # Mark as recomputing
                 parameters = self.GetParameters()
 
                 # Get body name from the actual object, not parameters dict
-                body_name_from_prop = str(self.Object.BodyName) if hasattr(self.Object, "BodyName") else None
+                body_name_from_prop = (
+                    str(self.Object.BodyName)
+                    if hasattr(self.Object, "BodyName")
+                    else None
+                )
 
                 # Use the property value if available
-                body_name = body_name_from_prop if body_name_from_prop else parameters.get("body_name", "GenericInternalHelixGear")
+                body_name = (
+                    body_name_from_prop
+                    if body_name_from_prop
+                    else parameters.get("body_name", "InternalHelixGear")
+                )
 
                 doc = App.ActiveDocument
                 if not doc:
@@ -603,22 +820,28 @@ class GenericInternalHelixGear:
                     App.Console.PrintMessage(f"Deleted old body: {body_name}\n")
 
                     # Create new body with parameters
-                    genericInternalHelixGear(doc, parameters, parameters["helix_angle"])
+                    internalHelixGear(doc, parameters, parameters["helix_angle"])
 
                     # Restore placement if possible
                     new_body = doc.getObject(body_name)
                     if new_body and hasattr(old_placement, "Base"):
                         new_body.Placement = old_placement
-                        App.Console.PrintMessage(f"Restored placement for {body_name}\n")
+                        App.Console.PrintMessage(
+                            f"Restored placement for {body_name}\n"
+                        )
+
+                    # (recompute is already called at end of internalHelixGear function)
 
                     self.Dirty = False
-                    App.ActiveDocument.recompute()
+                    self.recomputing = False
                 else:
                     # No old body, just create new one
-                    genericInternalHelixGear(doc, parameters, parameters["helix_angle"])
+                    internalHelixGear(doc, parameters, parameters["helix_angle"])
                     self.Dirty = False
+                    self.recomputing = False  # Clear recomputing flag
                     App.ActiveDocument.recompute()
             except Exception as e:
+                self.recomputing = False  # Clear recomputing flag on error
                 App.Console.PrintError(f"Internal Helical Gear Error: {e}\n")
                 raise
 
@@ -633,29 +856,66 @@ class GenericInternalHelixGear:
             self.Type = state
 
 
-class GenericInternalHerringboneGear:
+class InternalHerringboneGear:
     """FeaturePython object for parametric internal herringbone gear."""
 
     def __init__(self, obj):
         self.Dirty = False
+        self.recomputing = False  # Guard against concurrent recompute calls
         H = gearMath.generateDefaultInternalParameters()
 
-        obj.addProperty("App::PropertyString", "Version", "read only", "", 1).Version = version
+        obj.addProperty(
+            "App::PropertyString", "Version", "read only", "", 1
+        ).Version = version
         obj.addProperty("App::PropertyLength", "PitchDiameter", "read only", "", 1)
         obj.addProperty("App::PropertyLength", "BaseDiameter", "read only", "", 1)
         obj.addProperty("App::PropertyLength", "InnerDiameter", "read only", "", 1)
         obj.addProperty("App::PropertyLength", "OuterDiameter", "read only", "", 1)
 
-        obj.addProperty("App::PropertyLength", "Module", "InternalHerringboneGear", "Normal module").Module = H["module"]
-        obj.addProperty("App::PropertyInteger", "NumberOfTeeth", "InternalHerringboneGear", "Number of teeth").NumberOfTeeth = H["num_teeth"]
-        obj.addProperty("App::PropertyAngle", "PressureAngle", "InternalHerringboneGear", "Normal pressure angle").PressureAngle = H["pressure_angle"]
-        obj.addProperty("App::PropertyFloat", "ProfileShift", "InternalHerringboneGear", "Profile shift coefficient").ProfileShift = H["profile_shift"]
-        obj.addProperty("App::PropertyLength", "Height", "InternalHerringboneGear", "Gear height").Height = H["height"]
-        obj.addProperty("App::PropertyLength", "RimThickness", "InternalHerringboneGear", "Rim thickness").RimThickness = H["rim_thickness"]
-        obj.addProperty("App::PropertyAngle", "HelixAngle", "InternalHerringboneGear", "Helix angle").HelixAngle = -30.0
-        obj.addProperty("App::PropertyString", "BodyName", "InternalHerringboneGear", "Body name").BodyName = "GenericInternalHerringboneGear"
+        obj.addProperty(
+            "App::PropertyLength", "Module", "InternalHerringboneGear", "Normal module"
+        ).Module = H["module"]
+        obj.addProperty(
+            "App::PropertyInteger",
+            "NumberOfTeeth",
+            "InternalHerringboneGear",
+            "Number of teeth",
+        ).NumberOfTeeth = H["num_teeth"]
+        obj.addProperty(
+            "App::PropertyAngle",
+            "PressureAngle",
+            "InternalHerringboneGear",
+            "Normal pressure angle",
+        ).PressureAngle = H["pressure_angle"]
+        obj.addProperty(
+            "App::PropertyFloat",
+            "ProfileShift",
+            "InternalHerringboneGear",
+            "Profile shift coefficient",
+        ).ProfileShift = H["profile_shift"]
+        obj.addProperty(
+            "App::PropertyLength", "Height", "InternalHerringboneGear", "Gear height"
+        ).Height = H["height"]
+        obj.addProperty(
+            "App::PropertyLength",
+            "RimThickness",
+            "InternalHerringboneGear",
+            "Rim thickness",
+        ).RimThickness = H["rim_thickness"]
+        obj.addProperty(
+            "App::PropertyAngle", "HelixAngle", "InternalHerringboneGear", "Helix angle"
+        ).HelixAngle = -30.0
+        obj.addProperty(
+            "App::PropertyFloat",
+            "Backlash",
+            "InternalHerringboneGear",
+            "Backlash clearance (extra profile shift for tooth gaps, 0.1-0.2 for 3D printing)"
+        ).Backlash = 0.15
+        obj.addProperty(
+            "App::PropertyString", "BodyName", "InternalHerringboneGear", "Body name"
+        ).BodyName = "InternalHerringboneGear"
 
-        self.Type = "GenericInternalHerringboneGear"
+        self.Type = "InternalHerringboneGear"
         self.Object = obj
         self.last_body_name = obj.BodyName
         obj.Proxy = self
@@ -675,7 +935,15 @@ class GenericInternalHerringboneGear:
                         doc.removeObject(old_body)
                 self.last_body_name = new_name
 
-        if prop in ["Module", "NumberOfTeeth", "PressureAngle", "ProfileShift", "RimThickness", "HelixAngle"]:
+        if prop in [
+            "Module",
+            "NumberOfTeeth",
+            "PressureAngle",
+            "ProfileShift",
+            "RimThickness",
+            "HelixAngle",
+            "Backlash",
+        ]:
             try:
                 module = fp.Module.Value
                 num_teeth = fp.NumberOfTeeth
@@ -691,8 +959,12 @@ class GenericInternalHerringboneGear:
 
                 pitch_dia = gearMath.calcPitchDiameter(mt, num_teeth)
                 base_dia = gearMath.calcBaseDiameter(pitch_dia, pressure_angle)
-                inner_dia = gearMath.calcInternalAddendumDiameter(pitch_dia, mt, profile_shift)
-                outer_dia = gearMath.calcInternalDedendumDiameter(pitch_dia, mt, profile_shift, rim_thickness)
+                inner_dia = gearMath.calcInternalAddendumDiameter(
+                    pitch_dia, mt, profile_shift
+                )
+                outer_dia = gearMath.calcInternalDedendumDiameter(
+                    pitch_dia, mt, profile_shift, rim_thickness
+                )
 
                 fp.PitchDiameter = pitch_dia
                 fp.BaseDiameter = base_dia
@@ -710,6 +982,7 @@ class GenericInternalHerringboneGear:
             "height": float(self.Object.Height.Value),
             "rim_thickness": float(self.Object.RimThickness.Value),
             "helix_angle": float(self.Object.HelixAngle.Value),
+            "backlash": float(self.Object.Backlash),
             "body_name": str(self.Object.BodyName),
         }
 
@@ -718,49 +991,73 @@ class GenericInternalHerringboneGear:
         self.recompute()
 
     def recompute(self):
-        if self.Dirty:
+        if self.Dirty and not self.recomputing:
             try:
+                self.recomputing = True  # Mark as recomputing
                 parameters = self.GetParameters()
 
                 # Get body name from the actual object, not parameters dict
-                body_name_from_prop = str(self.Object.BodyName) if hasattr(self.Object, "BodyName") else None
+                body_name_from_prop = (
+                    str(self.Object.BodyName)
+                    if hasattr(self.Object, "BodyName")
+                    else None
+                )
 
                 # Use the property value if available
-                body_name = body_name_from_prop if body_name_from_prop else parameters.get("body_name", "GenericInternalSpurGear")
+                body_name = (
+                    body_name_from_prop
+                    if body_name_from_prop
+                    else parameters.get("body_name", "InternalHerringboneGear")
+                )
 
                 doc = App.ActiveDocument
                 if not doc:
                     App.Console.PrintError("No active document\n")
                     return
 
-                # Delete old body if it exists and has same name
+                # Delete old body if it exists
                 old_body = doc.getObject(body_name)
+                old_placement = None
+
                 if old_body and old_body.isValid():
                     # Store current placement to reapply
                     old_placement = old_body.Placement
 
-                    # Delete the old body
-                    doc.removeObject(body_name)
-                    App.Console.PrintMessage(f"Deleted old body: {body_name}\n")
+                    # Delete all child objects first (features inside the body)
+                    if hasattr(old_body, 'Group'):
+                        for obj in old_body.Group:
+                            if obj and obj.isValid():
+                                try:
+                                    doc.removeObject(obj.Name)
+                                except Exception as e:
+                                    App.Console.PrintWarning(f"Could not remove {obj.Name}: {e}\n")
 
-                    # Create new body with parameters
-                    genericInternalHerringboneGear(doc, parameters)
+                    # Now delete the body itself
+                    try:
+                        doc.removeObject(body_name)
+                        App.Console.PrintMessage(f"Deleted old body: {body_name}\n")
+                    except Exception as e:
+                        App.Console.PrintError(f"Failed to delete old body: {e}\n")
 
-                    # Restore placement if possible
+                    # Wait for deletion to complete
+                    doc.recompute()
+
+                # Create new body with parameters
+                internalHerringboneGear(doc, parameters, 15.0, -15.0)
+
+                # Restore placement if we had an old one
+                if old_placement:
                     new_body = doc.getObject(body_name)
                     if new_body and hasattr(old_placement, "Base"):
                         new_body.Placement = old_placement
                         App.Console.PrintMessage(f"Restored placement for {body_name}\n")
 
-                    self.Dirty = False
-                    App.ActiveDocument.recompute()
-                else:
-                    # No old body, just create new one
-                    genericInternalSpurGear(doc, parameters)
-                    self.Dirty = False
-                    App.ActiveDocument.recompute()
+                # Mark recomputing as complete
+                self.Dirty = False
+                self.recomputing = False
             except Exception as e:
-                App.Console.PrintError(f"Internal Spur Gear Error: {e}\n")
+                self.recomputing = False  # Clear recomputing flag on error
+                App.Console.PrintError(f"Internal Herringbone Gear Error: {e}\n")
                 raise
 
     def execute(self, obj):
@@ -778,7 +1075,8 @@ class GenericInternalHerringboneGear:
 # COMMANDS
 # ============================================================================
 
-class GenericInternalSpurGearCommand:
+
+class InternalSpurGearCommand:
     """Command to create internal spur gear."""
 
     def GetResources(self):
@@ -793,7 +1091,7 @@ class GenericInternalSpurGearCommand:
             App.newDocument()
         doc = App.ActiveDocument
 
-        base_name = "GenericInternalSpurGear"
+        base_name = "InternalSpurGear"
         unique_name = base_name
         count = 1
         while doc.getObject(unique_name):
@@ -801,8 +1099,11 @@ class GenericInternalSpurGearCommand:
             count += 1
 
         gear_obj = doc.addObject("Part::FeaturePython", "InternalSpurGearParameters")
-        gear = GenericInternalSpurGear(gear_obj)
+        gear = InternalSpurGear(gear_obj)
         gear_obj.BodyName = unique_name
+
+        # Trigger initial gear creation
+        gear.recompute()
 
         doc.recompute()
         FreeCADGui.SendMsgToActiveView("ViewFit")
@@ -813,7 +1114,7 @@ class GenericInternalSpurGearCommand:
         return True
 
 
-class GenericInternalHelixGearCommand:
+class InternalHelixGearCommand:
     """Command to create internal helical gear."""
 
     def GetResources(self):
@@ -828,7 +1129,7 @@ class GenericInternalHelixGearCommand:
             App.newDocument()
         doc = App.ActiveDocument
 
-        base_name = "GenericInternalHelixGear"
+        base_name = "InternalHelixGear"
         unique_name = base_name
         count = 1
         while doc.getObject(unique_name):
@@ -836,8 +1137,11 @@ class GenericInternalHelixGearCommand:
             count += 1
 
         gear_obj = doc.addObject("Part::FeaturePython", "InternalHelixGearParameters")
-        gear = GenericInternalHelixGear(gear_obj)
+        gear = InternalHelixGear(gear_obj)
         gear_obj.BodyName = unique_name
+
+        # Trigger initial gear creation
+        gear.recompute()
 
         doc.recompute()
         FreeCADGui.SendMsgToActiveView("ViewFit")
@@ -848,7 +1152,7 @@ class GenericInternalHelixGearCommand:
         return True
 
 
-class GenericInternalHerringboneGearCommand:
+class InternalHerringboneGearCommand:
     """Command to create internal herringbone gear."""
 
     def GetResources(self):
@@ -863,16 +1167,21 @@ class GenericInternalHerringboneGearCommand:
             App.newDocument()
         doc = App.ActiveDocument
 
-        base_name = "GenericInternalHerringboneGear"
+        base_name = "InternalHerringboneGear"
         unique_name = base_name
         count = 1
         while doc.getObject(unique_name):
             unique_name = f"{base_name}{count:03d}"
             count += 1
 
-        gear_obj = doc.addObject("Part::FeaturePython", "InternalHerringboneGearParameters")
-        gear = GenericInternalHerringboneGear(gear_obj)
+        gear_obj = doc.addObject(
+            "Part::FeaturePython", "InternalHerringboneGearParameters"
+        )
+        gear = InternalHerringboneGear(gear_obj)
         gear_obj.BodyName = unique_name
+
+        # Trigger initial gear creation
+        gear.recompute()
 
         doc.recompute()
         FreeCADGui.SendMsgToActiveView("ViewFit")
@@ -885,8 +1194,10 @@ class GenericInternalHerringboneGearCommand:
 
 # Register commands
 try:
-    FreeCADGui.addCommand("GenericInternalSpurGearCommand", GenericInternalSpurGearCommand())
-    FreeCADGui.addCommand("GenericInternalHelixGearCommand", GenericInternalHelixGearCommand())
-    FreeCADGui.addCommand("GenericInternalHerringboneGearCommand", GenericInternalHerringboneGearCommand())
+    FreeCADGui.addCommand("InternalSpurGearCommand", InternalSpurGearCommand())
+    FreeCADGui.addCommand("InternalHelixGearCommand", InternalHelixGearCommand())
+    FreeCADGui.addCommand(
+        "InternalHerringboneGearCommand", InternalHerringboneGearCommand()
+    )
 except Exception as e:
     App.Console.PrintError(f"Failed to register internal gear commands: {e}\n")

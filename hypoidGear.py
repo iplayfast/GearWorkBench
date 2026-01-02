@@ -7,6 +7,7 @@ Copyright 2025, Chris Bruner
 Version v0.1.3
 License LGPL V2.1
 """
+
 import FreeCAD as App
 import FreeCADGui
 import gearMath
@@ -19,24 +20,32 @@ from PySide import QtCore
 import genericHypoid
 
 smWBpath = os.path.dirname(gearMath.__file__)
-smWB_icons_path = os.path.join(smWBpath, 'icons')
+smWB_icons_path = os.path.join(smWBpath, "icons")
 global mainIcon
-mainIcon = os.path.join(smWB_icons_path, 'HypoidGear.svg') 
+mainIcon = os.path.join(smWB_icons_path, "HypoidGear.svg")
 
-version = 'Nov 30, 2025'
+version = "Nov 30, 2025"
 
-def QT_TRANSLATE_NOOP(scope, text): return text
+
+def QT_TRANSLATE_NOOP(scope, text):
+    return text
+
 
 # ============================================================================
 # GENERATION LOGIC
 # ============================================================================
 
+
 def validateHypoidParameters(parameters):
-    if parameters["module"] < gearMath.MIN_MODULE: raise gearMath.GearParameterError(f"Module < {gearMath.MIN_MODULE}")
-    if parameters["num_teeth"] < gearMath.MIN_TEETH: raise gearMath.GearParameterError(f"Teeth < {gearMath.MIN_TEETH}")
-    if parameters["face_width"] <= 0: raise gearMath.GearParameterError("Face Width must be positive")
+    if parameters["module"] < gearMath.MIN_MODULE:
+        raise gearMath.GearParameterError(f"Module < {gearMath.MIN_MODULE}")
+    if parameters["num_teeth"] < gearMath.MIN_TEETH:
+        raise gearMath.GearParameterError(f"Teeth < {gearMath.MIN_TEETH}")
+    if parameters["face_width"] <= 0:
+        raise gearMath.GearParameterError("Face Width must be positive")
     # For now, allow 0 offset, but eventually hypoid means non-zero.
     # if parameters["offset"] == 0: raise gearMath.GearParameterError("Offset must not be zero for a hypoid gear")
+
 
 def generateHypoidGearPart(doc, parameters):
     """Generate hypoid gear using the generic hypoid system.
@@ -52,22 +61,21 @@ def generateHypoidGearPart(doc, parameters):
         parameters["pitch_angle"] = 45.0
 
     # Use the generic hypoid builder with involute tooth profile
-    result = genericHypoid.genericHypoidGear(
-        doc,
-        parameters,
-        profile_func=gearMath.generateToothProfile
+    result = genericHypoid.hypoidGear(
+        doc, parameters, profile_func=gearMath.generateToothProfile
     )
 
     return result
 
-class HypoidGearCreateObject():
+
+class HypoidGearCreateObject:
     """Command to create a new hypoid gear object."""
 
     def GetResources(self):
         return {
-            'Pixmap': mainIcon,
-            'MenuText': "&Create Hypoid Gear",
-            'ToolTip': "Create parametric hypoid gear"
+            "Pixmap": mainIcon,
+            "MenuText": "&Create Hypoid Gear",
+            "ToolTip": "Create parametric hypoid gear",
         }
 
     def __init__(self):
@@ -78,7 +86,7 @@ class HypoidGearCreateObject():
         if not App.ActiveDocument:
             App.newDocument()
         doc = App.ActiveDocument
-        
+
         # --- Generate Unique Body Name ---
         base_name = "HypoidGear"
         unique_name = base_name
@@ -86,13 +94,13 @@ class HypoidGearCreateObject():
         while doc.getObject(unique_name):
             unique_name = f"{base_name}{count:03d}"
             count += 1
-            
+
         gear_obj = doc.addObject("Part::FeaturePython", "HypoidGearParameters")
         hypoid_gear = HypoidGear(gear_obj)
-        
+
         # Assign unique name to the property so gearMath uses it
         gear_obj.BodyName = unique_name
-        
+
         doc.recompute()
         FreeCADGui.SendMsgToActiveView("ViewFit")
         FreeCADGui.ActiveDocument.ActiveView.viewIsometric()
@@ -111,7 +119,7 @@ class HypoidGearCreateObject():
         pass
 
 
-class HypoidGear():
+class HypoidGear:
     """FeaturePython object for parametric hypoid gear."""
 
     def __init__(self, obj):
@@ -125,119 +133,160 @@ class HypoidGear():
 
         # Read-only properties
         obj.addProperty(
-            "App::PropertyString", "Version", "read only",
+            "App::PropertyString",
+            "Version",
+            "read only",
             QT_TRANSLATE_NOOP("App::Property", "Workbench version"),
-            1
+            1,
         ).Version = version
 
         obj.addProperty(
-            "App::PropertyLength", "PitchDiameter", "read only",
+            "App::PropertyLength",
+            "PitchDiameter",
+            "read only",
             QT_TRANSLATE_NOOP("App::Property", "Pitch diameter (where gears mesh)"),
-            1
+            1,
         )
 
         obj.addProperty(
-            "App::PropertyLength", "BaseDiameter", "read only",
-            QT_TRANSLATE_NOOP("App::Property", "Base circle diameter (involute origin)"),
-            1
+            "App::PropertyLength",
+            "BaseDiameter",
+            "read only",
+            QT_TRANSLATE_NOOP(
+                "App::Property", "Base circle diameter (involute origin)"
+            ),
+            1,
         )
 
         obj.addProperty(
-            "App::PropertyLength", "OuterDiameter", "read only",
+            "App::PropertyLength",
+            "OuterDiameter",
+            "read only",
             QT_TRANSLATE_NOOP("App::Property", "Outer diameter (tip of teeth)"),
-            1
+            1,
         )
 
         obj.addProperty(
-            "App::PropertyLength", "RootDiameter", "read only",
+            "App::PropertyLength",
+            "RootDiameter",
+            "read only",
             QT_TRANSLATE_NOOP("App::Property", "Root diameter (bottom of teeth)"),
-            1
+            1,
         )
 
         # Core gear parameters
         obj.addProperty(
-            "App::PropertyLength", "Module", "HypoidGear",
-            QT_TRANSLATE_NOOP("App::Property", "Gear module (tooth size)")
+            "App::PropertyLength",
+            "Module",
+            "HypoidGear",
+            QT_TRANSLATE_NOOP("App::Property", "Gear module (tooth size)"),
         ).Module = H["module"]
 
         obj.addProperty(
-            "App::PropertyInteger", "NumberOfTeeth", "HypoidGear",
-            QT_TRANSLATE_NOOP("App::Property", "Number of teeth")
+            "App::PropertyInteger",
+            "NumberOfTeeth",
+            "HypoidGear",
+            QT_TRANSLATE_NOOP("App::Property", "Number of teeth"),
         ).NumberOfTeeth = H["num_teeth"]
 
         obj.addProperty(
-            "App::PropertyAngle", "PressureAngle", "HypoidGear",
-            QT_TRANSLATE_NOOP("App::Property", "Pressure angle (normally 20°)")
+            "App::PropertyAngle",
+            "PressureAngle",
+            "HypoidGear",
+            QT_TRANSLATE_NOOP("App::Property", "Pressure angle (normally 20°)"),
         ).PressureAngle = H["pressure_angle"]
 
         obj.addProperty(
-            "App::PropertyFloat", "ProfileShift", "HypoidGear",
-            QT_TRANSLATE_NOOP("App::Property", "Profile shift coefficient (-1 to +1)")
-        ).ProfileShift = H["profile_shift"] # Profile shift might be applicable
+            "App::PropertyFloat",
+            "ProfileShift",
+            "HypoidGear",
+            QT_TRANSLATE_NOOP("App::Property", "Profile shift coefficient (-1 to +1)"),
+        ).ProfileShift = H["profile_shift"]  # Profile shift might be applicable
 
         # Hypoid specific properties
         obj.addProperty(
-            "App::PropertyLength", "Offset", "HypoidGear",
-            QT_TRANSLATE_NOOP("App::Property", "Offset between gear axes")
+            "App::PropertyLength",
+            "Offset",
+            "HypoidGear",
+            QT_TRANSLATE_NOOP("App::Property", "Offset between gear axes"),
         ).Offset = 10.0
 
         obj.addProperty(
-            "App::PropertyAngle", "SpiralAngle", "HypoidGear",
-            QT_TRANSLATE_NOOP("App::Property", "Spiral angle of the teeth")
+            "App::PropertyAngle",
+            "SpiralAngle",
+            "HypoidGear",
+            QT_TRANSLATE_NOOP("App::Property", "Spiral angle of the teeth"),
         ).SpiralAngle = 35.0
 
         obj.addProperty(
-            "App::PropertyAngle", "PitchAngle", "HypoidGear",
-            QT_TRANSLATE_NOOP("App::Property", "Pitch cone angle (45° for 1:1 ratio)")
+            "App::PropertyAngle",
+            "PitchAngle",
+            "HypoidGear",
+            QT_TRANSLATE_NOOP("App::Property", "Pitch cone angle (45° for 1:1 ratio)"),
         ).PitchAngle = 45.0
 
         obj.addProperty(
-            "App::PropertyLength", "FaceWidth", "HypoidGear",
-            QT_TRANSLATE_NOOP("App::Property", "Width of the gear face")
+            "App::PropertyLength",
+            "FaceWidth",
+            "HypoidGear",
+            QT_TRANSLATE_NOOP("App::Property", "Width of the gear face"),
         ).FaceWidth = 18.0
 
         # --- NEW: Body Name Property ---
         obj.addProperty(
-            "App::PropertyString", "BodyName", "HypoidGear",
-            QT_TRANSLATE_NOOP("App::Property", "Name of the generated body")
+            "App::PropertyString",
+            "BodyName",
+            "HypoidGear",
+            QT_TRANSLATE_NOOP("App::Property", "Name of the generated body"),
         ).BodyName = H["body_name"]
-        obj.BodyName = "HypoidGear" # Override default spur gear name
+        obj.BodyName = "HypoidGear"  # Override default spur gear name
 
         # Bore parameters (hypoid gears typically don't have standard bores like this)
         obj.addProperty(
-            "App::PropertyEnumeration", "BoreType", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Type of center hole")
+            "App::PropertyEnumeration",
+            "BoreType",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Type of center hole"),
         )
         obj.BoreType = ["none", "circular", "square", "hexagonal", "keyway"]
-        obj.BoreType = "none" # Default to none for hypoid
+        obj.BoreType = "none"  # Default to none for hypoid
 
         obj.addProperty(
-            "App::PropertyLength", "BoreDiameter", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Diameter of center bore")
+            "App::PropertyLength",
+            "BoreDiameter",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Diameter of center bore"),
         ).BoreDiameter = H["bore_diameter"]
 
         obj.addProperty(
-            "App::PropertyLength", "SquareCornerRadius", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Corner radius for square bore")
+            "App::PropertyLength",
+            "SquareCornerRadius",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Corner radius for square bore"),
         ).SquareCornerRadius = 0.5
 
         obj.addProperty(
-            "App::PropertyLength", "HexCornerRadius", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Corner radius for hexagonal bore")
+            "App::PropertyLength",
+            "HexCornerRadius",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Corner radius for hexagonal bore"),
         ).HexCornerRadius = 0.5
 
         obj.addProperty(
-            "App::PropertyLength", "KeywayWidth", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Width of keyway (DIN 6885)")
+            "App::PropertyLength",
+            "KeywayWidth",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Width of keyway (DIN 6885)"),
         ).KeywayWidth = 2.0
 
         obj.addProperty(
-            "App::PropertyLength", "KeywayDepth", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Depth of keyway")
+            "App::PropertyLength",
+            "KeywayDepth",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Depth of keyway"),
         ).KeywayDepth = 1.0
 
-
-        self.Type = 'HypoidGear'
+        self.Type = "HypoidGear"
         self.Object = obj
         self.doc = App.ActiveDocument
         self.last_body_name = obj.BodyName
@@ -277,7 +326,15 @@ class HypoidGear():
                 self.last_body_name = new_name
 
         # Update read-only calculated properties
-        if prop in ["Module", "NumberOfTeeth", "PressureAngle", "Offset", "SpiralAngle", "PitchAngle", "FaceWidth"]:
+        if prop in [
+            "Module",
+            "NumberOfTeeth",
+            "PressureAngle",
+            "Offset",
+            "SpiralAngle",
+            "PitchAngle",
+            "FaceWidth",
+        ]:
             try:
                 module = fp.Module.Value
                 num_teeth = fp.NumberOfTeeth
@@ -288,7 +345,9 @@ class HypoidGear():
                 # These calculations are for a spur gear, may need adjustment for hypoid
                 pitch_dia = gearMath.calcPitchDiameter(module, num_teeth)
                 base_dia = gearMath.calcBaseDiameter(pitch_dia, pressure_angle)
-                outer_dia = gearMath.calcAddendumDiameter(pitch_dia, module) # Profile shift might be less relevant for hypoid
+                outer_dia = gearMath.calcAddendumDiameter(
+                    pitch_dia, module
+                )  # Profile shift might be less relevant for hypoid
                 root_dia = gearMath.calcDedendumDiameter(pitch_dia, module)
 
                 # Update read-only properties
@@ -349,6 +408,7 @@ class HypoidGear():
             except Exception as e:
                 App.Console.PrintError(f"Hypoid Gear Error: {str(e)}\n")
                 import traceback
+
                 App.Console.PrintError(traceback.format_exc())
                 raise
 
@@ -473,7 +533,7 @@ class ViewProviderHypoidGear:
 
     def regenerate(self):
         """Force regeneration of the gear."""
-        if hasattr(self.Object, 'Proxy'):
+        if hasattr(self.Object, "Proxy"):
             self.Object.Proxy.force_Recompute()
 
     def __getstate__(self):
@@ -499,10 +559,10 @@ class ViewProviderHypoidGear:
 
 # Register command with FreeCAD
 try:
-    FreeCADGui.addCommand('HypoidGearCreateObject', HypoidGearCreateObject())
+    FreeCADGui.addCommand("HypoidGearCreateObject", HypoidGearCreateObject())
     # App.Console.PrintMessage("HypoidGearCreateObject command registered successfully\n")
 except Exception as e:
     App.Console.PrintError(f"Failed to register HypoidGearCreateObject: {e}\n")
     import traceback
-    App.Console.PrintError(traceback.format_exc())
 
+    App.Console.PrintError(traceback.format_exc())

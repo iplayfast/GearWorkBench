@@ -7,6 +7,7 @@ Copyright 2025, Chris Bruner
 Version v0.1.3
 License LGPL V2.1
 """
+
 import FreeCAD as App
 import FreeCADGui
 import gearMath
@@ -19,22 +20,30 @@ from PySide import QtCore
 import genericNonCircular
 
 smWBpath = os.path.dirname(gearMath.__file__)
-smWB_icons_path = os.path.join(smWBpath, 'icons')
+smWB_icons_path = os.path.join(smWBpath, "icons")
 global mainIcon
-mainIcon = os.path.join(smWB_icons_path, 'NonCircularGear.svg') 
+mainIcon = os.path.join(smWB_icons_path, "NonCircularGear.svg")
 
-version = 'Nov 30, 2025'
+version = "Nov 30, 2025"
 
-def QT_TRANSLATE_NOOP(scope, text): return text
+
+def QT_TRANSLATE_NOOP(scope, text):
+    return text
+
 
 # ============================================================================
 # GENERATION LOGIC
 # ============================================================================
 
+
 def validateNonCircularParameters(parameters):
-    if parameters["height"] <= 0: raise gearMath.GearParameterError("Height must be positive")
-    if parameters["number_of_lobes"] < 1: raise gearMath.GearParameterError("Number of lobes must be at least 1")
-    if parameters["major_radius"] <= 0: raise gearMath.GearParameterError("Major radius must be positive")
+    if parameters["height"] <= 0:
+        raise gearMath.GearParameterError("Height must be positive")
+    if parameters["number_of_lobes"] < 1:
+        raise gearMath.GearParameterError("Number of lobes must be at least 1")
+    if parameters["major_radius"] <= 0:
+        raise gearMath.GearParameterError("Major radius must be positive")
+
 
 def generateLobedProfile(parameters):
     """Generate a lobed profile using a sinusoidal radius function.
@@ -73,6 +82,7 @@ def generateLobedProfile(parameters):
 
     return profile_points
 
+
 def generateNonCircularGearPart(doc, parameters):
     """Generate non-circular gear using the generic non-circular system.
 
@@ -82,22 +92,21 @@ def generateNonCircularGearPart(doc, parameters):
     validateNonCircularParameters(parameters)
 
     # Use the generic non-circular builder with lobed profile
-    result = genericNonCircular.genericNonCircularGear(
-        doc,
-        parameters,
-        profile_func=generateLobedProfile
+    result = genericNonCircular.nonCircularGear(
+        doc, parameters, profile_func=generateLobedProfile
     )
 
     return result
 
-class NonCircularGearCreateObject():
+
+class NonCircularGearCreateObject:
     """Command to create a new non-circular gear object."""
 
     def GetResources(self):
         return {
-            'Pixmap': mainIcon,
-            'MenuText': "&Create Non-Circular Gear",
-            'ToolTip': "Create parametric non-circular gear"
+            "Pixmap": mainIcon,
+            "MenuText": "&Create Non-Circular Gear",
+            "ToolTip": "Create parametric non-circular gear",
         }
 
     def __init__(self):
@@ -108,7 +117,7 @@ class NonCircularGearCreateObject():
         if not App.ActiveDocument:
             App.newDocument()
         doc = App.ActiveDocument
-        
+
         # --- Generate Unique Body Name ---
         base_name = "NonCircularGear"
         unique_name = base_name
@@ -116,13 +125,13 @@ class NonCircularGearCreateObject():
         while doc.getObject(unique_name):
             unique_name = f"{base_name}{count:03d}"
             count += 1
-            
+
         gear_obj = doc.addObject("Part::FeaturePython", "NonCircularGearParameters")
         non_circular_gear = NonCircularGear(gear_obj)
-        
+
         # Assign unique name to the property so gearMath uses it
         gear_obj.BodyName = unique_name
-        
+
         doc.recompute()
         FreeCADGui.SendMsgToActiveView("ViewFit")
         FreeCADGui.ActiveDocument.ActiveView.viewIsometric()
@@ -141,7 +150,7 @@ class NonCircularGearCreateObject():
         pass
 
 
-class NonCircularGear():
+class NonCircularGear:
     """FeaturePython object for parametric non-circular gear."""
 
     def __init__(self, obj):
@@ -155,74 +164,103 @@ class NonCircularGear():
 
         # Read-only properties (less applicable for non-circular, but keep for consistency)
         obj.addProperty(
-            "App::PropertyString", "Version", "read only",
+            "App::PropertyString",
+            "Version",
+            "read only",
             QT_TRANSLATE_NOOP("App::Property", "Workbench version"),
-            1
+            1,
         ).Version = version
 
         # Core gear parameters for non-circular
         obj.addProperty(
-            "App::PropertyInteger", "NumberOfLobes", "NonCircularGear",
-            QT_TRANSLATE_NOOP("App::Property", "Number of lobes/repetitions in the profile")
-        ).NumberOfLobes = 2 # Default to an elliptical-like shape
+            "App::PropertyInteger",
+            "NumberOfLobes",
+            "NonCircularGear",
+            QT_TRANSLATE_NOOP(
+                "App::Property", "Number of lobes/repetitions in the profile"
+            ),
+        ).NumberOfLobes = 2  # Default to an elliptical-like shape
 
         obj.addProperty(
-            "App::PropertyLength", "MajorRadius", "NonCircularGear",
-            QT_TRANSLATE_NOOP("App::Property", "Major radius of the non-circular profile")
+            "App::PropertyLength",
+            "MajorRadius",
+            "NonCircularGear",
+            QT_TRANSLATE_NOOP(
+                "App::Property", "Major radius of the non-circular profile"
+            ),
         ).MajorRadius = 15.0
 
         obj.addProperty(
-            "App::PropertyLength", "MinorRadius", "NonCircularGear",
-            QT_TRANSLATE_NOOP("App::Property", "Minor radius (for elliptical/lobed shapes)")
+            "App::PropertyLength",
+            "MinorRadius",
+            "NonCircularGear",
+            QT_TRANSLATE_NOOP(
+                "App::Property", "Minor radius (for elliptical/lobed shapes)"
+            ),
         ).MinorRadius = 10.0
 
         obj.addProperty(
-            "App::PropertyLength", "Height", "NonCircularGear",
-            QT_TRANSLATE_NOOP("App::Property", "Gear thickness/height")
+            "App::PropertyLength",
+            "Height",
+            "NonCircularGear",
+            QT_TRANSLATE_NOOP("App::Property", "Gear thickness/height"),
         ).Height = H["height"]
-        
+
         # --- NEW: Body Name Property ---
         obj.addProperty(
-            "App::PropertyString", "BodyName", "NonCircularGear",
-            QT_TRANSLATE_NOOP("App::Property", "Name of the generated body")
+            "App::PropertyString",
+            "BodyName",
+            "NonCircularGear",
+            QT_TRANSLATE_NOOP("App::Property", "Name of the generated body"),
         ).BodyName = H["body_name"]
-        obj.BodyName = "NonCircularGear" # Override default spur gear name
+        obj.BodyName = "NonCircularGear"  # Override default spur gear name
 
         # Bore parameters (keep for consistency)
         obj.addProperty(
-            "App::PropertyEnumeration", "BoreType", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Type of center hole")
+            "App::PropertyEnumeration",
+            "BoreType",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Type of center hole"),
         )
         obj.BoreType = ["none", "circular", "square", "hexagonal", "keyway"]
         obj.BoreType = H["bore_type"]
 
         obj.addProperty(
-            "App::PropertyLength", "BoreDiameter", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Diameter of center bore")
+            "App::PropertyLength",
+            "BoreDiameter",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Diameter of center bore"),
         ).BoreDiameter = H["bore_diameter"]
 
         obj.addProperty(
-            "App::PropertyLength", "SquareCornerRadius", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Corner radius for square bore")
+            "App::PropertyLength",
+            "SquareCornerRadius",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Corner radius for square bore"),
         ).SquareCornerRadius = 0.5
 
         obj.addProperty(
-            "App::PropertyLength", "HexCornerRadius", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Corner radius for hexagonal bore")
+            "App::PropertyLength",
+            "HexCornerRadius",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Corner radius for hexagonal bore"),
         ).HexCornerRadius = 0.5
 
         obj.addProperty(
-            "App::PropertyLength", "KeywayWidth", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Width of keyway (DIN 6885)")
+            "App::PropertyLength",
+            "KeywayWidth",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Width of keyway (DIN 6885)"),
         ).KeywayWidth = 2.0
 
         obj.addProperty(
-            "App::PropertyLength", "KeywayDepth", "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Depth of keyway")
+            "App::PropertyLength",
+            "KeywayDepth",
+            "Bore",
+            QT_TRANSLATE_NOOP("App::Property", "Depth of keyway"),
         ).KeywayDepth = 1.0
 
-
-        self.Type = 'NonCircularGear'
+        self.Type = "NonCircularGear"
         self.Object = obj
         self.doc = App.ActiveDocument
         self.last_body_name = obj.BodyName
@@ -230,10 +268,30 @@ class NonCircularGear():
 
         # No direct derived read-only properties for non-circular in the same way
         # as involute gears. These will remain 0 unless explicitly set.
-        obj.addProperty("App::PropertyLength", "PitchDiameter", "read only", QT_TRANSLATE_NOOP("App::Property", "Pitch diameter")).PitchDiameter = 0.0
-        obj.addProperty("App::PropertyLength", "BaseDiameter", "read only", QT_TRANSLATE_NOOP("App::Property", "Base diameter")).BaseDiameter = 0.0
-        obj.addProperty("App::PropertyLength", "OuterDiameter", "read only", QT_TRANSLATE_NOOP("App::Property", "Outer diameter")).OuterDiameter = 0.0
-        obj.addProperty("App::PropertyLength", "RootDiameter", "read only", QT_TRANSLATE_NOOP("App::Property", "Root diameter")).RootDiameter = 0.0
+        obj.addProperty(
+            "App::PropertyLength",
+            "PitchDiameter",
+            "read only",
+            QT_TRANSLATE_NOOP("App::Property", "Pitch diameter"),
+        ).PitchDiameter = 0.0
+        obj.addProperty(
+            "App::PropertyLength",
+            "BaseDiameter",
+            "read only",
+            QT_TRANSLATE_NOOP("App::Property", "Base diameter"),
+        ).BaseDiameter = 0.0
+        obj.addProperty(
+            "App::PropertyLength",
+            "OuterDiameter",
+            "read only",
+            QT_TRANSLATE_NOOP("App::Property", "Outer diameter"),
+        ).OuterDiameter = 0.0
+        obj.addProperty(
+            "App::PropertyLength",
+            "RootDiameter",
+            "read only",
+            QT_TRANSLATE_NOOP("App::Property", "Root diameter"),
+        ).RootDiameter = 0.0
 
     def __getstate__(self):
         """Return object state for serialization."""
@@ -268,7 +326,7 @@ class NonCircularGear():
         # For non-circular gears, read-only properties like diameters are not
         # directly calculated in the same way as involute gears.
         # They could be derived from the profile, but for now, they are static.
-        
+
     def GetParameters(self):
         """Get current parameters as dictionary.
 
@@ -313,6 +371,7 @@ class NonCircularGear():
             except Exception as e:
                 App.Console.PrintError(f"Non-Circular Gear Error: {str(e)}\n")
                 import traceback
+
                 App.Console.PrintError(traceback.format_exc())
                 raise
 
@@ -437,7 +496,7 @@ class ViewProviderNonCircularGear:
 
     def regenerate(self):
         """Force regeneration of the gear."""
-        if hasattr(self.Object, 'Proxy'):
+        if hasattr(self.Object, "Proxy"):
             self.Object.Proxy.force_Recompute()
 
     def __getstate__(self):
@@ -463,9 +522,10 @@ class ViewProviderNonCircularGear:
 
 # Register command with FreeCAD
 try:
-    FreeCADGui.addCommand('NonCircularGearCreateObject', NonCircularGearCreateObject())
+    FreeCADGui.addCommand("NonCircularGearCreateObject", NonCircularGearCreateObject())
     # App.Console.PrintMessage("NonCircularGearCreateObject command registered successfully\n")
 except Exception as e:
     App.Console.PrintError(f"Failed to register NonCircularGearCreateObject: {e}\n")
     import traceback
+
     App.Console.PrintError(traceback.format_exc())

@@ -142,10 +142,10 @@ class GearPositionDialog(QtGui.QDialog):
                 gear1_body.Placement = preview_obj.Placement
             else:
                 # No valid preview, recalculate position from angle
-                self._calculateAndApplyPosition(gear1_info, gear2_info, rotation_angle, gear2_body, gear1_body)
+                self._calculateAndApplyPosition(gear1_info, gear2_info, rotation_angle, gear1_body, gear2_body)
         else:
             # No preview exists, recalculate position from angle
-            self._calculateAndApplyPosition(gear1_info, gear2_info, rotation_angle, gear2_body, gear1_body)
+            self._calculateAndApplyPosition(gear1_info, gear2_info, rotation_angle, gear1_body, gear2_body)
 
         # Update gear 1 parameter object properties (gear 1 moved, gear 2 is reference)
         if hasattr(gear1_param, "OriginX"):
