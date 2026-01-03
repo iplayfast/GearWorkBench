@@ -100,6 +100,13 @@ def herringboneGear(
     """
     validateCommonParameters(parameters)
 
+    # Apply backlash for external gears: subtract from profile shift to make teeth thinner
+    backlash = parameters.get("backlash", 0.0)
+    if backlash != 0.0:
+        parameters = parameters.copy()
+        original_shift = parameters.get("profile_shift", 0.0)
+        parameters["profile_shift"] = original_shift - backlash
+
     body_name = parameters.get("body_name", "GenericGear")
     body = util.readyPart(doc, body_name)
 
@@ -131,11 +138,17 @@ def herringboneGear(
     if profile_func is None:
         profile_func = gearMath.generateHelicalGearProfile
 
-    if angle1 == 0:
+    # Intelligent gear type detection based on angles:
+    # - Both angles equal and non-zero: Helical gear (continuous twist)
+    # - Angles different: True herringbone (V-shaped chevron)
+    # - Both zero: Spur gear (straight teeth)
+    if angle1 == angle2 and angle1 != 0:
+        # Helical gear: two sketches with continuous twist (more efficient)
         return _createTwoSketchHerringbone(
             body, parameters, height, num_teeth, angle2, df, bore_type, profile_func
         )
     else:
+        # Herringbone or spur: three sketches (handles angle1==angle2==0 as spur)
         return _createThreeSketchHerringbone(
             body,
             parameters,
@@ -320,6 +333,12 @@ def helixGear(
     params_with_helix = parameters.copy()
     params_with_helix["helix_angle"] = helix_angle
 
+    # Apply backlash for external gears: subtract from profile shift to make teeth thinner
+    backlash = parameters.get("backlash", 0.0)
+    if backlash != 0.0:
+        original_shift = parameters.get("profile_shift", 0.0)
+        params_with_helix["profile_shift"] = original_shift - backlash
+
     # Calculate total rotation for top sketch
     # Using transverse module for pitch radius calculation
     mn = parameters["module"]
@@ -336,9 +355,9 @@ def helixGear(
     else:
         total_rotation_deg = 0.0
 
-    # Use two-sketch mode: angle1=0 triggers bottom→top loft without middle sketch
+    # Pass same angle twice: angle1==angle2 triggers efficient 2-sketch helical mode
     return herringboneGear(
-        doc, params_with_helix, 0.0, total_rotation_deg, profile_func
+        doc, params_with_helix, total_rotation_deg, total_rotation_deg, profile_func
     )
 
 
@@ -359,6 +378,13 @@ def spurGear(doc, parameters, profile_func: Optional[Callable] = None):
     """
     if profile_func is None:
         profile_func = gearMath.generateSpurGearProfile
+
+    # Apply backlash for external gears: subtract from profile shift to make teeth thinner
+    backlash = parameters.get("backlash", 0.0)
+    if backlash != 0.0:
+        parameters = parameters.copy()
+        original_shift = parameters.get("profile_shift", 0.0)
+        parameters["profile_shift"] = original_shift - backlash
 
     return herringboneGear(doc, parameters, 0.0, 0.0, profile_func)
 
@@ -456,6 +482,13 @@ class SpurGear:
             "SpurGear",
             QT_TRANSLATE_NOOP("App::Property", "Profile shift coefficient (-1 to +1)"),
         ).ProfileShift = H["profile_shift"]
+
+        obj.addProperty(
+            "App::PropertyFloat",
+            "Backlash",
+            "SpurGear",
+            QT_TRANSLATE_NOOP("App::Property", "Backlash clearance for 3D printing (0.0-0.3mm)"),
+        ).Backlash = 0.0
 
         obj.addProperty(
             "App::PropertyString",
@@ -571,7 +604,7 @@ class SpurGear:
                         doc.removeObject(old_name)
                 self.last_body_name = new_name
 
-        if prop in ["Module", "NumberOfTeeth", "PressureAngle", "ProfileShift"]:
+        if prop in ["Module", "NumberOfTeeth", "PressureAngle", "ProfileShift", "Backlash", "Height"]:
             try:
                 module = fp.Module.Value
                 num_teeth = fp.NumberOfTeeth
@@ -602,6 +635,7 @@ class SpurGear:
             "num_teeth": int(self.Object.NumberOfTeeth),
             "pressure_angle": float(self.Object.PressureAngle.Value),
             "profile_shift": float(self.Object.ProfileShift),
+            "backlash": float(self.Object.Backlash),
             "height": float(self.Object.Height.Value),
             "body_name": str(self.Object.BodyName),
             "bore_type": str(self.Object.BoreType),
@@ -738,11 +772,18 @@ class HelixGear:
         ).HelixAngle = 15.0
 
         obj.addProperty(
+            "App::PropertyFloat",
+            "Backlash",
+            "HelixGear",
+            QT_TRANSLATE_NOOP("App::Property", "Backlash clearance for 3D printing (0.0-0.3mm)"),
+        ).Backlash = 0.0
+
+        obj.addProperty(
             "App::PropertyString",
             "BodyName",
             "HelixGear",
             QT_TRANSLATE_NOOP("App::Property", "Name of the generated body"),
-        ).BodyName = H["body_name"]
+        ).BodyName = "HelicalGear"
 
         # Bore parameters
         obj.addProperty(
@@ -850,20 +891,26 @@ class HelixGear:
                         doc.removeObject(old_name)
                 self.last_body_name = new_name
 
-        if prop in ["Module", "NumberOfTeeth", "PressureAngle", "ProfileShift"]:
+        if prop in ["Module", "NumberOfTeeth", "PressureAngle", "ProfileShift", "HelixAngle", "Backlash", "Height"]:
             try:
                 module = fp.Module.Value
                 num_teeth = fp.NumberOfTeeth
                 pressure_angle = fp.PressureAngle.Value
                 profile_shift = fp.ProfileShift
+                helix_angle = fp.HelixAngle.Value
 
-                pitch_dia = gearMath.calcPitchDiameter(module, num_teeth)
+                if helix_angle != 0:
+                    mt = module / math.cos(helix_angle * util.DEG_TO_RAD)
+                else:
+                    mt = module
+
+                pitch_dia = gearMath.calcPitchDiameter(mt, num_teeth)
                 base_dia = gearMath.calcBaseDiameter(pitch_dia, pressure_angle)
                 outer_dia = gearMath.calcAddendumDiameter(
-                    pitch_dia, module, profile_shift
+                    pitch_dia, mt, profile_shift
                 )
                 root_dia = gearMath.calcDedendumDiameter(
-                    pitch_dia, module, profile_shift
+                    pitch_dia, mt, profile_shift
                 )
 
                 fp.PitchDiameter = pitch_dia
@@ -881,6 +928,7 @@ class HelixGear:
             "num_teeth": int(self.Object.NumberOfTeeth),
             "pressure_angle": float(self.Object.PressureAngle.Value),
             "profile_shift": float(self.Object.ProfileShift),
+            "backlash": float(self.Object.Backlash),
             "height": float(self.Object.Height.Value),
             "body_name": str(self.Object.BodyName),
             "bore_type": str(self.Object.BoreType),
@@ -1025,11 +1073,18 @@ class HerringboneGear:
         ).Angle2 = -15.0
 
         obj.addProperty(
+            "App::PropertyFloat",
+            "Backlash",
+            "HerringboneGear",
+            QT_TRANSLATE_NOOP("App::Property", "Backlash clearance for 3D printing (0.0-0.3mm)"),
+        ).Backlash = 0.0
+
+        obj.addProperty(
             "App::PropertyString",
             "BodyName",
             "HerringboneGear",
             QT_TRANSLATE_NOOP("App::Property", "Name of the generated body"),
-        ).BodyName = H["body_name"]
+        ).BodyName = "HerringboneGear"
 
         # Bore parameters
         obj.addProperty(
@@ -1137,20 +1192,30 @@ class HerringboneGear:
                         doc.removeObject(old_name)
                 self.last_body_name = new_name
 
-        if prop in ["Module", "NumberOfTeeth", "PressureAngle", "ProfileShift"]:
+        if prop in ["Module", "NumberOfTeeth", "PressureAngle", "ProfileShift", "Angle1", "Angle2", "Backlash", "Height"]:
             try:
                 module = fp.Module.Value
                 num_teeth = fp.NumberOfTeeth
                 pressure_angle = fp.PressureAngle.Value
                 profile_shift = fp.ProfileShift
+                angle1 = fp.Angle1.Value
+                angle2 = fp.Angle2.Value
 
-                pitch_dia = gearMath.calcPitchDiameter(module, num_teeth)
+                # Use magnitude of angle1 for helix angle (like internal herringbone)
+                helix_angle = abs(angle1) if angle1 != 0 else abs(angle2)
+
+                if helix_angle != 0:
+                    mt = module / math.cos(helix_angle * util.DEG_TO_RAD)
+                else:
+                    mt = module
+
+                pitch_dia = gearMath.calcPitchDiameter(mt, num_teeth)
                 base_dia = gearMath.calcBaseDiameter(pitch_dia, pressure_angle)
                 outer_dia = gearMath.calcAddendumDiameter(
-                    pitch_dia, module, profile_shift
+                    pitch_dia, mt, profile_shift
                 )
                 root_dia = gearMath.calcDedendumDiameter(
-                    pitch_dia, module, profile_shift
+                    pitch_dia, mt, profile_shift
                 )
 
                 fp.PitchDiameter = pitch_dia
@@ -1168,6 +1233,7 @@ class HerringboneGear:
             "num_teeth": int(self.Object.NumberOfTeeth),
             "pressure_angle": float(self.Object.PressureAngle.Value),
             "profile_shift": float(self.Object.ProfileShift),
+            "backlash": float(self.Object.Backlash),
             "height": float(self.Object.Height.Value),
             "body_name": str(self.Object.BodyName),
             "bore_type": str(self.Object.BoreType),

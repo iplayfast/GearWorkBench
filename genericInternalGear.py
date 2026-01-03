@@ -139,6 +139,7 @@ def internalHerringboneGear(
     height = parameters["height"]
     profile_shift = parameters.get("profile_shift", 0.0)
     rim_thickness = parameters.get("rim_thickness", 3.0)
+    backlash = parameters.get("backlash", 0.15)
 
     if "helix_angle" not in parameters:
         parameters = parameters.copy()
@@ -157,10 +158,14 @@ def internalHerringboneGear(
 
     # CALCULATE DIAMETERS
     # Tip Radius (Inner Hole): where the teeth END.
-    ra_internal = dw / 2.0 - mt * (gearMath.ADDENDUM_FACTOR + profile_shift)
+    # For internal gears, the cutter's dedendum creates the internal tooth tip
+    # Internal tooth tip is at LARGER radius than pitch (cutter root is outside pitch)
+    ra_internal = dw / 2.0 + mt * (gearMath.DEDENDUM_FACTOR + profile_shift)
 
     # Root Radius (Bottom of the cut): where the teeth START.
-    rf_internal = dw / 2.0 + mt * (gearMath.DEDENDUM_FACTOR - profile_shift)
+    # For internal gears, the cutter's addendum creates the internal tooth root
+    # Internal tooth root is at SMALLER radius than pitch (cutter tip is inside pitch)
+    rf_internal = dw / 2.0 - mt * (gearMath.ADDENDUM_FACTOR - profile_shift)
 
     # Outer Diameter of the Part
     outer_diameter = rf_internal * 2.0 + 2 * rim_thickness
@@ -169,12 +174,16 @@ def internalHerringboneGear(
         profile_func = generateInternalHelicalCutterProfile
 
     # CUTTER CONFIGURATION
-    # We extend the cutter slightly deeper than the nominal root to ensure clean boolean cuts.
-    # This prevents coincident faces at the bottom of the tooth gap.
+    # Use a copy of parameters - profile_shift (including backlash) will control cutter size
     cut_params = parameters.copy()
-    cut_params["tip_radius"] = rf_internal + (0.01 * module)
+    # Note: We no longer override tip_radius here, allowing backlash to affect cutter dimensions
 
-    if angle1 == 0:
+    # Intelligent gear type detection based on angles:
+    # - Both angles equal and non-zero: Internal Helical gear (continuous twist)
+    # - Angles different: True internal herringbone (V-shaped chevron)
+    # - Both zero: Internal spur gear (straight teeth)
+    if angle1 == angle2 and angle1 != 0:
+        # Internal Helical gear: two sketches with continuous twist (more efficient)
         return _createTwoSketchInternalGear(
             body,
             cut_params,
@@ -186,6 +195,7 @@ def internalHerringboneGear(
             profile_func,
         )
     else:
+        # Internal Herringbone or spur: three sketches (handles angle1==angle2==0 as spur)
         return _createThreeSketchInternalGear(
             body,
             cut_params,
@@ -459,8 +469,9 @@ def internalHelixGear(
     else:
         total_rotation_deg = 0.0
 
+    # Pass same angle twice: angle1==angle2 triggers efficient 2-sketch helical mode
     return internalHerringboneGear(
-        doc, params_with_helix, 0.0, total_rotation_deg, profile_func
+        doc, params_with_helix, total_rotation_deg, total_rotation_deg, profile_func
     )
 
 
@@ -520,6 +531,12 @@ class InternalSpurGear:
             "App::PropertyLength", "RimThickness", "InternalSpurGear", "Rim thickness"
         ).RimThickness = H["rim_thickness"]
         obj.addProperty(
+            "App::PropertyFloat",
+            "Backlash",
+            "InternalSpurGear",
+            "Backlash clearance (extra profile shift for tooth gaps, 0.1-0.2 for 3D printing)"
+        ).Backlash = 0.15
+        obj.addProperty(
             "App::PropertyString", "BodyName", "InternalSpurGear", "Body name"
         ).BodyName = "InternalSpurGear"
 
@@ -543,7 +560,7 @@ class InternalSpurGear:
                 if doc:
                     old_body = doc.getObject(old_name)
                     if old_body:
-                        doc.removeObject(old_body)
+                        doc.removeObject(old_name)  # removeObject expects a string
                 self.last_body_name = new_name
 
         if prop in [
@@ -552,6 +569,7 @@ class InternalSpurGear:
             "PressureAngle",
             "ProfileShift",
             "RimThickness",
+            "Backlash",
         ]:
             try:
                 module = fp.Module.Value
@@ -584,6 +602,7 @@ class InternalSpurGear:
             "profile_shift": float(self.Object.ProfileShift),
             "height": float(self.Object.Height.Value),
             "rim_thickness": float(self.Object.RimThickness.Value),
+            "backlash": float(self.Object.Backlash),
             "body_name": str(self.Object.BodyName),
         }
 
@@ -619,9 +638,24 @@ class InternalSpurGear:
                 # Delete old body if it exists and has same name
                 old_body = doc.getObject(body_name)
                 if old_body and old_body.isValid():
-                    # Delete old body (which may have a different name from previous BodyName)
-                    doc.removeObject(body_name)
-                    App.Console.PrintMessage(f"Deleted old body: {body_name}\n")
+                    # Delete all child objects first (features inside the body)
+                    if hasattr(old_body, 'Group'):
+                        for obj in old_body.Group:
+                            if obj and obj.isValid():
+                                try:
+                                    doc.removeObject(obj.Name)
+                                except Exception as e:
+                                    App.Console.PrintWarning(f"Could not remove {obj.Name}: {e}\n")
+
+                    # Now delete the body itself
+                    try:
+                        doc.removeObject(body_name)
+                        App.Console.PrintMessage(f"Deleted old body: {body_name}\n")
+                    except Exception as e:
+                        App.Console.PrintError(f"Failed to delete old body: {e}\n")
+
+                    # Wait for deletion to complete
+                    doc.recompute()
 
                 # Create new body with parameters
                 internalSpurGear(doc, parameters)
@@ -705,8 +739,17 @@ class InternalHelixGear:
             "Rim thickness",
         ).RimThickness = H["rim_thickness"]
         obj.addProperty(
-            "App::PropertyAngle", "HelixAngle", "InternalHelicalGear", "Helix angle"
-        ).HelixAngle = -15.0
+            "App::PropertyAngle",
+            "HelixAngle",
+            "InternalHelicalGear",
+            "Helix angle (must match external gear for meshing)"
+        ).HelixAngle = 15.0
+        obj.addProperty(
+            "App::PropertyFloat",
+            "Backlash",
+            "InternalHelicalGear",
+            "Backlash clearance (extra profile shift for tooth gaps, 0.1-0.2 for 3D printing)"
+        ).Backlash = 0.15
         obj.addProperty(
             "App::PropertyString", "BodyName", "InternalHelicalGear", "Body name"
         ).BodyName = "InternalHelixGear"
@@ -728,7 +771,7 @@ class InternalHelixGear:
                 if doc:
                     old_body = doc.getObject(old_name)
                     if old_body:
-                        doc.removeObject(old_body)
+                        doc.removeObject(old_name)  # removeObject expects a string
                 self.last_body_name = new_name
 
         if prop in [
@@ -738,6 +781,7 @@ class InternalHelixGear:
             "ProfileShift",
             "RimThickness",
             "HelixAngle",
+            "Backlash",
         ]:
             try:
                 module = fp.Module.Value
@@ -777,6 +821,7 @@ class InternalHelixGear:
             "height": float(self.Object.Height.Value),
             "rim_thickness": float(self.Object.RimThickness.Value),
             "helix_angle": float(self.Object.HelixAngle.Value),
+            "backlash": float(self.Object.Backlash),
             "body_name": str(self.Object.BodyName),
         }
 
@@ -811,13 +856,30 @@ class InternalHelixGear:
 
                 # Delete old body if it exists and has same name
                 old_body = doc.getObject(body_name)
+                old_placement = None
+
                 if old_body and old_body.isValid():
                     # Store current placement to reapply
                     old_placement = old_body.Placement
 
-                    # Delete the old body
-                    doc.removeObject(body_name)
-                    App.Console.PrintMessage(f"Deleted old body: {body_name}\n")
+                    # Delete all child objects first (features inside the body)
+                    if hasattr(old_body, 'Group'):
+                        for obj in old_body.Group:
+                            if obj and obj.isValid():
+                                try:
+                                    doc.removeObject(obj.Name)
+                                except Exception as e:
+                                    App.Console.PrintWarning(f"Could not remove {obj.Name}: {e}\n")
+
+                    # Now delete the body itself
+                    try:
+                        doc.removeObject(body_name)
+                        App.Console.PrintMessage(f"Deleted old body: {body_name}\n")
+                    except Exception as e:
+                        App.Console.PrintError(f"Failed to delete old body: {e}\n")
+
+                    # Wait for deletion to complete
+                    doc.recompute()
 
                     # Create new body with parameters
                     internalHelixGear(doc, parameters, parameters["helix_angle"])
@@ -903,8 +965,17 @@ class InternalHerringboneGear:
             "Rim thickness",
         ).RimThickness = H["rim_thickness"]
         obj.addProperty(
-            "App::PropertyAngle", "HelixAngle", "InternalHerringboneGear", "Helix angle"
-        ).HelixAngle = -30.0
+            "App::PropertyAngle",
+            "Angle1",
+            "InternalHerringboneGear",
+            "First helix angle (bottom to middle)"
+        ).Angle1 = 15.0
+        obj.addProperty(
+            "App::PropertyAngle",
+            "Angle2",
+            "InternalHerringboneGear",
+            "Second helix angle (middle to top)"
+        ).Angle2 = -15.0
         obj.addProperty(
             "App::PropertyFloat",
             "Backlash",
@@ -932,7 +1003,7 @@ class InternalHerringboneGear:
                 if doc:
                     old_body = doc.getObject(old_name)
                     if old_body:
-                        doc.removeObject(old_body)
+                        doc.removeObject(old_name)  # removeObject expects a string
                 self.last_body_name = new_name
 
         if prop in [
@@ -941,7 +1012,8 @@ class InternalHerringboneGear:
             "PressureAngle",
             "ProfileShift",
             "RimThickness",
-            "HelixAngle",
+            "Angle1",
+            "Angle2",
             "Backlash",
         ]:
             try:
@@ -950,7 +1022,11 @@ class InternalHerringboneGear:
                 pressure_angle = fp.PressureAngle.Value
                 profile_shift = fp.ProfileShift
                 rim_thickness = fp.RimThickness.Value
-                helix_angle = fp.HelixAngle.Value
+                angle1 = fp.Angle1.Value
+                angle2 = fp.Angle2.Value
+
+                # Use magnitude of angle1 for helix angle (like external herringbone)
+                helix_angle = abs(angle1) if angle1 != 0 else abs(angle2)
 
                 if helix_angle != 0:
                     mt = module / math.cos(helix_angle * util.DEG_TO_RAD)
@@ -974,6 +1050,11 @@ class InternalHerringboneGear:
                 pass
 
     def GetParameters(self):
+        angle1 = float(self.Object.Angle1.Value)
+        angle2 = float(self.Object.Angle2.Value)
+        # Calculate helix_angle for profile generation (magnitude of angle1)
+        helix_angle = abs(angle1) if angle1 != 0 else abs(angle2)
+
         return {
             "module": float(self.Object.Module.Value),
             "num_teeth": int(self.Object.NumberOfTeeth),
@@ -981,7 +1062,9 @@ class InternalHerringboneGear:
             "profile_shift": float(self.Object.ProfileShift),
             "height": float(self.Object.Height.Value),
             "rim_thickness": float(self.Object.RimThickness.Value),
-            "helix_angle": float(self.Object.HelixAngle.Value),
+            "helix_angle": helix_angle,
+            "angle1": angle1,
+            "angle2": angle2,
             "backlash": float(self.Object.Backlash),
             "body_name": str(self.Object.BodyName),
         }
@@ -1042,8 +1125,10 @@ class InternalHerringboneGear:
                     # Wait for deletion to complete
                     doc.recompute()
 
-                # Create new body with parameters
-                internalHerringboneGear(doc, parameters, 15.0, -15.0)
+                # Create new body with parameters using user-specified angles
+                angle1 = parameters.get("angle1", 15.0)
+                angle2 = parameters.get("angle2", -15.0)
+                internalHerringboneGear(doc, parameters, angle1, angle2)
 
                 # Restore placement if we had an old one
                 if old_placement:
