@@ -55,16 +55,13 @@ def _applyOriginAndAngle(body, parameters):
     origin_z = parameters.get("origin_z", 0.0)
     angle = parameters.get("angle", 0.0)
 
-    if origin_x == 0.0 and origin_y == 0.0 and origin_z == 0.0 and angle == 0.0:
-        return
-
+    # Create placement from origin and angle
+    # IMPORTANT: Set the placement directly, don't multiply!
+    # Multiplying would accumulate transforms on each recompute
     translation = App.Vector(origin_x, origin_y, origin_z)
     rotation = App.Rotation(App.Vector(0, 0, 1), angle)
 
-    current_placement = body.Placement
-    new_base_placement = App.Placement(translation, rotation)
-
-    body.Placement = current_placement.multiply(new_base_placement)
+    body.Placement = App.Placement(translation, rotation)
 
 
 # ============================================================================
@@ -590,21 +587,21 @@ class SpurGear:
         ).KeywayDepth = 1.0
 
         obj.addProperty(
-            "App::PropertyLength",
+            "App::PropertyDistance",
             "OriginX",
             "Placement",
             QT_TRANSLATE_NOOP("App::Property", "X coordinate of gear origin"),
         ).OriginX = 0.0
 
         obj.addProperty(
-            "App::PropertyLength",
+            "App::PropertyDistance",
             "OriginY",
             "Placement",
             QT_TRANSLATE_NOOP("App::Property", "Y coordinate of gear origin"),
         ).OriginY = 0.0
 
         obj.addProperty(
-            "App::PropertyLength",
+            "App::PropertyDistance",
             "OriginZ",
             "Placement",
             QT_TRANSLATE_NOOP("App::Property", "Z coordinate of gear origin"),
@@ -879,21 +876,21 @@ class HelixGear:
         ).KeywayDepth = 1.0
 
         obj.addProperty(
-            "App::PropertyLength",
+            "App::PropertyDistance",
             "OriginX",
             "Placement",
             QT_TRANSLATE_NOOP("App::Property", "X coordinate of gear origin"),
         ).OriginX = 0.0
 
         obj.addProperty(
-            "App::PropertyLength",
+            "App::PropertyDistance",
             "OriginY",
             "Placement",
             QT_TRANSLATE_NOOP("App::Property", "Y coordinate of gear origin"),
         ).OriginY = 0.0
 
         obj.addProperty(
-            "App::PropertyLength",
+            "App::PropertyDistance",
             "OriginZ",
             "Placement",
             QT_TRANSLATE_NOOP("App::Property", "Z coordinate of gear origin"),
@@ -1181,21 +1178,21 @@ class HerringboneGear:
         ).KeywayDepth = 1.0
 
         obj.addProperty(
-            "App::PropertyLength",
+            "App::PropertyDistance",
             "OriginX",
             "Placement",
             QT_TRANSLATE_NOOP("App::Property", "X coordinate of gear origin"),
         ).OriginX = 0.0
 
         obj.addProperty(
-            "App::PropertyLength",
+            "App::PropertyDistance",
             "OriginY",
             "Placement",
             QT_TRANSLATE_NOOP("App::Property", "Y coordinate of gear origin"),
         ).OriginY = 0.0
 
         obj.addProperty(
-            "App::PropertyLength",
+            "App::PropertyDistance",
             "OriginZ",
             "Placement",
             QT_TRANSLATE_NOOP("App::Property", "Z coordinate of gear origin"),

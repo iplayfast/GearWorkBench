@@ -26,6 +26,7 @@ import gearMath
 import genericGear  # Generic gear framework (spur, helical, herringbone)
 import genericInternalGear  # Generic internal gear framework
 import gearPositioning  # Gear positioning tool
+import planetaryGearCreator  # Planetary gear system creator
 import rackGear  # Import rack gear module
 import cycloidGear  # Import cycloid gear module
 import cycloidRack  # Import cycloid rack module
@@ -68,6 +69,8 @@ class GearWorkbenchWB(Workbench):
                 "InternalSpurGearCommand",
                 "InternalHelixGearCommand",
                 "InternalHerringboneGearCommand",
+                # Systems
+                "PlanetaryGearCreatorCommand",
                 # Other gear types
                 "RackGearCreateObject",
                 "CycloidGearCreateObject",

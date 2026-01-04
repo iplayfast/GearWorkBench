@@ -715,67 +715,28 @@ class GearPositionDialog(QtGui.QDialog):
             gear1_specs = self.getGearSpecs(gear1_info)
             gear2_specs = self.getGearSpecs(gear2_info)
 
-            # Create PartDesign Body
+            # Get or create shared scaffold body
             scaffold_body_name = "GearScaffolding"
-            existing = doc.getObject(scaffold_body_name)
-            if existing:
-                counter = 1
-                while doc.getObject(f"{scaffold_body_name}{counter:03d}"):
-                    counter += 1
-                scaffold_body_name = f"{scaffold_body_name}{counter:03d}"
-
-            scaffold_body = util.readyPart(doc, scaffold_body_name)
+            scaffold_body = doc.getObject(scaffold_body_name)
+            if not scaffold_body:
+                # Create new scaffold body if it doesn't exist
+                scaffold_body = doc.addObject('PartDesign::Body', scaffold_body_name)
+                doc.recompute()
+                App.Console.PrintMessage(f"Created new scaffold body '{scaffold_body_name}'\n")
+            else:
+                App.Console.PrintMessage(f"Reusing existing scaffold body '{scaffold_body_name}'\n")
 
             # Constants
             axle_radius = 5.0
             axle_height = 30.0
             shell_wall_thickness = 5.0
 
-            # Calculate dimensions
-            direction = p2 - p1
-            distance = math.sqrt(direction.x**2 + direction.y**2)
-
-            # Oval dimensions
-            major_radius = distance / 2.0 + 40.0
-            minor_radius = 40.0
-            plate_thickness = 5.0
-
-            # Positions
-            center_x = (p1.x + p2.x) / 2.0
-            center_y = (p1.y + p2.y) / 2.0
-            plate_z = min(p1.z, p2.z) - axle_height - 5.0
-
-            # Rotation angle
-            angle_rad = math.atan2(direction.y, direction.x)
-            angle_deg = angle_rad * 180.0 / math.pi
-
-            # --- CREATE OVAL SKETCH AND PAD ---
-            oval_sketch = util.createSketch(scaffold_body, "OvalSketch")
-            # Position sketch at oval location with rotation
-            oval_sketch.Placement = App.Placement(
-                App.Vector(center_x, center_y, plate_z),
-                App.Rotation(App.Vector(0, 0, 1), angle_deg)
-            )
-
-            # Add ellipse to sketch
-            ellipse = oval_sketch.addGeometry(
-                Part.Ellipse(
-                    App.Vector(major_radius, 0, 0),
-                    App.Vector(0, minor_radius, 0),
-                    App.Vector(0, 0, 0)
-                ),
-                False
-            )
-            oval_sketch.addConstraint(Sketcher.Constraint("Coincident", ellipse, 3, -1, 1))
-
-            # Pad the oval
-            oval_pad = util.createPad(scaffold_body, oval_sketch, plate_thickness, "OvalPlate")
-            oval_sketch.Visibility = False
-
-            App.Console.PrintMessage(f"Created oval at ({center_x:.2f}, {center_y:.2f}, {plate_z:.2f})\n")
+            # Generate unique axle names based on gear body names
+            axle1_name = f"Axle_{gear1_body_name}"
+            axle2_name = f"Axle_{gear2_body_name}"
 
             # --- CREATE AXLE 1 SKETCH AND PAD ---
-            axle1_sketch = util.createSketch(scaffold_body, "Axle1Sketch")
+            axle1_sketch = util.createSketch(scaffold_body, f"{axle1_name}_Sketch")
             axle1_position = App.Vector(p1.x, p1.y, p1.z - axle_height)
             axle1_sketch.Placement = App.Placement(axle1_position, App.Rotation(0, 0, 0))
 
@@ -802,13 +763,13 @@ class GearPositionDialog(QtGui.QDialog):
                 )
                 axle1_sketch.addConstraint(Sketcher.Constraint("Coincident", circle, 3, -1, 1))
 
-            axle1_pad = util.createPad(scaffold_body, axle1_sketch, axle_height, "Axle1")
+            axle1_pad = util.createPad(scaffold_body, axle1_sketch, axle_height, axle1_name)
             axle1_sketch.Visibility = False
 
-            App.Console.PrintMessage(f"Created Axle1 at ({axle1_position.x:.2f}, {axle1_position.y:.2f}, {axle1_position.z:.2f})\n")
+            App.Console.PrintMessage(f"Created {axle1_name} at ({axle1_position.x:.2f}, {axle1_position.y:.2f}, {axle1_position.z:.2f})\n")
 
             # --- CREATE AXLE 2 SKETCH AND PAD ---
-            axle2_sketch = util.createSketch(scaffold_body, "Axle2Sketch")
+            axle2_sketch = util.createSketch(scaffold_body, f"{axle2_name}_Sketch")
             axle2_position = App.Vector(p2.x, p2.y, p2.z - axle_height)
             axle2_sketch.Placement = App.Placement(axle2_position, App.Rotation(0, 0, 0))
 
@@ -835,15 +796,12 @@ class GearPositionDialog(QtGui.QDialog):
                 )
                 axle2_sketch.addConstraint(Sketcher.Constraint("Coincident", circle, 3, -1, 1))
 
-            axle2_pad = util.createPad(scaffold_body, axle2_sketch, axle_height, "Axle2")
+            axle2_pad = util.createPad(scaffold_body, axle2_sketch, axle_height, axle2_name)
             axle2_sketch.Visibility = False
 
-            App.Console.PrintMessage(f"Created Axle2 at ({axle2_position.x:.2f}, {axle2_position.y:.2f}, {axle2_position.z:.2f})\n")
+            App.Console.PrintMessage(f"Created {axle2_name} at ({axle2_position.x:.2f}, {axle2_position.y:.2f}, {axle2_position.z:.2f})\n")
 
             # Set appearance
-            if oval_pad.ViewObject:
-                oval_pad.ViewObject.Transparency = 50
-                oval_pad.ViewObject.ShapeColor = (0.0, 1.0, 0.0)
             if axle1_pad.ViewObject:
                 axle1_pad.ViewObject.Transparency = 0
                 axle1_pad.ViewObject.ShapeColor = (1.0, 0.0, 0.0)
@@ -862,10 +820,9 @@ class GearPositionDialog(QtGui.QDialog):
                 if hasattr(obj, "Placement"):
                     App.Console.PrintMessage(f"      Placement: {obj.Placement.Base}\n")
 
-            App.Console.PrintMessage(f"\nCreated scaffolding '{scaffold_body_name}' using PartDesign\n")
-            App.Console.PrintMessage(f"  Oval: GREEN, semi-transparent\n")
-            App.Console.PrintMessage(f"  Axle 1: RED at gear 1\n")
-            App.Console.PrintMessage(f"  Axle 2: BLUE at gear 2\n")
+            App.Console.PrintMessage(f"\nAdded axles to scaffold '{scaffold_body_name}'\n")
+            App.Console.PrintMessage(f"  {axle1_name}: RED at {gear1_body_name}\n")
+            App.Console.PrintMessage(f"  {axle2_name}: BLUE at {gear2_body_name}\n")
 
             if App.GuiUp:
                 try:
