@@ -141,31 +141,29 @@ def internalHerringboneGear(
     rim_thickness = parameters.get("rim_thickness", 3.0)
     backlash = parameters.get("backlash", 0.15)
 
+    # For herringbone gears, use helical tooth profile with transverse module
+    # Calculate transverse module using the helix angle magnitude
+    # For symmetric herringbone (angle2 = -angle1), use magnitude of angle1
+    helix_angle_magnitude = abs(angle1) if angle1 != 0 else abs(angle2)
+
     if "helix_angle" not in parameters:
         parameters = parameters.copy()
-        parameters["helix_angle"] = abs(angle1) if angle1 != 0 else abs(angle2)
+        parameters["helix_angle"] = helix_angle_magnitude
 
-    # Dimensions
-    helix_angle = parameters.get("helix_angle", 0.0)
-    module = parameters["module"]
-    if helix_angle != 0:
-        beta_rad = helix_angle * util.DEG_TO_RAD
-        mt = module / math.cos(beta_rad)
+    if helix_angle_magnitude != 0:
+        beta_rad = helix_angle_magnitude * util.DEG_TO_RAD
+        mt = parameters["module"] / math.cos(beta_rad)  # transverse module
     else:
-        mt = module
+        mt = parameters["module"]
 
     dw = mt * num_teeth
 
     # CALCULATE DIAMETERS
     # Tip Radius (Inner Hole): where the teeth END.
-    # For internal gears, the cutter's dedendum creates the internal tooth tip
-    # Internal tooth tip is at LARGER radius than pitch (cutter root is outside pitch)
-    ra_internal = dw / 2.0 + mt * (gearMath.DEDENDUM_FACTOR + profile_shift)
+    ra_internal = dw / 2.0 - mt * (gearMath.ADDENDUM_FACTOR + profile_shift)
 
     # Root Radius (Bottom of the cut): where the teeth START.
-    # For internal gears, the cutter's addendum creates the internal tooth root
-    # Internal tooth root is at SMALLER radius than pitch (cutter tip is inside pitch)
-    rf_internal = dw / 2.0 - mt * (gearMath.ADDENDUM_FACTOR - profile_shift)
+    rf_internal = dw / 2.0 + mt * (gearMath.DEDENDUM_FACTOR - profile_shift)
 
     # Outer Diameter of the Part
     outer_diameter = rf_internal * 2.0 + 2 * rim_thickness
@@ -328,13 +326,55 @@ def _createThreeSketchInternalGear(
     outer_diameter,
     profile_func,
 ):
-    """Create internal herringbone gear (Subtractive).
+    """
+    Create internal herringbone gear as two helical halves joined at midpoint.
 
-    Creates full ring, then one tooth gap with two lofts, then patterns the cuts.
-    Much faster than patterning ring segments.
+    This creates a true herringbone by:
+    1. Bottom half: helical gear from Z=0 to Z=height/2 with helix angle = angle1
+    2. Top half: helical gear from Z=height/2 to Z=height with helix angle = angle2
+
+    For a symmetric herringbone, angle2 = -angle1.
     """
     doc = body.Document
     half_height = height / 2.0
+
+    # Calculate sketch rotations based on helical gear math
+    # Rotation = (height_segment) * tan(helix_angle) / pitch_radius
+    mn = parameters["module"]
+    helix_angle1 = angle1  # Helix angle in degrees for bottom half
+    helix_angle2 = angle2  # Helix angle in degrees for top half
+
+    # Use transverse module for pitch radius calculation
+    if helix_angle1 != 0:
+        beta_rad1 = helix_angle1 * util.DEG_TO_RAD
+        mt1 = mn / math.cos(beta_rad1)
+    else:
+        mt1 = mn
+
+    if helix_angle2 != 0:
+        beta_rad2 = helix_angle2 * util.DEG_TO_RAD
+        mt2 = mn / math.cos(beta_rad2)
+    else:
+        mt2 = mn
+
+    # Use average transverse module for pitch radius (should be same for both halves)
+    mt_avg = (mt1 + mt2) / 2.0
+    pitch_radius = mt_avg * num_teeth / 2.0
+
+    # Calculate rotation for each sketch
+    # Bottom half: 0 to height/2 with helix_angle1
+    if helix_angle1 != 0:
+        rotation_middle = half_height * math.tan(helix_angle1 * util.DEG_TO_RAD) / pitch_radius
+        rotation_middle_deg = rotation_middle * util.RAD_TO_DEG
+    else:
+        rotation_middle_deg = 0.0
+
+    # Top half: height/2 to height with helix_angle2
+    if helix_angle2 != 0:
+        rotation_top_increment = half_height * math.tan(helix_angle2 * util.DEG_TO_RAD) / pitch_radius
+        rotation_top_deg = rotation_middle_deg + (rotation_top_increment * util.RAD_TO_DEG)
+    else:
+        rotation_top_deg = rotation_middle_deg
 
     # 1. Create FULL Ring (360-degree annulus)
     ring_sketch = util.createSketch(body, "Ring")
@@ -370,14 +410,14 @@ def _createThreeSketchInternalGear(
 
     sketch_middle = util.createSketch(body, "ToothGap_Middle")
     sketch_middle.Placement = App.Placement(
-        App.Vector(0, 0, half_height), App.Rotation(App.Vector(0, 0, 1), angle1)
+        App.Vector(0, 0, half_height), App.Rotation(App.Vector(0, 0, 1), rotation_middle_deg)
     )
     sketch_middle.MapMode = "Deactivated"
     profile_func(sketch_middle, parameters)
 
     sketch_top = util.createSketch(body, "ToothGap_Top")
     sketch_top.Placement = App.Placement(
-        App.Vector(0, 0, height), App.Rotation(App.Vector(0, 0, 1), angle1 + angle2)
+        App.Vector(0, 0, height), App.Rotation(App.Vector(0, 0, 1), rotation_top_deg)
     )
     sketch_top.MapMode = "Deactivated"
     profile_func(sketch_top, parameters)
@@ -542,7 +582,7 @@ class InternalSpurGear:
 
         # Store the actual body name created by gear generator
         self.created_body_name = None
-        self.last_body_name = obj.BodyName
+        self.last_body_name = None  # Initialize to None to prevent deleting other gears' bodies
 
         self.Type = "InternalSpurGear"
         self.Object = obj
@@ -555,13 +595,14 @@ class InternalSpurGear:
         if prop == "BodyName":
             old_name = self.last_body_name
             new_name = fp.BodyName
-            if old_name != new_name:
+            # Only delete old body if we had a previous name (not the initial assignment)
+            if old_name is not None and old_name != new_name:
                 doc = App.ActiveDocument
                 if doc:
                     old_body = doc.getObject(old_name)
                     if old_body:
                         doc.removeObject(old_name)  # removeObject expects a string
-                self.last_body_name = new_name
+            self.last_body_name = new_name
 
         if prop in [
             "Module",
@@ -756,7 +797,7 @@ class InternalHelixGear:
 
         self.Type = "InternalHelixGear"
         self.Object = obj
-        self.last_body_name = obj.BodyName
+        self.last_body_name = None  # Initialize to None to prevent deleting other gears' bodies
         obj.Proxy = self
         self.onChanged(obj, "Module")
 
@@ -766,13 +807,14 @@ class InternalHelixGear:
         if prop == "BodyName":
             old_name = self.last_body_name
             new_name = fp.BodyName
-            if old_name != new_name:
+            # Only delete old body if we had a previous name (not the initial assignment)
+            if old_name is not None and old_name != new_name:
                 doc = App.ActiveDocument
                 if doc:
                     old_body = doc.getObject(old_name)
                     if old_body:
                         doc.removeObject(old_name)  # removeObject expects a string
-                self.last_body_name = new_name
+            self.last_body_name = new_name
 
         if prop in [
             "Module",
@@ -988,7 +1030,7 @@ class InternalHerringboneGear:
 
         self.Type = "InternalHerringboneGear"
         self.Object = obj
-        self.last_body_name = obj.BodyName
+        self.last_body_name = None  # Initialize to None to prevent deleting other gears' bodies
         obj.Proxy = self
         self.onChanged(obj, "Module")
 
@@ -998,13 +1040,14 @@ class InternalHerringboneGear:
         if prop == "BodyName":
             old_name = self.last_body_name
             new_name = fp.BodyName
-            if old_name != new_name:
+            # Only delete old body if we had a previous name (not the initial assignment)
+            if old_name is not None and old_name != new_name:
                 doc = App.ActiveDocument
                 if doc:
                     old_body = doc.getObject(old_name)
                     if old_body:
                         doc.removeObject(old_name)  # removeObject expects a string
-                self.last_body_name = new_name
+            self.last_body_name = new_name
 
         if prop in [
             "Module",

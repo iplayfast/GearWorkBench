@@ -115,20 +115,20 @@ def herringboneGear(
     profile_shift = parameters.get("profile_shift", 0.0)
     bore_type = parameters.get("bore_type", "none")
 
-    # Ensure helix_angle is in parameters for profile function
-    # Use magnitude of angle1 (for herringbone, angle1 and angle2 are typically opposite)
+    # For herringbone gears, use helical tooth profile with transverse module
+    # Calculate transverse module using the helix angle magnitude
+    # For symmetric herringbone (angle2 = -angle1), use magnitude of angle1
+    helix_angle_magnitude = abs(angle1) if angle1 != 0 else abs(angle2)
+
     if "helix_angle" not in parameters:
         parameters = parameters.copy()
-        parameters["helix_angle"] = abs(angle1) if angle1 != 0 else abs(angle2)
+        parameters["helix_angle"] = helix_angle_magnitude
 
-    # For dedendum calculation, use transverse module if helical
-    helix_angle = parameters.get("helix_angle", 0.0)
-    module = parameters["module"]
-    if helix_angle != 0:
-        beta_rad = helix_angle * util.DEG_TO_RAD
-        mt = module / math.cos(beta_rad)  # transverse module
+    if helix_angle_magnitude != 0:
+        beta_rad = helix_angle_magnitude * util.DEG_TO_RAD
+        mt = parameters["module"] / math.cos(beta_rad)  # transverse module
     else:
-        mt = module
+        mt = parameters["module"]
 
     dw = mt * num_teeth
     # Use custom dedendum factor if provided (for cycloid and other special gears)
@@ -234,8 +234,55 @@ def _createThreeSketchHerringbone(
     bore_type: str,
     profile_func: Callable,
 ):
-    """Create herringbone with 3 sketches (angle1 != 0)."""
+    """
+    Create herringbone with 3 sketches as two helical halves joined at midpoint.
+
+    This creates a true herringbone by:
+    1. Bottom half: helical gear from Z=0 to Z=height/2 with helix angle = angle1
+    2. Top half: helical gear from Z=height/2 to Z=height with helix angle = angle2
+
+    For a symmetric herringbone, angle2 = -angle1.
+    """
     doc = body.Document
+
+    # Calculate sketch rotations based on helical gear math
+    # Rotation = (height_segment) * tan(helix_angle) / pitch_radius
+    mn = parameters["module"]
+    helix_angle1 = angle1  # Helix angle in degrees for bottom half
+    helix_angle2 = angle2  # Helix angle in degrees for top half
+
+    # Use transverse module for pitch radius calculation
+    if helix_angle1 != 0:
+        beta_rad1 = helix_angle1 * util.DEG_TO_RAD
+        mt1 = mn / math.cos(beta_rad1)
+    else:
+        mt1 = mn
+
+    if helix_angle2 != 0:
+        beta_rad2 = helix_angle2 * util.DEG_TO_RAD
+        mt2 = mn / math.cos(beta_rad2)
+    else:
+        mt2 = mn
+
+    # Use average transverse module for pitch radius (should be same for both halves)
+    mt_avg = (mt1 + mt2) / 2.0
+    pitch_radius = mt_avg * num_teeth / 2.0
+
+    # Calculate rotation for each sketch
+    # Bottom half: 0 to height/2 with helix_angle1
+    half_height = height / 2.0
+    if helix_angle1 != 0:
+        rotation_middle = half_height * math.tan(helix_angle1 * util.DEG_TO_RAD) / pitch_radius
+        rotation_middle_deg = rotation_middle * util.RAD_TO_DEG
+    else:
+        rotation_middle_deg = 0.0
+
+    # Top half: height/2 to height with helix_angle2
+    if helix_angle2 != 0:
+        rotation_top_increment = half_height * math.tan(helix_angle2 * util.DEG_TO_RAD) / pitch_radius
+        rotation_top_deg = rotation_middle_deg + (rotation_top_increment * util.RAD_TO_DEG)
+    else:
+        rotation_top_deg = rotation_middle_deg
 
     sketch_bottom = util.createSketch(body, "ToothProfile_Bottom")
     sketch_bottom.Placement = App.Placement(App.Vector(0, 0, 0), App.Rotation(0, 0, 0))
@@ -243,13 +290,13 @@ def _createThreeSketchHerringbone(
 
     sketch_middle = util.createSketch(body, "ToothProfile_Middle")
     sketch_middle.Placement = App.Placement(
-        App.Vector(0, 0, height / 2.0), App.Rotation(App.Vector(0, 0, 1), angle1)
+        App.Vector(0, 0, half_height), App.Rotation(App.Vector(0, 0, 1), rotation_middle_deg)
     )
     profile_func(sketch_middle, parameters)
 
     sketch_top = util.createSketch(body, "ToothProfile_Top")
     sketch_top.Placement = App.Placement(
-        App.Vector(0, 0, height), App.Rotation(App.Vector(0, 0, 1), angle1 + angle2)
+        App.Vector(0, 0, height), App.Rotation(App.Vector(0, 0, 1), rotation_top_deg)
     )
     profile_func(sketch_top, parameters)
 
@@ -574,7 +621,7 @@ class SpurGear:
 
         self.Type = "SpurGear"
         self.Object = obj
-        self.last_body_name = obj.BodyName
+        self.last_body_name = None  # Initialize to None to prevent deleting other gears' bodies
         obj.Proxy = self
 
         # Trigger initial calculation
@@ -594,7 +641,8 @@ class SpurGear:
         if prop == "BodyName":
             old_name = self.last_body_name
             new_name = fp.BodyName
-            if old_name != new_name:
+            # Only delete old body if we had a previous name (not the initial assignment)
+            if old_name is not None and old_name != new_name:
                 doc = App.ActiveDocument
                 if doc:
                     old_body = doc.getObject(old_name)
@@ -602,7 +650,7 @@ class SpurGear:
                         if hasattr(old_body, "removeObjectsFromDocument"):
                             old_body.removeObjectsFromDocument()
                         doc.removeObject(old_name)
-                self.last_body_name = new_name
+            self.last_body_name = new_name
 
         if prop in ["Module", "NumberOfTeeth", "PressureAngle", "ProfileShift", "Backlash", "Height"]:
             try:
@@ -862,7 +910,7 @@ class HelixGear:
 
         self.Type = "HelixGear"
         self.Object = obj
-        self.last_body_name = obj.BodyName
+        self.last_body_name = None  # Initialize to None to prevent deleting other gears' bodies
         obj.Proxy = self
 
         self.onChanged(obj, "Module")
@@ -881,7 +929,8 @@ class HelixGear:
         if prop == "BodyName":
             old_name = self.last_body_name
             new_name = fp.BodyName
-            if old_name != new_name:
+            # Only delete old body if we had a previous name (not the initial assignment)
+            if old_name is not None and old_name != new_name:
                 doc = App.ActiveDocument
                 if doc:
                     old_body = doc.getObject(old_name)
@@ -889,7 +938,7 @@ class HelixGear:
                         if hasattr(old_body, "removeObjectsFromDocument"):
                             old_body.removeObjectsFromDocument()
                         doc.removeObject(old_name)
-                self.last_body_name = new_name
+            self.last_body_name = new_name
 
         if prop in ["Module", "NumberOfTeeth", "PressureAngle", "ProfileShift", "HelixAngle", "Backlash", "Height"]:
             try:
@@ -1163,7 +1212,7 @@ class HerringboneGear:
 
         self.Type = "HerringboneGear"
         self.Object = obj
-        self.last_body_name = obj.BodyName
+        self.last_body_name = None  # Initialize to None to prevent deleting other gears' bodies
         obj.Proxy = self
 
         self.onChanged(obj, "Module")
@@ -1182,7 +1231,8 @@ class HerringboneGear:
         if prop == "BodyName":
             old_name = self.last_body_name
             new_name = fp.BodyName
-            if old_name != new_name:
+            # Only delete old body if we had a previous name (not the initial assignment)
+            if old_name is not None and old_name != new_name:
                 doc = App.ActiveDocument
                 if doc:
                     old_body = doc.getObject(old_name)
@@ -1190,7 +1240,7 @@ class HerringboneGear:
                         if hasattr(old_body, "removeObjectsFromDocument"):
                             old_body.removeObjectsFromDocument()
                         doc.removeObject(old_name)
-                self.last_body_name = new_name
+            self.last_body_name = new_name
 
         if prop in ["Module", "NumberOfTeeth", "PressureAngle", "ProfileShift", "Angle1", "Angle2", "Backlash", "Height"]:
             try:
