@@ -305,6 +305,12 @@ def generateDefaultCycloidRackParameters() -> Dict[str, Any]:
     return {"module": 1.0, "num_teeth": 20, "height": 5.0, "addendum_factor": 1.4,
             "dedendum_factor": 1.6, "base_thickness": 5.0, "body_name": "CycloidRack"}
 
+def generateDefaultGenevaParameters() -> Dict[str, Any]:
+    return {"num_slots": 4, "crank_radius": 15.0, "pin_radius": 1.5,
+            "tolerance": 0.5, "height": 5.0, "bore_type": "none",
+            "bore_diameter": 5.0, "crank_body_name": "GenevaCrank",
+            "wheel_body_name": "GenevaWheel"}
+
 # ============================================================================
 # GEAR TYPE DEFAULT PROFILE FUNCTIONS
 # ============================================================================

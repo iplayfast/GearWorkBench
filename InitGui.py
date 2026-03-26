@@ -37,6 +37,7 @@ import globoidWormGear  # Import globoid worm gear module
 import hypoidGear  # Import hypoid gear module
 import screwGear  # Import screw gear module
 import nonCircularGear  # Import non-circular gear module
+import genevaWheel  # Import Geneva wheel (Maltese cross) module
 
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, "icons")
@@ -82,6 +83,7 @@ class GearWorkbenchWB(Workbench):
                 "HypoidGearCreateObject",
                 "ScrewGearCreateObject",
                 "NonCircularGearCreateObject",
+                "GenevaWheelCreateObject",
                 # Tools
                 "GearPositioningCommand",
             ]
