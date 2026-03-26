@@ -16,6 +16,7 @@ import FreeCADGui
 import gearMath
 import util
 import Part
+import Sketcher
 import os
 import math
 from PySide import QtCore
@@ -95,71 +96,30 @@ def calculateGenevaGeometry(params):
 
 
 # ============================================================================
-# SHAPE GENERATION (Part Booleans)
+# PARTDESIGN GENERATION
 # ============================================================================
 
 
-def generateDriveCrankShape(params, geo):
-    """Generate the drive crank shape using Part Boolean operations.
+def _addCircleSketch(body, name, radius, cx=0.0, cy=0.0):
+    """Create a sketch with a single circle and Block constraint.
 
-    The drive crank consists of:
-    - A locking disc (cylinder of radius z)
-    - A clearance cut (so the Geneva wheel can rotate freely)
-    - A base disc (below, radius a+2p)
-    - A drive pin (at radius a from center)
-
-    Args:
-        params: Input parameters dict
-        geo: Derived geometry dict from calculateGenevaGeometry()
-
-    Returns:
-        Part.Shape: The drive crank solid
+    Returns (sketch, geometry_index).
     """
-    a = params["crank_radius"]
-    p = params["pin_radius"]
-    h = params["height"]
-    z = geo["z"]
-    v = geo["v"]
-    m = geo["m"]
-
-    # Locking disc
-    driveCrank = Part.makeCylinder(z, h)
-
-    # Clearance cut for Geneva wheel
-    clearanceCut = Part.makeCylinder(v, h)
-    clearanceCut.translate(App.Vector(-m, 0, 0))
-    driveCrank = driveCrank.cut(clearanceCut)
-
-    # Base disc (below locking disc)
-    base = Part.makeCylinder(a + 2 * p, h)
-    base.translate(App.Vector(0, 0, -h))
-    driveCrank = driveCrank.fuse(base)
-
-    # Drive pin
-    pin = Part.makeCylinder(p, h)
-    pin.translate(App.Vector(-a, 0, 0))
-    driveCrank = driveCrank.fuse(pin)
-
-    return driveCrank
+    sk = util.createSketch(body, name)
+    idx = sk.addGeometry(
+        Part.Circle(App.Vector(cx, cy, 0), App.Vector(0, 0, 1), radius), False
+    )
+    sk.addConstraint(Sketcher.Constraint('Block', idx))
+    return sk
 
 
-def generateGenevaWheelShape(params, geo):
-    """Generate the Geneva wheel shape using Part Boolean operations.
+def _buildGenevaWheel(doc, params, geo, body_name):
+    """Build the Geneva wheel using PartDesign features.
 
-    The Geneva wheel consists of:
-    - A base disc (cylinder of radius b, centered at -c on X)
-    - Stop arc cuts (so the locking disc can engage)
-    - Radial slot cuts (for the drive pin)
-
-    Args:
-        params: Input parameters dict
-        geo: Derived geometry dict from calculateGenevaGeometry()
-
-    Returns:
-        Part.Shape: The Geneva wheel solid
+    Built centered at body origin; caller sets body.Placement to offset.
+    Features: base disc pad, stop arc pockets (polar), slot pockets (polar).
     """
     n = params["num_slots"]
-    a = params["crank_radius"]
     h = params["height"]
     c = geo["c"]
     b = geo["b"]
@@ -167,85 +127,135 @@ def generateGenevaWheelShape(params, geo):
     w = geo["w"]
     y = geo["y"]
 
-    # Base wheel disc centered at (-c, 0, 0)
-    wheel = Part.makeCylinder(b, h)
-    wheel.translate(App.Vector(-c, 0, 0))
+    body = util.readyPart(doc, body_name)
 
-    # Stop arc cuts
-    stopArc = Part.makeCylinder(y, h)
-    stopArc.rotate(App.Vector(-c, 0, 0), App.Vector(0, 0, 1), 180.0 / n)
+    # 1. Base disc (centered at origin in body space)
+    sk_disc = _addCircleSketch(body, "WheelDisc", b)
+    disc_pad = util.createPad(body, sk_disc, h, "WheelDisc")
+    body.Tip = disc_pad
 
-    for i in range(int(n)):
-        stopArc.rotate(App.Vector(-c, 0, 0), App.Vector(0, 0, 1), 360.0 / n)
-        wheel = wheel.cut(stopArc)
+    # 2. Stop arc cuts — circle of radius y at distance c, offset by 180/n
+    # In wheel-local coords, the crank center is at (c, 0).
+    # Stop arcs are rotated by (180/n + 360/n) from X-axis so they fall between slots.
+    stop_angle = math.pi / n + 2 * math.pi / n  # first cut position
+    cx_stop = c * math.cos(stop_angle)
+    cy_stop = c * math.sin(stop_angle)
 
-    # Slot cuts (box + cylinder for rounded end)
-    slotBox = Part.makeBox(s, 2 * w, h)
-    slotBox.translate(App.Vector(-a, -w, 0))
+    sk_stop = _addCircleSketch(body, "StopArc", y, cx_stop, cy_stop)
+    stop_pocket = util.createPocket(body, sk_stop, h, "StopArc", reversed=True)
+    body.Tip = stop_pocket
 
-    slotCap = Part.makeCylinder(w, h)
-    slotCap.translate(App.Vector(-a, 0, 0))
+    stop_polar = util.createPolar(body, stop_pocket, sk_disc, n, "StopArcs")
+    stop_polar.Originals = [stop_pocket]
+    stop_pocket.Visibility = False
+    body.Tip = stop_polar
 
-    slot = slotBox.fuse(slotCap)
+    # 3. Slot cuts — stadium shape (rectangle + semicircle cap)
+    # In wheel-local coords, slot inner end is at distance (c - a) along X
+    c_a = c - params["crank_radius"]  # radial distance from wheel center to slot inner end
+    # Extend slot slightly past wheel edge so cut goes cleanly through
+    slot_outer = c_a + s + 0.1
 
-    for i in range(int(n)):
-        slot.rotate(App.Vector(-c, 0, 0), App.Vector(0, 0, 1), 360.0 / n)
-        wheel = wheel.cut(slot)
+    sk_slot = util.createSketch(body, "Slot")
 
-    return wheel
+    # Slot profile: 3 lines + 1 semicircular arc forming a closed stadium
+    # Bottom line
+    g0 = sk_slot.addGeometry(Part.LineSegment(
+        App.Vector(c_a, -w, 0), App.Vector(slot_outer, -w, 0)), False)
+    # Right end
+    g1 = sk_slot.addGeometry(Part.LineSegment(
+        App.Vector(slot_outer, -w, 0), App.Vector(slot_outer, w, 0)), False)
+    # Top line
+    g2 = sk_slot.addGeometry(Part.LineSegment(
+        App.Vector(slot_outer, w, 0), App.Vector(c_a, w, 0)), False)
+    # Semicircle cap (left end)
+    g3 = sk_slot.addGeometry(Part.Arc(
+        App.Vector(c_a, w, 0),
+        App.Vector(c_a - w, 0, 0),
+        App.Vector(c_a, -w, 0)), False)
+
+    geo_indices = [g0, g1, g2, g3]
+    util.finalizeSketchGeometry(sk_slot, geo_indices, closed=True, block=True)
+
+    slot_pocket = util.createPocket(body, sk_slot, h, "Slot", reversed=True)
+    body.Tip = slot_pocket
+
+    slot_polar = util.createPolar(body, slot_pocket, sk_disc, n, "Slots")
+    slot_polar.Originals = [slot_pocket]
+    slot_pocket.Visibility = False
+    body.Tip = slot_polar
+
+    # 4. Bore
+    bore_type = params.get("wheel_bore_type", "none")
+    if bore_type != "none":
+        bore_params = {
+            "bore_type": bore_type,
+            "bore_diameter": params.get("wheel_bore_diameter", 5.0),
+        }
+        try:
+            util.createBore(body, bore_params, h)
+        except Exception as e:
+            App.Console.PrintWarning(f"Could not add wheel bore: {e}\n")
+
+    # 5. Offset body to wheel position
+    body.Placement = App.Placement(App.Vector(-c, 0, 0), App.Rotation())
 
 
-# ============================================================================
-# PART GENERATION (BaseFeature pattern)
-# ============================================================================
+def _buildDriveCrank(doc, params, geo, body_name):
+    """Build the drive crank using PartDesign features.
+
+    Features: base disc (reversed pad), locking disc (pad), clearance pocket, pin pad.
+    """
+    a = params["crank_radius"]
+    p = params["pin_radius"]
+    h = params["height"]
+    z_val = geo["z"]
+    v = geo["v"]
+    m = geo["m"]
+
+    body = util.readyPart(doc, body_name)
+
+    # 1. Base disc — larger radius, extends below Z=0 (reversed)
+    sk_base = _addCircleSketch(body, "CrankBase", a + 2 * p)
+    base_pad = util.createPad(body, sk_base, h, "CrankBase")
+    base_pad.Reversed = True  # Extend from Z=0 downward to Z=-h
+    body.Tip = base_pad
+
+    # 2. Locking disc — smaller radius, extends above Z=0
+    sk_lock = _addCircleSketch(body, "LockingDisc", z_val)
+    lock_pad = util.createPad(body, sk_lock, h, "LockingDisc")
+    body.Tip = lock_pad
+
+    # 3. Clearance cut — circle at (-m, 0), radius v, through locking disc
+    sk_clear = _addCircleSketch(body, "ClearanceCut", v, -m, 0.0)
+    clear_pocket = util.createPocket(body, sk_clear, h, "ClearanceCut", reversed=True)
+    body.Tip = clear_pocket
+
+    # 4. Drive pin — circle at (-a, 0), radius p, same height as locking disc
+    sk_pin = _addCircleSketch(body, "DrivePin", p, -a, 0.0)
+    pin_pad = util.createPad(body, sk_pin, h, "DrivePin")
+    body.Tip = pin_pad
+
+    # 5. Bore
+    bore_type = params.get("crank_bore_type", "none")
+    if bore_type != "none":
+        bore_params = {
+            "bore_type": bore_type,
+            "bore_diameter": params.get("crank_bore_diameter", 5.0),
+        }
+        try:
+            util.createBore(body, bore_params, 2 * h)
+        except Exception as e:
+            App.Console.PrintWarning(f"Could not add crank bore: {e}\n")
 
 
 def _removeBody(doc, body_name):
-    """Remove a body and its associated _ShapeResult object."""
-    result_name = f"{body_name}_ShapeResult"
-    for name in [body_name, result_name]:
-        obj = doc.getObject(name)
-        if obj:
-            if hasattr(obj, "removeObjectsFromDocument"):
-                obj.removeObjectsFromDocument()
-            doc.removeObject(name)
-
-
-def _createBodyWithShape(doc, body_name, shape, bore_params=None, bore_placement=None):
-    """Create a PartDesign::Body with a Part::Feature as BaseFeature.
-
-    Args:
-        doc: FreeCAD document
-        body_name: Name for the body
-        shape: Part.Shape to use as base
-        bore_params: Optional bore parameters dict
-        bore_placement: Optional App.Placement for bore
-    """
-    body = util.readyPart(doc, body_name)
-
-    # Clear BaseFeature if set from previous generation
-    if hasattr(body, "BaseFeature") and body.BaseFeature:
-        body.BaseFeature = None
-
-    # Store shape in a Part::Feature (outside the body)
-    result_name = f"{body_name}_ShapeResult"
-    result_obj = doc.getObject(result_name)
-    if not result_obj:
-        result_obj = doc.addObject("Part::Feature", result_name)
-    result_obj.Shape = shape
-    result_obj.Visibility = False
-
-    # Set as BaseFeature
-    body.BaseFeature = result_obj
-    body.ViewObject.Visibility = True
-
-    # Optional bore
-    if bore_params and bore_params.get("bore_type", "none") != "none":
-        try:
-            util.createBore(body, bore_params, bore_params["bore_height"],
-                            placement=bore_placement, reversed=False)
-        except Exception as e:
-            App.Console.PrintWarning(f"Could not add bore to {body_name}: {e}\n")
+    """Remove a body cleanly."""
+    obj = doc.getObject(body_name)
+    if obj:
+        if hasattr(obj, "removeObjectsFromDocument"):
+            obj.removeObjectsFromDocument()
+        doc.removeObject(body_name)
 
 
 def generateGenevaWheelPart(doc, params):
@@ -254,46 +264,15 @@ def generateGenevaWheelPart(doc, params):
     Creates two PartDesign::Body objects:
     - Drive crank at origin
     - Geneva wheel offset to (-c, 0, 0)
-
-    Args:
-        doc: FreeCAD document
-        params: Full parameters dictionary
     """
     validateGenevaParameters(params)
     geo = calculateGenevaGeometry(params)
 
     crank_body_name = params.get("crank_body_name", "GenevaCrank")
     wheel_body_name = params.get("wheel_body_name", "GenevaWheel")
-    h = params["height"]
 
-    # Generate shapes
-    crank_shape = generateDriveCrankShape(params, geo)
-    wheel_shape = generateGenevaWheelShape(params, geo)
-
-    # Crank body (at origin)
-    crank_bore = {
-        "bore_type": params.get("crank_bore_type", "none"),
-        "bore_diameter": params.get("crank_bore_diameter", 5.0),
-        "bore_height": 2 * h,  # Spans both halves
-    }
-    crank_bore_placement = App.Placement(
-        App.Vector(0, 0, -h), App.Rotation()
-    )
-    _createBodyWithShape(doc, crank_body_name, crank_shape,
-                         crank_bore, crank_bore_placement)
-
-    # Wheel body (offset to -c on X)
-    c = geo["c"]
-    wheel_bore = {
-        "bore_type": params.get("wheel_bore_type", "none"),
-        "bore_diameter": params.get("wheel_bore_diameter", 5.0),
-        "bore_height": h,
-    }
-    wheel_bore_placement = App.Placement(
-        App.Vector(-c, 0, 0), App.Rotation()
-    )
-    _createBodyWithShape(doc, wheel_body_name, wheel_shape,
-                         wheel_bore, wheel_bore_placement)
+    _buildDriveCrank(doc, params, geo, crank_body_name)
+    _buildGenevaWheel(doc, params, geo, wheel_body_name)
 
     doc.recompute()
 

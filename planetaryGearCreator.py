@@ -30,7 +30,7 @@ from genericInternalGear import InternalSpurGear, InternalHelixGear, InternalHer
 import util
 
 # Get icons path
-smWB_icons_path = os.path.join(os.path.dirname(__file__), "Resources", "icons")
+smWB_icons_path = os.path.join(os.path.dirname(__file__), "icons")
 
 
 # ============================================================================
