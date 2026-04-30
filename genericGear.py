@@ -65,6 +65,181 @@ def _applyOriginAndAngle(body, parameters):
 
 
 # ============================================================================
+# SPURGEAR VARSET AND MASTER BORE FUNCTIONS
+# ============================================================================
+
+
+def createSpurGearVarSet(doc, name):
+    """Create a VarSet for SpurGear parameters."""
+    var_set = doc.addObject("App::VarSet", name)
+    H = gearMath.generateDefaultParameters()
+
+    var_set.addProperty(
+        "App::PropertyString",
+        "Version",
+        "read only",
+        QT_TRANSLATE_NOOP("App::Property", "Workbench version"),
+        1,
+    ).Version = version
+
+    var_set.addProperty(
+        "App::PropertyInteger",
+        "NumberOfTeeth",
+        "SpurGear",
+        QT_TRANSLATE_NOOP("App::Property", "Number of teeth"),
+    ).NumberOfTeeth = H["num_teeth"]
+
+    var_set.addProperty(
+        "App::PropertyLength",
+        "Module",
+        "SpurGear",
+        QT_TRANSLATE_NOOP("App::Property", "Gear module (tooth size)"),
+    ).Module = H["module"]
+
+    var_set.addProperty(
+        "App::PropertyLength",
+        "Height",
+        "SpurGear",
+        QT_TRANSLATE_NOOP("App::Property", "Gear thickness/height"),
+    ).Height = H["height"]
+
+    var_set.addProperty(
+        "App::PropertyLength",
+        "BoreDiameter",
+        "Bore",
+        QT_TRANSLATE_NOOP("App::Property", "Diameter of center bore"),
+    ).BoreDiameter = H["bore_diameter"]
+
+    var_set.addProperty(
+        "App::PropertyLength",
+        "KeywayWidth",
+        "Bore",
+        QT_TRANSLATE_NOOP("App::Property", "Width of keyway (DIN 6885)"),
+    ).KeywayWidth = 2.0
+
+    var_set.addProperty(
+        "App::PropertyLength",
+        "KeywayDepth",
+        "Bore",
+        QT_TRANSLATE_NOOP("App::Property", "Depth of keyway"),
+    ).KeywayDepth = 1.0
+
+    var_set.addProperty(
+        "App::PropertyAngle",
+        "PressureAngle",
+        "SpurGear",
+        QT_TRANSLATE_NOOP("App::Property", "Pressure angle (normally 20)"),
+    ).PressureAngle = H["pressure_angle"]
+
+    var_set.addProperty(
+        "App::PropertyFloat",
+        "ProfileShift",
+        "SpurGear",
+        QT_TRANSLATE_NOOP("App::Property", "Profile shift coefficient (-1 to +1)"),
+    ).ProfileShift = H["profile_shift"]
+
+    var_set.addProperty(
+        "App::PropertyFloat",
+        "Backlash",
+        "SpurGear",
+        QT_TRANSLATE_NOOP("App::Property", "Backlash clearance for 3D printing (0.0-0.3mm)"),
+    ).Backlash = 0.0
+
+    var_set.addProperty(
+        "App::PropertyLength",
+        "PitchDiameter",
+        "read only",
+        QT_TRANSLATE_NOOP("App::Property", "Pitch diameter (where gears mesh)"),
+        1,
+    )
+    var_set.setExpression("PitchDiameter", "Module * NumberOfTeeth")
+
+    var_set.addProperty(
+        "App::PropertyLength",
+        "BaseDiameter",
+        "read only",
+        QT_TRANSLATE_NOOP("App::Property", "Base circle diameter (involute origin)"),
+        1,
+    )
+    var_set.setExpression(
+        "BaseDiameter", "PitchDiameter * cos(PressureAngle)"
+    )
+
+    var_set.addProperty(
+        "App::PropertyLength",
+        "OuterDiameter",
+        "read only",
+        QT_TRANSLATE_NOOP("App::Property", "Outer diameter (tip of teeth)"),
+        1,
+    )
+    var_set.setExpression(
+        "OuterDiameter",
+        "PitchDiameter + 2 * Module * (1 + ProfileShift)",
+    )
+
+    var_set.addProperty(
+        "App::PropertyLength",
+        "RootDiameter",
+        "read only",
+        QT_TRANSLATE_NOOP("App::Property", "Root diameter (bottom of teeth)"),
+        1,
+    )
+    var_set.setExpression(
+        "RootDiameter",
+        "PitchDiameter - 2 * Module * (1.25 - ProfileShift)",
+    )
+
+    return var_set
+
+
+def createMasterBore(body, parameters, height, varset_name):
+    """Create bore with expression-based circle and keyway."""
+    bore_diameter = parameters.get("bore_diameter", 0.0)
+    keyway_width = parameters.get("keyway_width", 2.0)
+    keyway_depth = parameters.get("keyway_depth", 1.0)
+
+    bore_sketch = util.createSketch(body, "Bore")
+    circle = bore_sketch.addGeometry(
+        Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), bore_diameter / 2.0),
+        False,
+    )
+    bore_sketch.addConstraint(Sketcher.Constraint("Coincident", circle, 3, -1, 1))
+    cst = bore_sketch.addConstraint(Sketcher.Constraint("Diameter", circle, bore_diameter))
+    bore_sketch.setExpression(f"Constraints[{cst}]", f"<<{varset_name}>>.BoreDiameter")
+
+    bore_pocket = util.createPocket(body, bore_sketch, height, "Bore")
+    bore_pocket.setExpression("Length", f"<<{varset_name}>>.Height")
+
+    tiny = 0.01
+    key_sketch = util.createSketch(body, "Keyway")
+    pts = [App.Vector(-0.5, -0.5, 0), App.Vector(0.5, -0.5, 0),
+           App.Vector(0.5, 0.5, 0), App.Vector(-0.5, 0.5, 0)]
+    lines = []
+    for i in range(4):
+        lines.append(key_sketch.addGeometry(Part.LineSegment(pts[i], pts[(i + 1) % 4]), False))
+    for i in range(4):
+        key_sketch.addConstraint(Sketcher.Constraint("Coincident", lines[i], 2, lines[(i + 1) % 4], 1))
+    key_sketch.addConstraint(Sketcher.Constraint("Horizontal", lines[0]))
+    key_sketch.addConstraint(Sketcher.Constraint("Vertical", lines[1]))
+    key_sketch.addConstraint(Sketcher.Constraint("Horizontal", lines[2]))
+    key_sketch.addConstraint(Sketcher.Constraint("Vertical", lines[3]))
+
+    cst = key_sketch.addConstraint(Sketcher.Constraint("DistanceX", lines[0], 1, -1, 1, -tiny))
+    key_sketch.setExpression(f"Constraints[{cst}]", f"<<{varset_name}>>.KeywayWidth / -2.0")
+    cst = key_sketch.addConstraint(Sketcher.Constraint("DistanceY", lines[0], 1, -1, 1, -tiny))
+    key_sketch.setExpression(f"Constraints[{cst}]",
+        f"<<{varset_name}>>.BoreDiameter / 2.0 - <<{varset_name}>>.KeywayDepth")
+    cst = key_sketch.addConstraint(Sketcher.Constraint("DistanceX", lines[0], 2, -1, 1, tiny))
+    key_sketch.setExpression(f"Constraints[{cst}]", f"<<{varset_name}>>.KeywayWidth / 2.0")
+    cst = key_sketch.addConstraint(Sketcher.Constraint("DistanceY", lines[1], 2, -1, 1, tiny))
+    key_sketch.setExpression(f"Constraints[{cst}]",
+        f"<<{varset_name}>>.BoreDiameter / 2.0 + <<{varset_name}>>.KeywayDepth")
+
+    key_pocket = util.createPocket(body, key_sketch, height, "Keyway")
+    body.Tip = key_pocket
+
+
+# ============================================================================
 # MASTER GEAR BUILDER - HERRINGBONE
 # ============================================================================
 
@@ -182,12 +357,19 @@ def _createTwoSketchHerringbone(
     )
     profile_func(sketch_top, parameters)
 
+    vn = parameters.get("varset_name")
+    if vn:
+        sketch_top.setExpression("Placement.Base.z", f"<<{vn}>>.Height")
+
     tooth_loft = body.newObject("PartDesign::AdditiveLoft", "SingleTooth")
     tooth_loft.Profile = sketch_bottom
     tooth_loft.Sections = [sketch_top]
     tooth_loft.Ruled = True
 
     gear_teeth = util.createPolar(body, tooth_loft, sketch_bottom, num_teeth, "Teeth")
+    vn = parameters.get("varset_name")
+    if vn:
+        gear_teeth.setExpression("Occurrences", f"<<{vn}>>.NumberOfTeeth")
     gear_teeth.Originals = [tooth_loft]
     tooth_loft.Visibility = False
     sketch_bottom.Visibility = False
@@ -203,9 +385,15 @@ def _createTwoSketchHerringbone(
     dedendum_sketch.addConstraint(Sketcher.Constraint("Diameter", circle, df + 0.02))
 
     dedendum_pad = util.createPad(body, dedendum_sketch, height, "DedendumCircle")
+    vn = parameters.get("varset_name")
+    if vn:
+        dedendum_pad.setExpression("Length", f"<<{vn}>>.Height")
     body.Tip = dedendum_pad
 
-    if bore_type != "none":
+    vn = parameters.get("varset_name")
+    if vn:
+        createMasterBore(body, parameters, height, vn)
+    elif bore_type != "none":
         util.createBore(body, parameters, height)
 
     doc.recompute()
@@ -297,6 +485,11 @@ def _createThreeSketchHerringbone(
     )
     profile_func(sketch_top, parameters)
 
+    vn = parameters.get("varset_name")
+    if vn:
+        sketch_middle.setExpression("Placement.Base.z", f"<<{vn}>>.Height / 2.0")
+        sketch_top.setExpression("Placement.Base.z", f"<<{vn}>>.Height")
+
     loft_bottom = body.newObject("PartDesign::AdditiveLoft", "BottomHalfTooth")
     loft_bottom.Profile = sketch_bottom
     loft_bottom.Sections = [sketch_middle]
@@ -308,6 +501,9 @@ def _createThreeSketchHerringbone(
     loft_top.Ruled = True
 
     gear_teeth = util.createPolar(body, loft_bottom, sketch_bottom, num_teeth, "Teeth")
+    vn = parameters.get("varset_name")
+    if vn:
+        gear_teeth.setExpression("Occurrences", f"<<{vn}>>.NumberOfTeeth")
     gear_teeth.Originals = [loft_bottom, loft_top]
     loft_bottom.Visibility = False
     loft_top.Visibility = False
@@ -325,9 +521,15 @@ def _createThreeSketchHerringbone(
     dedendum_sketch.addConstraint(Sketcher.Constraint("Diameter", circle, df + 0.02))
 
     dedendum_pad = util.createPad(body, dedendum_sketch, height, "DedendumCircle")
+    vn = parameters.get("varset_name")
+    if vn:
+        dedendum_pad.setExpression("Length", f"<<{vn}>>.Height")
     body.Tip = dedendum_pad
 
-    if bore_type != "none":
+    vn = parameters.get("varset_name")
+    if vn:
+        createMasterBore(body, parameters, height, vn)
+    elif bore_type != "none":
         util.createBore(body, parameters, height)
 
     doc.recompute()
@@ -377,11 +579,7 @@ def helixGear(
     params_with_helix = parameters.copy()
     params_with_helix["helix_angle"] = helix_angle
 
-    # Apply backlash for external gears: subtract from profile shift to make teeth thinner
-    backlash = parameters.get("backlash", 0.0)
-    if backlash != 0.0:
-        original_shift = parameters.get("profile_shift", 0.0)
-        params_with_helix["profile_shift"] = original_shift - backlash
+    # Backlash is applied in herringboneGear() — do not apply here too
 
     # Calculate total rotation for top sketch
     # Using transverse module for pitch radius calculation
@@ -423,13 +621,7 @@ def spurGear(doc, parameters, profile_func: Optional[Callable] = None):
     if profile_func is None:
         profile_func = gearMath.generateSpurGearProfile
 
-    # Apply backlash for external gears: subtract from profile shift to make teeth thinner
-    backlash = parameters.get("backlash", 0.0)
-    if backlash != 0.0:
-        parameters = parameters.copy()
-        original_shift = parameters.get("profile_shift", 0.0)
-        parameters["profile_shift"] = original_shift - backlash
-
+    # Backlash is applied in herringboneGear() — do not apply here too
     return herringboneGear(doc, parameters, 0.0, 0.0, profile_func)
 
 
@@ -441,204 +633,52 @@ version = "Dec 29, 2025"
 
 
 class SpurGear:
-    """FeaturePython object for parametric spur gear."""
+    """FeaturePython object for parametric spur gear (legacy compatibility)."""
 
     def __init__(self, obj):
-        """Initialize spur gear with default parameters."""
         self.Dirty = False
         H = gearMath.generateDefaultParameters()
-
-        # Read-only properties
-        obj.addProperty(
-            "App::PropertyString",
-            "Version",
-            "read only",
-            QT_TRANSLATE_NOOP("App::Property", "Workbench version"),
-            1,
-        ).Version = version
-
-        obj.addProperty(
-            "App::PropertyLength",
-            "PitchDiameter",
-            "read only",
-            QT_TRANSLATE_NOOP("App::Property", "Pitch diameter (where gears mesh)"),
-            1,
-        )
-
-        obj.addProperty(
-            "App::PropertyLength",
-            "BaseDiameter",
-            "read only",
-            QT_TRANSLATE_NOOP(
-                "App::Property", "Base circle diameter (involute origin)"
-            ),
-            1,
-        )
-
-        obj.addProperty(
-            "App::PropertyLength",
-            "OuterDiameter",
-            "read only",
-            QT_TRANSLATE_NOOP("App::Property", "Outer diameter (tip of teeth)"),
-            1,
-        )
-
-        obj.addProperty(
-            "App::PropertyLength",
-            "RootDiameter",
-            "read only",
-            QT_TRANSLATE_NOOP("App::Property", "Root diameter (bottom of teeth)"),
-            1,
-        )
-
-        # Core gear parameters
-        obj.addProperty(
-            "App::PropertyInteger",
-            "NumberOfTeeth",
-            "SpurGear",
-            QT_TRANSLATE_NOOP("App::Property", "Number of teeth"),
-        ).NumberOfTeeth = H["num_teeth"]
-
-        obj.addProperty(
-            "App::PropertyLength",
-            "Module",
-            "SpurGear",
-            QT_TRANSLATE_NOOP("App::Property", "Gear module (tooth size)"),
-        ).Module = H["module"]
-
-        obj.addProperty(
-            "App::PropertyLength",
-            "Height",
-            "SpurGear",
-            QT_TRANSLATE_NOOP("App::Property", "Gear thickness/height"),
-        ).Height = H["height"]
-
-        obj.addProperty(
-            "App::PropertyAngle",
-            "PressureAngle",
-            "SpurGear",
-            QT_TRANSLATE_NOOP("App::Property", "Pressure angle (normally 20°)"),
-        ).PressureAngle = H["pressure_angle"]
-
-        obj.addProperty(
-            "App::PropertyFloat",
-            "ProfileShift",
-            "SpurGear",
-            QT_TRANSLATE_NOOP("App::Property", "Profile shift coefficient (-1 to +1)"),
-        ).ProfileShift = H["profile_shift"]
-
-        obj.addProperty(
-            "App::PropertyFloat",
-            "Backlash",
-            "SpurGear",
-            QT_TRANSLATE_NOOP("App::Property", "Backlash clearance for 3D printing (0.0-0.3mm)"),
-        ).Backlash = 0.0
-
-        obj.addProperty(
-            "App::PropertyString",
-            "BodyName",
-            "SpurGear",
-            QT_TRANSLATE_NOOP("App::Property", "Name of the generated body"),
-        ).BodyName = H["body_name"]
-
-        # Bore parameters
-        obj.addProperty(
-            "App::PropertyEnumeration",
-            "BoreType",
-            "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Type of center hole"),
-        )
+        obj.addProperty("App::PropertyString", "Version", "read only",
+                        QT_TRANSLATE_NOOP("App::Property", "Workbench version"), 1).Version = version
+        obj.addProperty("App::PropertyLength", "PitchDiameter", "read only", "", 1)
+        obj.addProperty("App::PropertyLength", "BaseDiameter", "read only", "", 1)
+        obj.addProperty("App::PropertyLength", "OuterDiameter", "read only", "", 1)
+        obj.addProperty("App::PropertyLength", "RootDiameter", "read only", "", 1)
+        obj.addProperty("App::PropertyInteger", "NumberOfTeeth", "SpurGear",
+                        QT_TRANSLATE_NOOP("App::Property", "Number of teeth")).NumberOfTeeth = H["num_teeth"]
+        obj.addProperty("App::PropertyLength", "Module", "SpurGear", "").Module = H["module"]
+        obj.addProperty("App::PropertyLength", "Height", "SpurGear", "").Height = H["height"]
+        obj.addProperty("App::PropertyAngle", "PressureAngle", "SpurGear", "").PressureAngle = H["pressure_angle"]
+        obj.addProperty("App::PropertyFloat", "ProfileShift", "SpurGear", "").ProfileShift = H["profile_shift"]
+        obj.addProperty("App::PropertyFloat", "Backlash", "SpurGear", "", 1).Backlash = 0.0
+        obj.addProperty("App::PropertyString", "BodyName", "SpurGear", "").BodyName = H["body_name"]
+        obj.addProperty("App::PropertyEnumeration", "BoreType", "Bore", "")
         obj.BoreType = ["none", "circular", "square", "hexagonal", "keyway"]
         obj.BoreType = H["bore_type"]
-
-        obj.addProperty(
-            "App::PropertyLength",
-            "BoreDiameter",
-            "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Diameter of center bore"),
-        ).BoreDiameter = H["bore_diameter"]
-
-        obj.addProperty(
-            "App::PropertyLength",
-            "SquareCornerRadius",
-            "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Corner radius for square bore"),
-        ).SquareCornerRadius = 0.5
-
-        obj.addProperty(
-            "App::PropertyLength",
-            "HexCornerRadius",
-            "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Corner radius for hexagonal bore"),
-        ).HexCornerRadius = 0.5
-
-        obj.addProperty(
-            "App::PropertyLength",
-            "KeywayWidth",
-            "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Width of keyway (DIN 6885)"),
-        ).KeywayWidth = 2.0
-
-        obj.addProperty(
-            "App::PropertyLength",
-            "KeywayDepth",
-            "Bore",
-            QT_TRANSLATE_NOOP("App::Property", "Depth of keyway"),
-        ).KeywayDepth = 1.0
-
-        obj.addProperty(
-            "App::PropertyDistance",
-            "OriginX",
-            "Placement",
-            QT_TRANSLATE_NOOP("App::Property", "X coordinate of gear origin"),
-        ).OriginX = 0.0
-
-        obj.addProperty(
-            "App::PropertyDistance",
-            "OriginY",
-            "Placement",
-            QT_TRANSLATE_NOOP("App::Property", "Y coordinate of gear origin"),
-        ).OriginY = 0.0
-
-        obj.addProperty(
-            "App::PropertyDistance",
-            "OriginZ",
-            "Placement",
-            QT_TRANSLATE_NOOP("App::Property", "Z coordinate of gear origin"),
-        ).OriginZ = 0.0
-
-        obj.addProperty(
-            "App::PropertyAngle",
-            "Angle",
-            "Placement",
-            QT_TRANSLATE_NOOP(
-                "App::Property", "Rotation angle around Z axis (degrees)"
-            ),
-        ).Angle = 0.0
-
+        obj.addProperty("App::PropertyLength", "BoreDiameter", "Bore", "").BoreDiameter = H["bore_diameter"]
+        obj.addProperty("App::PropertyLength", "SquareCornerRadius", "Bore", "").SquareCornerRadius = 0.5
+        obj.addProperty("App::PropertyLength", "HexCornerRadius", "Bore", "").HexCornerRadius = 0.5
+        obj.addProperty("App::PropertyLength", "KeywayWidth", "Bore", "").KeywayWidth = 2.0
+        obj.addProperty("App::PropertyLength", "KeywayDepth", "Bore", "").KeywayDepth = 1.0
+        obj.addProperty("App::PropertyDistance", "OriginX", "Placement", "").OriginX = 0.0
+        obj.addProperty("App::PropertyDistance", "OriginY", "Placement", "").OriginY = 0.0
+        obj.addProperty("App::PropertyDistance", "OriginZ", "Placement", "").OriginZ = 0.0
+        obj.addProperty("App::PropertyAngle", "Angle", "Placement", "").Angle = 0.0
         self.Type = "SpurGear"
         self.Object = obj
-        self.last_body_name = None  # Initialize to None to prevent deleting other gears' bodies
+        self.last_body_name = None
         obj.Proxy = self
-
-        # Trigger initial calculation
         self.onChanged(obj, "Module")
 
-    def __getstate__(self):
-        return self.Type
-
+    def __getstate__(self): return self.Type
     def __setstate__(self, state):
-        if state:
-            self.Type = state
+        if state: self.Type = state
 
     def onChanged(self, fp, prop):
-        """Called when a property changes."""
         self.Dirty = True
-
         if prop == "BodyName":
             old_name = self.last_body_name
             new_name = fp.BodyName
-            # Only delete old body if we had a previous name (not the initial assignment)
             if old_name is not None and old_name != new_name:
                 doc = App.ActiveDocument
                 if doc:
@@ -648,78 +688,324 @@ class SpurGear:
                             old_body.removeObjectsFromDocument()
                         doc.removeObject(old_name)
             self.last_body_name = new_name
-
         if prop in ["Module", "NumberOfTeeth", "PressureAngle", "ProfileShift", "Backlash", "Height"]:
             try:
                 module = fp.Module.Value
                 num_teeth = fp.NumberOfTeeth
                 pressure_angle = fp.PressureAngle.Value
                 profile_shift = fp.ProfileShift
-
-                pitch_dia = gearMath.calcPitchDiameter(module, num_teeth)
-                base_dia = gearMath.calcBaseDiameter(pitch_dia, pressure_angle)
-                outer_dia = gearMath.calcAddendumDiameter(
-                    pitch_dia, module, profile_shift
-                )
-                root_dia = gearMath.calcDedendumDiameter(
-                    pitch_dia, module, profile_shift
-                )
-
-                fp.PitchDiameter = pitch_dia
-                fp.BaseDiameter = base_dia
-                fp.OuterDiameter = outer_dia
-                fp.RootDiameter = root_dia
-
+                fp.PitchDiameter = gearMath.calcPitchDiameter(module, num_teeth)
+                fp.BaseDiameter = gearMath.calcBaseDiameter(fp.PitchDiameter, pressure_angle)
+                fp.OuterDiameter = gearMath.calcAddendumDiameter(fp.PitchDiameter, module, profile_shift)
+                fp.RootDiameter = gearMath.calcDedendumDiameter(fp.PitchDiameter, module, profile_shift)
             except (AttributeError, TypeError):
                 pass
 
     def GetParameters(self):
-        """Get current parameters as dictionary."""
-        parameters = {
-            "module": float(self.Object.Module.Value),
-            "num_teeth": int(self.Object.NumberOfTeeth),
-            "pressure_angle": float(self.Object.PressureAngle.Value),
-            "profile_shift": float(self.Object.ProfileShift),
-            "backlash": float(self.Object.Backlash),
-            "height": float(self.Object.Height.Value),
-            "body_name": str(self.Object.BodyName),
-            "bore_type": str(self.Object.BoreType),
-            "bore_diameter": float(self.Object.BoreDiameter.Value),
-            "square_corner_radius": float(self.Object.SquareCornerRadius.Value),
-            "hex_corner_radius": float(self.Object.HexCornerRadius.Value),
-            "keyway_width": float(self.Object.KeywayWidth.Value),
-            "keyway_depth": float(self.Object.KeywayDepth.Value),
-            "origin_x": float(self.Object.OriginX.Value),
-            "origin_y": float(self.Object.OriginY.Value),
-            "origin_z": float(self.Object.OriginZ.Value),
-            "angle": float(self.Object.Angle.Value),
-        }
-        return parameters
+        obj = self.Object
+        return {"module": float(obj.Module.Value), "num_teeth": int(obj.NumberOfTeeth),
+                "pressure_angle": float(obj.PressureAngle.Value), "profile_shift": float(obj.ProfileShift),
+                "backlash": float(obj.Backlash), "height": float(obj.Height.Value),
+                "body_name": str(obj.BodyName), "bore_type": str(obj.BoreType),
+                "bore_diameter": float(obj.BoreDiameter.Value),
+                "square_corner_radius": float(obj.SquareCornerRadius.Value),
+                "hex_corner_radius": float(obj.HexCornerRadius.Value),
+                "keyway_width": float(obj.KeywayWidth.Value), "keyway_depth": float(obj.KeywayDepth.Value),
+                "origin_x": float(obj.OriginX.Value), "origin_y": float(obj.OriginY.Value),
+                "origin_z": float(obj.OriginZ.Value), "angle": float(obj.Angle.Value)}
 
     def force_Recompute(self):
-        """Force recomputation of gear."""
         self.Dirty = True
         self.recompute()
 
     def recompute(self):
-        """Recompute gear geometry if parameters changed."""
         if self.Dirty:
             try:
-                parameters = self.GetParameters()
-                spurGear(App.ActiveDocument, parameters)
+                spurGear(App.ActiveDocument, self.GetParameters())
                 self.Dirty = False
                 App.ActiveDocument.recompute()
             except Exception as e:
-                App.Console.PrintError(f"Generic Spur Gear Error: {str(e)}\n")
-                import traceback
-
-                App.Console.PrintError(traceback.format_exc())
-                raise
+                App.Console.PrintError(f"Spur Gear Error: {str(e)}\n")
 
     def execute(self, obj):
-        """Execute gear generation with delay."""
         t = QtCore.QTimer()
         t.singleShot(50, self.recompute)
+
+
+class _VarSetWatcher:
+    """Watches a VarSet for tooth-profile property changes.
+
+    Only reacts to Module, PressureAngle, ProfileShift, Backlash.
+    These are the only properties that require a full gear rebuild.
+    Expression-driven derived properties (PitchDiameter, BaseDiameter,
+    OuterDiameter, RootDiameter) are ignored — they never require a
+    rebuild and none of the 4 watched properties are modified during
+    a rebuild, so this observer cannot cause a recompute loop.
+    """
+
+    _TOOTH_PARAMS = frozenset(("Module", "PressureAngle", "ProfileShift", "Backlash"))
+
+    def __init__(self, generator, varset_name):
+        self._generator = generator
+        self._varset_name = varset_name
+
+    def slotChangedObject(self, obj, prop):
+        if obj.Name != self._varset_name:
+            return
+        if prop not in self._TOOTH_PARAMS:
+            return
+        self._generator._on_tooth_param_changed()
+
+
+class SpurGearResult:
+    """FeaturePython for auto-regeneration of spur gear.
+
+    Uses a DocumentObserver (not PropertyLink) to watch the VarSet.
+    PropertyLink creates a dependency in FreeCAD's recompute engine
+    that causes infinite loops when the gear body is rebuilt. The
+    DocumentObserver sidesteps this entirely — it fires for specific
+    property changes only, and since none of the 4 watched properties
+    (Module, PressureAngle, ProfileShift, Backlash) are modified
+    during a rebuild, the observer simply doesn't fire during rebuild.
+
+    Other params (Height, NumberOfTeeth, BoreDiameter) update
+    automatically via FreeCAD expressions on the body features.
+    """
+
+    def __init__(self, obj, varset):
+        self._varset = varset
+        self._rebuilding = False
+        self._last_m = None
+        self._last_pa = None
+        self._last_ps = None
+        self._last_bl = None
+        self._watcher = None
+        self._debounce_timer = None
+        self.Type = "SpurGearResult"
+
+        obj.addProperty(
+            "App::PropertyString",
+            "VarSetName",
+            "Gear",
+            QT_TRANSLATE_NOOP("App::Property", "Name of parameter VarSet"),
+            1,
+        ).VarSetName = varset.Name
+
+        obj.addProperty(
+            "App::PropertyString",
+            "BodyName",
+            "Gear",
+            QT_TRANSLATE_NOOP("App::Property", "Name of generated body"),
+        ).BodyName = varset.Name.replace("_values", "_Body", 1)
+
+        obj.addProperty(
+            "App::PropertyString",
+            "Version",
+            "read only",
+            QT_TRANSLATE_NOOP("App::Property", "Workbench version"),
+            1,
+        ).Version = version
+
+        obj.addProperty(
+            "App::PropertyString",
+            "Status",
+            "read only",
+            QT_TRANSLATE_NOOP("App::Property", "Regeneration status"),
+            1,
+        )
+
+        obj.Proxy = self
+        self.Object = obj
+        obj.Status = "Not yet generated"
+
+        self._startWatcher(varset.Name)
+
+    def __getstate__(self):
+        return self.Type
+
+    def __setstate__(self, state):
+        if state:
+            self.Type = state
+        self._varset = None
+        self._rebuilding = False
+        self._last_m = None
+        self._last_pa = None
+        self._last_ps = None
+        self._last_bl = None
+        self._watcher = None
+        self._debounce_timer = None
+
+    def onDocumentRestored(self, obj):
+        """Re-register VarSet watcher after file load."""
+        self.Object = obj
+        v = self._getVarSet()
+        if v:
+            self._last_m = float(v.Module.Value)
+            self._last_pa = float(v.PressureAngle.Value)
+            self._last_ps = float(v.ProfileShift)
+            self._last_bl = float(v.Backlash)
+            self._startWatcher(v.Name)
+            obj.Status = "Up to date"
+
+    def _startWatcher(self, varset_name):
+        self._stopWatcher()
+        self._watcher = _VarSetWatcher(self, varset_name)
+        App.addDocumentObserver(self._watcher)
+
+    def _stopWatcher(self):
+        if self._watcher:
+            try:
+                App.removeDocumentObserver(self._watcher)
+            except Exception:
+                pass
+            self._watcher = None
+
+    def _getVarSet(self):
+        """Get VarSet, looking it up by name after file restore."""
+        if self._varset is None:
+            try:
+                name = self.Object.VarSetName
+                self._varset = self.Object.Document.getObject(name)
+            except AttributeError:
+                pass
+        return self._varset
+
+    def execute(self, obj):
+        """No-op. Rebuild is driven by DocumentObserver, not recompute."""
+        pass
+
+    def _values_changed(self):
+        """Check if tooth-profile values differ from last rebuild.
+
+        Uses tolerance to guard against floating-point drift from
+        FreeCAD's internal unit conversions.
+        """
+        v = self._getVarSet()
+        if not v:
+            return False
+        if self._last_m is None:
+            return True
+        EPS = 1e-9
+        m = float(v.Module.Value)
+        pa = float(v.PressureAngle.Value)
+        ps = float(v.ProfileShift)
+        bl = float(v.Backlash)
+        return (abs(m - self._last_m) > EPS or
+                abs(pa - self._last_pa) > EPS or
+                abs(ps - self._last_ps) > EPS or
+                abs(bl - self._last_bl) > EPS)
+
+    def _on_tooth_param_changed(self):
+        """Called by _VarSetWatcher when a tooth-profile property changes.
+
+        Just restarts the debounce timer (cheap — no VarSet reads).
+        The actual value check happens in _on_debounce_timeout after
+        the user stops typing. This avoids lag from reading VarSet
+        properties on every keystroke.
+        """
+        if self._rebuilding:
+            return
+        if self._debounce_timer is None:
+            self._debounce_timer = QtCore.QTimer()
+            self._debounce_timer.setSingleShot(True)
+            self._debounce_timer.timeout.connect(self._on_debounce_timeout)
+        self._debounce_timer.start(500)
+
+    def _on_debounce_timeout(self):
+        """Called after 500ms of no tooth-param changes — user is done typing."""
+        if self._rebuilding:
+            return
+        if not self._values_changed():
+            return
+        self._rebuild()
+
+    def _rebuild(self):
+        """Rebuild the gear body."""
+        self._rebuilding = True
+        try:
+            v = self._getVarSet()
+            if not v:
+                return
+            self._last_m = float(v.Module.Value)
+            self._last_pa = float(v.PressureAngle.Value)
+            self._last_ps = float(v.ProfileShift)
+            self._last_bl = float(v.Backlash)
+
+            # Validate before deleting old body — keep old gear if params are bad
+            if self._last_bl < 0:
+                self.Object.Status = "Invalid: backlash must be >= 0"
+                App.Console.PrintWarning(
+                    f"Spur Gear: skipping rebuild — {self.Object.Status}\n"
+                )
+                return
+
+            effective_shift = self._last_ps - self._last_bl
+            num_teeth = int(v.NumberOfTeeth)
+            pitch_dia = self._last_m * num_teeth
+            root_dia = pitch_dia - 2 * self._last_m * (1.25 - effective_shift)
+
+            # Check root diameter and that teeth don't overlap at root
+            # Angular tooth thickness at root must be positive:
+            # each tooth occupies less than 360/num_teeth degrees
+            if (root_dia <= 0 or self._last_m <= 0 or
+                    effective_shift < -1.0 or effective_shift > 0.8):
+                self.Object.Status = (
+                    f"Invalid: effective shift {effective_shift:.2f} "
+                    f"out of range (shift={self._last_ps:.2f} "
+                    f"backlash={self._last_bl:.2f})"
+                )
+                App.Console.PrintWarning(
+                    f"Spur Gear: skipping rebuild — {self.Object.Status}\n"
+                )
+                return
+
+            body_name = str(self.Object.BodyName)
+            doc = self.Object.Document
+            old = doc.getObject(body_name)
+            if old:
+                old.removeObjectsFromDocument()
+                doc.removeObject(body_name)
+                # Must recompute so pending removes are fully processed
+                # before creating new features with the same names.
+                # Safe: _last values already stored, _values_changed()
+                # returns False for any cascade notifications.
+                doc.recompute()
+            parameters = {
+                "module": self._last_m,
+                "num_teeth": int(v.NumberOfTeeth),
+                "pressure_angle": self._last_pa,
+                "profile_shift": self._last_ps,
+                "backlash": self._last_bl,
+                "height": float(v.Height.Value),
+                "body_name": body_name,
+                "bore_diameter": float(v.BoreDiameter.Value),
+                "keyway_width": float(v.KeywayWidth.Value),
+                "keyway_depth": float(v.KeywayDepth.Value),
+                "varset_name": v.Name,
+                "origin_x": 0.0, "origin_y": 0.0, "origin_z": 0.0, "angle": 0.0,
+            }
+            spurGear(doc, parameters)
+            self.Object.Status = "Up to date"
+        except Exception as e:
+            App.Console.PrintError(f"Spur Gear Error: {str(e)}\n")
+            import traceback
+            App.Console.PrintError(traceback.format_exc())
+            # Clean up any partially-created body from a failed build
+            try:
+                partial = doc.getObject(body_name)
+                if partial:
+                    partial.removeObjectsFromDocument()
+                    doc.removeObject(body_name)
+                    doc.recompute()
+            except Exception:
+                pass
+            self.Object.Status = "Error"
+        finally:
+            self._rebuilding = False
+
+    def force_Recompute(self):
+        """Force rebuild (used for initial creation from Activated)."""
+        self._rebuild()
 
 
 class HelixGear:
@@ -1396,6 +1682,65 @@ class ViewProviderGenericGear:
         return None
 
 
+class ViewProviderGearResult:
+    """View provider for SpurGear result objects."""
+
+    def __init__(self, obj, iconfile=None):
+        obj.Proxy = self
+        self.part = obj
+        self.iconfile = (
+            iconfile if iconfile else os.path.join(smWB_icons_path, "spurGear.svg")
+        )
+
+    def attach(self, obj):
+        self.ViewObject = obj
+        self.Object = obj.Object
+        return
+
+    def updateData(self, fp, prop):
+        return
+
+    def getDisplayModes(self, obj):
+        return ["Shaded", "Wireframe", "Flat Lines"]
+
+    def getDefaultDisplayMode(self):
+        return "Shaded"
+
+    def setDisplayMode(self, mode):
+        return mode
+
+    def onChanged(self, vobj, prop):
+        return
+
+    def getIcon(self):
+        return self.iconfile
+
+    def doubleClicked(self, vobj):
+        self.regenerate()
+        return True
+
+    def setupContextMenu(self, vobj, menu):
+        from PySide import QtGui
+
+        action = QtGui.QAction("Regenerate Gear", menu)
+        action.triggered.connect(lambda: self.regenerate())
+        menu.addAction(action)
+
+    def regenerate(self):
+        if hasattr(self.Object, "Proxy"):
+            self.Object.Proxy.force_Recompute()
+
+    def __getstate__(self):
+        return self.iconfile
+
+    def __setstate__(self, state):
+        if state:
+            self.iconfile = state
+        else:
+            self.iconfile = os.path.join(smWB_icons_path, "spurGear.svg")
+        return None
+
+
 # ============================================================================
 # FREECAD COMMAND CLASSES
 # ============================================================================
@@ -1420,23 +1765,27 @@ class SpurGearCommand:
             App.newDocument()
         doc = App.ActiveDocument
 
-        # Generate unique body name
-        base_name = "SpurGear"
+        base_name = "SpurGear_values"
         unique_name = base_name
         count = 1
         while doc.getObject(unique_name):
-            unique_name = f"{base_name}{count:03d}"
+            unique_name = f"SpurGear_values{count:03d}"
             count += 1
 
-        gear_obj = doc.addObject("Part::FeaturePython", "SpurGearParameters")
-        spur_gear = SpurGear(gear_obj)
-        ViewProviderGenericGear(
+        varset = createSpurGearVarSet(doc, unique_name)
+
+        gen_name = "Regenerate"
+        count = 1
+        while doc.getObject(gen_name):
+            gen_name = f"Regenerate{count:03d}"
+            count += 1
+        gear_obj = doc.addObject("Part::FeaturePython", gen_name)
+        SpurGearResult(gear_obj, varset)
+        ViewProviderGearResult(
             gear_obj.ViewObject, os.path.join(smWB_icons_path, "spurGear.svg")
         )
 
-        gear_obj.BodyName = unique_name
-
-        doc.recompute()
+        gear_obj.Proxy.force_Recompute()
         FreeCADGui.SendMsgToActiveView("ViewFit")
         FreeCADGui.ActiveDocument.ActiveView.viewIsometric()
 

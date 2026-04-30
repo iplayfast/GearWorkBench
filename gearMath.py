@@ -214,7 +214,6 @@ def generateToothProfile(sketch, parameters):
     p_tip_left = left_pts[0]
 
     if not is_pointed and p_tip_right.x > 0.001 and p_tip_left.x < -0.001:
-        # Arc on addendum circle
         angle_right = math.atan2(p_tip_right.y, p_tip_right.x)
         angle_left = math.atan2(p_tip_left.y, p_tip_left.x)
         if angle_right < 0:
@@ -226,18 +225,15 @@ def generateToothProfile(sketch, parameters):
         arc = Part.ArcOfCircle(arc_circle, angle_right, angle_left)
         geo_list.append(sketch.addGeometry(arc, False))
     else:
-        # Pointed or nearly pointed - use line
-        line = Part.LineSegment(p_tip_right, p_tip_left)
-        geo_list.append(sketch.addGeometry(line, False))
+        if p_tip_right.distanceToPoint(p_tip_left) > 0.001:
+            line = Part.LineSegment(p_tip_right, p_tip_left)
+            geo_list.append(sketch.addGeometry(line, False))
 
     # 4. Left involute flank - use line segments instead of B-spline
     if len(left_pts) >= 2:
-        # Use simple line segments through left involute points
         for i in range(len(left_pts) - 1):
             line = Part.LineSegment(left_pts[i], left_pts[i + 1])
             geo_list.append(sketch.addGeometry(line, False))
-        
-    
 
     # 5. Left radial flank (line, if needed)
     if has_radial:
@@ -247,9 +243,10 @@ def generateToothProfile(sketch, parameters):
     else:
         p_root_left = left_pts[-1]
 
-    # 6. Root closure (line)
-    root_line = Part.LineSegment(p_root_left, p_root_right)
-    geo_list.append(sketch.addGeometry(root_line, False))
+    # 6. Root closure (line) - skip if points coincide (degenerate tooth)
+    if p_root_left.distanceToPoint(p_root_right) > 0.001:
+        root_line = Part.LineSegment(p_root_left, p_root_right)
+        geo_list.append(sketch.addGeometry(root_line, False))
 
     util.finalizeSketchGeometry(sketch, geo_list)
 
