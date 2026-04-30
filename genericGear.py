@@ -733,28 +733,38 @@ class SpurGear:
 
 
 class _VarSetWatcher:
-    """Watches a VarSet for tooth-profile property changes.
+    """Watches a VarSet for property changes that affect gear geometry.
 
-    Only reacts to Module, PressureAngle, ProfileShift, Backlash.
-    These are the only properties that require a full gear rebuild.
-    Expression-driven derived properties (PitchDiameter, BaseDiameter,
-    OuterDiameter, RootDiameter) are ignored — they never require a
-    rebuild and none of the 4 watched properties are modified during
-    a rebuild, so this observer cannot cause a recompute loop.
+    Two rebuild triggers:
+    - IMMEDIATE: Module (PropertyLength, commits on Enter) — rebuilds
+      via a short QTimer defer.
+    - DEFERRED: PressureAngle, ProfileShift, Backlash — these are
+      PropertyAngle/PropertyFloat which fire on every keystroke.  Sets a
+      flag and waits for slotRecomputedDocument (FreeCAD's busy cursor
+      ends), then rebuilds once with the final values.
     """
 
-    _TOOTH_PARAMS = frozenset(("Module", "PressureAngle", "ProfileShift", "Backlash"))
+    _IMMEDIATE = frozenset(("Module",))
+    _DEFERRED = frozenset(("PressureAngle", "ProfileShift", "Backlash"))
 
     def __init__(self, generator, varset_name):
         self._generator = generator
         self._varset_name = varset_name
+        self._doc_name = None
 
     def slotChangedObject(self, obj, prop):
         if obj.Name != self._varset_name:
             return
-        if prop not in self._TOOTH_PARAMS:
-            return
-        self._generator._on_tooth_param_changed()
+        if prop in self._IMMEDIATE:
+            self._generator._on_tooth_param_changed()
+        elif prop in self._DEFERRED:
+            self._doc_name = obj.Document.Name
+            self._generator._set_needs_rebuild()
+
+    def slotRecomputedDocument(self, doc):
+        """Fires when FreeCAD finishes a recompute cycle (busy cursor ends)."""
+        if self._doc_name and doc.Name == self._doc_name:
+            self._generator._on_recompute_finished()
 
 
 class SpurGearResult:
@@ -780,7 +790,9 @@ class SpurGearResult:
         self._last_ps = None
         self._last_bl = None
         self._watcher = None
+        self._rebuild_pending = False
         self._debounce_timer = None
+        self._needs_rebuild = False
         self.Type = "SpurGearResult"
 
         obj.addProperty(
@@ -834,6 +846,7 @@ class SpurGearResult:
         self._last_bl = None
         self._watcher = None
         self._debounce_timer = None
+        self._needs_rebuild = False
 
     def onDocumentRestored(self, obj):
         """Re-register VarSet watcher after file load."""
@@ -898,21 +911,67 @@ class SpurGearResult:
     def _on_tooth_param_changed(self):
         """Called by _VarSetWatcher when a tooth-profile property changes.
 
-        Just restarts the debounce timer (cheap — no VarSet reads).
-        The actual value check happens in _on_debounce_timeout after
-        the user stops typing. This avoids lag from reading VarSet
-        properties on every keystroke.
+        Uses a restartable debounce timer so that rapid keystrokes
+        (e.g. typing "0.15" into Backlash) are batched into a single
+        rebuild after typing stops.  Each new change restarts the
+        timer, so intermediate values never trigger a rebuild.
         """
         if self._rebuilding:
             return
-        if self._debounce_timer is None:
-            self._debounce_timer = QtCore.QTimer()
-            self._debounce_timer.setSingleShot(True)
-            self._debounce_timer.timeout.connect(self._on_debounce_timeout)
-        self._debounce_timer.start(500)
+        if not self._values_changed():
+            return
+        # Stop any existing timer so it restarts from zero
+        if self._debounce_timer is not None:
+            self._debounce_timer.stop()
+            self._debounce_timer.deleteLater()
+        self._debounce_timer = QtCore.QTimer()
+        self._debounce_timer.setSingleShot(True)
+        self._debounce_timer.timeout.connect(self._on_rebuild_timeout)
+        self._debounce_timer.start(50)  # Short delay — Module is PropertyLength (commits on Enter)
 
-    def _on_debounce_timeout(self):
-        """Called after 500ms of no tooth-param changes — user is done typing."""
+    def _set_needs_rebuild(self):
+        """Called when a deferred param changes (PressureAngle, ProfileShift, Backlash).
+
+        Sets a flag so that slotRecomputedDocument triggers a rebuild
+        after FreeCAD finishes its expression recompute cycle.
+        """
+        if self._rebuilding:
+            return
+        self._needs_rebuild = True
+        try:
+            self.Object.Status = "Needs regeneration"
+        except Exception:
+            pass
+
+    def _on_recompute_finished(self):
+        """Called by watcher when FreeCAD finishes a recompute cycle.
+
+        We can't call _rebuild() directly here — we're still inside
+        FreeCAD's recompute callback, and our rebuild calls doc.recompute()
+        which triggers "Recursive calling of recompute" and leaves the
+        new body invisible.  Defer with singleShot(0) to exit the
+        callback first.
+        """
+        if not self._needs_rebuild:
+            return
+        if self._rebuilding:
+            return
+        if not self._values_changed():
+            self._needs_rebuild = False
+            return
+        self._needs_rebuild = False
+        QtCore.QTimer.singleShot(0, self._deferred_rebuild)
+
+    def _deferred_rebuild(self):
+        """Runs after exiting the slotRecomputedDocument callback."""
+        if self._rebuilding:
+            return
+        if not self._values_changed():
+            return
+        self._rebuild()
+
+    def _on_rebuild_timeout(self):
+        self._debounce_timer = None
         if self._rebuilding:
             return
         if not self._values_changed():
@@ -922,10 +981,12 @@ class SpurGearResult:
     def _rebuild(self):
         """Rebuild the gear body."""
         self._rebuilding = True
+        varset_name = None
         try:
             v = self._getVarSet()
             if not v:
                 return
+            varset_name = v.Name
             self._last_m = float(v.Module.Value)
             self._last_pa = float(v.PressureAngle.Value)
             self._last_ps = float(v.ProfileShift)
@@ -961,15 +1022,35 @@ class SpurGearResult:
 
             body_name = str(self.Object.BodyName)
             doc = self.Object.Document
+
+            # Stop watcher BEFORE deleting — expression cleanup can
+            # fire slotChangedObject and re-enter our code.
+            self._stopWatcher()
+
             old = doc.getObject(body_name)
             if old:
-                old.removeObjectsFromDocument()
+                children = list(old.Group)
+
+                # 1. Clear all expressions on children
+                for child in children:
+                    for prop in child.PropertiesList:
+                        try:
+                            child.setExpression(prop, None)
+                        except Exception:
+                            pass
+
+                # 2. Remove children individually in reverse order
+                #    (leaf features first, sketches last) to avoid
+                #    dangling dependency issues inside FreeCAD's
+                #    recompute engine that cause infinite loops.
+                for child in reversed(children):
+                    name = child.Name
+                    try:
+                        doc.removeObject(name)
+                    except Exception as ex:
+                        App.Console.PrintError(f"Spur Gear Error: {str(ex)}\n")
+                # 3. Remove the body itself
                 doc.removeObject(body_name)
-                # Must recompute so pending removes are fully processed
-                # before creating new features with the same names.
-                # Safe: _last values already stored, _values_changed()
-                # returns False for any cascade notifications.
-                doc.recompute()
             parameters = {
                 "module": self._last_m,
                 "num_teeth": int(v.NumberOfTeeth),
@@ -987,20 +1068,25 @@ class SpurGearResult:
             spurGear(doc, parameters)
             self.Object.Status = "Up to date"
         except Exception as e:
-            App.Console.PrintError(f"Spur Gear Error: {str(e)}\n")
             import traceback
             App.Console.PrintError(traceback.format_exc())
             # Clean up any partially-created body from a failed build
             try:
                 partial = doc.getObject(body_name)
                 if partial:
-                    partial.removeObjectsFromDocument()
+                    for child in list(partial.Group):
+                        try:
+                            doc.removeObject(child.Name)
+                        except Exception:
+                            pass
                     doc.removeObject(body_name)
-                    doc.recompute()
             except Exception:
                 pass
             self.Object.Status = "Error"
         finally:
+            # Always restart watcher and clear rebuilding flag
+            if varset_name:
+                self._startWatcher(varset_name)
             self._rebuilding = False
 
     def force_Recompute(self):
@@ -1682,6 +1768,62 @@ class ViewProviderGenericGear:
         return None
 
 
+class GearTaskPanel:
+    """Task panel with Regenerate button for spur gear."""
+
+    def __init__(self, gear_obj):
+        from PySide import QtGui
+        self.gear_obj = gear_obj
+
+        self.form = QtGui.QWidget()
+        layout = QtGui.QVBoxLayout(self.form)
+
+        self.status_label = QtGui.QLabel()
+        self._update_status()
+        layout.addWidget(self.status_label)
+
+        self.regen_button = QtGui.QPushButton("Regenerate Gear")
+        self.regen_button.setMinimumHeight(36)
+        self.regen_button.clicked.connect(self._on_regenerate)
+        layout.addWidget(self.regen_button)
+
+        layout.addStretch()
+
+    def _update_status(self):
+        status = "Unknown"
+        try:
+            status = self.gear_obj.Status
+        except Exception:
+            pass
+        self.status_label.setText(f"Status: {status}")
+        if status == "Needs regeneration":
+            self.status_label.setStyleSheet("color: orange; font-weight: bold;")
+            self.regen_button.setStyleSheet("background-color: #e67e22; color: white; font-weight: bold;")
+        elif status == "Up to date":
+            self.status_label.setStyleSheet("color: green;")
+            self.regen_button.setStyleSheet("")
+        else:
+            self.status_label.setStyleSheet("")
+            self.regen_button.setStyleSheet("")
+
+    def _on_regenerate(self):
+        if hasattr(self.gear_obj, "Proxy"):
+            self.gear_obj.Proxy.force_Recompute()
+        self._update_status()
+
+    def accept(self):
+        FreeCADGui.Control.closeDialog()
+        return True
+
+    def reject(self):
+        FreeCADGui.Control.closeDialog()
+        return True
+
+    def getStandardButtons(self):
+        from PySide import QtGui
+        return QtGui.QDialogButtonBox.Close
+
+
 class ViewProviderGearResult:
     """View provider for SpurGear result objects."""
 
@@ -1716,7 +1858,8 @@ class ViewProviderGearResult:
         return self.iconfile
 
     def doubleClicked(self, vobj):
-        self.regenerate()
+        panel = GearTaskPanel(self.Object)
+        FreeCADGui.Control.showDialog(panel)
         return True
 
     def setupContextMenu(self, vobj, menu):
