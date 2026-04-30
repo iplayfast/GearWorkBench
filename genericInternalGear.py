@@ -24,6 +24,9 @@ import math
 from typing import Optional, Callable
 from PySide import QtCore
 
+# Import shared VarSet watcher from the generic gear module
+from genericGear import _VarSetWatcher, ViewProviderGearResult
+
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, "icons")
 
@@ -233,17 +236,22 @@ def _createTwoSketchInternalGear(
 
     outer_circle_idx = ring_sketch.addGeometry(outer_circle_geom, False)
     ring_sketch.addConstraint(Sketcher.Constraint("Coincident", outer_circle_idx, 3, -1, 1))
-    ring_sketch.addConstraint(
+    cst_outer = ring_sketch.addConstraint(
         Sketcher.Constraint("Diameter", outer_circle_idx, outer_diameter)
     )
 
     inner_circle_idx = ring_sketch.addGeometry(inner_circle_geom, False)
     ring_sketch.addConstraint(Sketcher.Constraint("Coincident", inner_circle_idx, 3, -1, 1))
-    ring_sketch.addConstraint(
+    cst_inner = ring_sketch.addConstraint(
         Sketcher.Constraint("Diameter", inner_circle_idx, ra_internal * 2.0)
     )
 
     ring_pad = util.createPad(body, ring_sketch, height, "Ring")
+    vn = parameters.get("varset_name")
+    if vn:
+        ring_pad.setExpression("Length", f"<<{vn}>>.Height")
+        ring_sketch.setExpression(f"Constraints[{cst_outer}]",
+            f"<<{vn}>>.PitchDiameter + 2 * <<{vn}>>.Module * (1.25 - <<{vn}>>.ProfileShift) + 2 * <<{vn}>>.RimThickness")
 
     # Show progress in FreeCAD Report View
     App.Console.PrintMessage("Internal gear: Created ring base...\n")
@@ -262,6 +270,8 @@ def _createTwoSketchInternalGear(
     )
     sketch_top.MapMode = "Deactivated"
     profile_func(sketch_top, parameters)
+    if vn:
+        sketch_top.setExpression("Placement.Base.z", f"<<{vn}>>.Height")
 
     # 3. Subtractive Loft for ONE tooth gap
     tooth_cut = body.newObject("PartDesign::SubtractiveLoft", "ToothGapCut")
@@ -286,6 +296,8 @@ def _createTwoSketchInternalGear(
     gear_teeth.Angle = 360
     gear_teeth.Occurrences = num_teeth
     gear_teeth.Originals = [tooth_cut]
+    if vn:
+        gear_teeth.setExpression("Occurrences", f"<<{vn}>>.NumberOfTeeth")
 
     # Show progress in FreeCAD Report View
     App.Console.PrintMessage("Internal gear: Polar pattern created, finalizing...\n")
@@ -385,17 +397,22 @@ def _createThreeSketchInternalGear(
 
     outer_circle_idx = ring_sketch.addGeometry(outer_circle_geom, False)
     ring_sketch.addConstraint(Sketcher.Constraint("Coincident", outer_circle_idx, 3, -1, 1))
-    ring_sketch.addConstraint(
+    cst_outer = ring_sketch.addConstraint(
         Sketcher.Constraint("Diameter", outer_circle_idx, outer_diameter)
     )
 
     inner_circle_idx = ring_sketch.addGeometry(inner_circle_geom, False)
     ring_sketch.addConstraint(Sketcher.Constraint("Coincident", inner_circle_idx, 3, -1, 1))
-    ring_sketch.addConstraint(
+    cst_inner = ring_sketch.addConstraint(
         Sketcher.Constraint("Diameter", inner_circle_idx, ra_internal * 2.0)
     )
 
     ring_pad = util.createPad(body, ring_sketch, height, "Ring")
+    vn = parameters.get("varset_name")
+    if vn:
+        ring_pad.setExpression("Length", f"<<{vn}>>.Height")
+        ring_sketch.setExpression(f"Constraints[{cst_outer}]",
+            f"<<{vn}>>.PitchDiameter + 2 * <<{vn}>>.Module * (1.25 - <<{vn}>>.ProfileShift) + 2 * <<{vn}>>.RimThickness")
 
     # Show progress in FreeCAD Report View
     App.Console.PrintMessage("Internal herringbone: Created ring base...\n")
@@ -414,6 +431,8 @@ def _createThreeSketchInternalGear(
     )
     sketch_middle.MapMode = "Deactivated"
     profile_func(sketch_middle, parameters)
+    if vn:
+        sketch_middle.setExpression("Placement.Base.z", f"<<{vn}>>.Height / 2.0")
 
     sketch_top = util.createSketch(body, "ToothGap_Top")
     sketch_top.Placement = App.Placement(
@@ -421,6 +440,8 @@ def _createThreeSketchInternalGear(
     )
     sketch_top.MapMode = "Deactivated"
     profile_func(sketch_top, parameters)
+    if vn:
+        sketch_top.setExpression("Placement.Base.z", f"<<{vn}>>.Height")
 
     # 3. Apply Subtractive Lofts for ONE tooth gap
     cut_lower = body.newObject("PartDesign::SubtractiveLoft", "ToothGapLower")
@@ -451,6 +472,8 @@ def _createThreeSketchInternalGear(
     gear_teeth.Angle = 360
     gear_teeth.Occurrences = num_teeth
     gear_teeth.Originals = [cut_lower, cut_upper]
+    if parameters.get("varset_name"):
+        gear_teeth.setExpression("Occurrences", f"<<{parameters['varset_name']}>>.NumberOfTeeth")
 
     # Show progress in FreeCAD Report View
     App.Console.PrintMessage("Internal herringbone: Polar pattern created, finalizing...\n")
@@ -520,6 +543,120 @@ def internalSpurGear(doc, parameters, profile_func: Optional[Callable] = None):
         profile_func = generateInternalCutterProfile  # Use External profile as cutter
 
     return internalHerringboneGear(doc, parameters, 0.0, 0.0, profile_func)
+
+
+# ============================================================================
+# VARSET
+# ============================================================================
+
+
+def createInternalSpurGearVarSet(doc, name):
+    """Create a VarSet for InternalSpurGear parameters."""
+    var_set = doc.addObject("App::VarSet", name)
+    H = gearMath.generateDefaultInternalParameters()
+
+    var_set.addProperty(
+        "App::PropertyString",
+        "Version",
+        "read only",
+        QT_TRANSLATE_NOOP("App::Property", "Workbench version"),
+        1,
+    ).Version = version
+
+    var_set.addProperty(
+        "App::PropertyInteger",
+        "NumberOfTeeth",
+        "InternalSpurGear",
+        QT_TRANSLATE_NOOP("App::Property", "Number of teeth"),
+    ).NumberOfTeeth = H["num_teeth"]
+
+    var_set.addProperty(
+        "App::PropertyLength",
+        "Module",
+        "InternalSpurGear",
+        QT_TRANSLATE_NOOP("App::Property", "Gear module (tooth size)"),
+    ).Module = H["module"]
+
+    var_set.addProperty(
+        "App::PropertyLength",
+        "Height",
+        "InternalSpurGear",
+        QT_TRANSLATE_NOOP("App::Property", "Gear thickness/height"),
+    ).Height = H["height"]
+
+    var_set.addProperty(
+        "App::PropertyLength",
+        "RimThickness",
+        "InternalSpurGear",
+        QT_TRANSLATE_NOOP("App::Property", "Rim thickness"),
+    ).RimThickness = H["rim_thickness"]
+
+    var_set.addProperty(
+        "App::PropertyAngle",
+        "PressureAngle",
+        "InternalSpurGear",
+        QT_TRANSLATE_NOOP("App::Property", "Pressure angle (normally 20)"),
+    ).PressureAngle = H["pressure_angle"]
+
+    var_set.addProperty(
+        "App::PropertyFloat",
+        "ProfileShift",
+        "InternalSpurGear",
+        QT_TRANSLATE_NOOP("App::Property", "Profile shift coefficient (-1 to +1)"),
+    ).ProfileShift = H["profile_shift"]
+
+    var_set.addProperty(
+        "App::PropertyFloat",
+        "Backlash",
+        "InternalSpurGear",
+        QT_TRANSLATE_NOOP("App::Property", "Backlash clearance"),
+    ).Backlash = 0.15
+
+    var_set.addProperty(
+        "App::PropertyLength",
+        "PitchDiameter",
+        "read only",
+        QT_TRANSLATE_NOOP("App::Property", "Pitch diameter (where gears mesh)"),
+        1,
+    )
+    var_set.setExpression("PitchDiameter", "Module * NumberOfTeeth")
+
+    var_set.addProperty(
+        "App::PropertyLength",
+        "BaseDiameter",
+        "read only",
+        QT_TRANSLATE_NOOP("App::Property", "Base circle diameter (involute origin)"),
+        1,
+    )
+    var_set.setExpression(
+        "BaseDiameter", "PitchDiameter * cos(PressureAngle)"
+    )
+
+    var_set.addProperty(
+        "App::PropertyLength",
+        "InnerDiameter",
+        "read only",
+        QT_TRANSLATE_NOOP("App::Property", "Inner tip diameter"),
+        1,
+    )
+    var_set.setExpression(
+        "InnerDiameter",
+        "PitchDiameter - 2 * Module * (1 + ProfileShift)",
+    )
+
+    var_set.addProperty(
+        "App::PropertyLength",
+        "OuterDiameter",
+        "read only",
+        QT_TRANSLATE_NOOP("App::Property", "Outer root diameter"),
+        1,
+    )
+    var_set.setExpression(
+        "OuterDiameter",
+        "PitchDiameter + 2 * Module * (1.25 - ProfileShift) + 2 * RimThickness",
+    )
+
+    return var_set
 
 
 # ============================================================================
@@ -731,6 +868,252 @@ class InternalSpurGear:
     def __setstate__(self, state):
         if state:
             self.Type = state
+
+
+class InternalSpurGearResult:
+    """FeaturePython for auto-regeneration of internal spur gear.
+
+    Same DocumentObserver pattern as SpurGearResult in genericGear.py.
+    """
+
+    def __init__(self, obj, varset):
+        self._varset = varset
+        self._rebuilding = False
+        self._last_m = None
+        self._last_pa = None
+        self._last_ps = None
+        self._last_bl = None
+        self._last_rt = None
+        self._watcher = None
+        self._debounce_timer = None
+        self._needs_rebuild = False
+        self.Type = "InternalSpurGearResult"
+
+        obj.addProperty(
+            "App::PropertyString", "VarSetName", "Gear",
+            QT_TRANSLATE_NOOP("App::Property", "Name of parameter VarSet"), 1,
+        ).VarSetName = varset.Name
+
+        obj.addProperty(
+            "App::PropertyString", "BodyName", "Gear",
+            QT_TRANSLATE_NOOP("App::Property", "Name of generated body"),
+        ).BodyName = varset.Name.replace("_values", "_Body", 1)
+
+        obj.addProperty(
+            "App::PropertyString", "Version", "read only",
+            QT_TRANSLATE_NOOP("App::Property", "Workbench version"), 1,
+        ).Version = version
+
+        obj.addProperty(
+            "App::PropertyString", "Status", "read only",
+            QT_TRANSLATE_NOOP("App::Property", "Regeneration status"), 1,
+        )
+
+        obj.Proxy = self
+        self.Object = obj
+        obj.Status = "Not yet generated"
+        self._startWatcher(varset.Name)
+
+    def __getstate__(self):
+        return self.Type
+
+    def __setstate__(self, state):
+        if state:
+            self.Type = state
+        self._varset = None
+        self._rebuilding = False
+        self._last_m = None
+        self._last_pa = None
+        self._last_ps = None
+        self._last_bl = None
+        self._last_rt = None
+        self._watcher = None
+        self._debounce_timer = None
+        self._needs_rebuild = False
+
+    def onDocumentRestored(self, obj):
+        self.Object = obj
+        v = self._getVarSet()
+        if v:
+            self._last_m = float(v.Module.Value)
+            self._last_pa = float(v.PressureAngle.Value)
+            self._last_ps = float(v.ProfileShift)
+            self._last_bl = float(v.Backlash)
+            self._last_rt = float(v.RimThickness.Value)
+            self._startWatcher(v.Name)
+            obj.Status = "Up to date"
+
+    def _startWatcher(self, varset_name):
+        self._stopWatcher()
+        self._watcher = _VarSetWatcher(
+            self, varset_name,
+            immediate=frozenset(("Module", "RimThickness")),
+            deferred=frozenset(("PressureAngle", "ProfileShift", "Backlash")),
+        )
+        App.addDocumentObserver(self._watcher)
+
+    def _stopWatcher(self):
+        if self._watcher:
+            try:
+                App.removeDocumentObserver(self._watcher)
+            except Exception:
+                pass
+            self._watcher = None
+
+    def _getVarSet(self):
+        if self._varset is None:
+            try:
+                name = self.Object.VarSetName
+                self._varset = self.Object.Document.getObject(name)
+            except AttributeError:
+                pass
+        return self._varset
+
+    def execute(self, obj):
+        pass
+
+    def _values_changed(self):
+        v = self._getVarSet()
+        if not v:
+            return False
+        if self._last_m is None:
+            return True
+        EPS = 1e-9
+        return (abs(float(v.Module.Value) - self._last_m) > EPS or
+                abs(float(v.PressureAngle.Value) - self._last_pa) > EPS or
+                abs(float(v.ProfileShift) - self._last_ps) > EPS or
+                abs(float(v.Backlash) - self._last_bl) > EPS or
+                abs(float(v.RimThickness.Value) - self._last_rt) > EPS)
+
+    def _on_tooth_param_changed(self):
+        if self._rebuilding:
+            return
+        if self._debounce_timer is not None:
+            self._debounce_timer.stop()
+            self._debounce_timer.deleteLater()
+        self._debounce_timer = QtCore.QTimer()
+        self._debounce_timer.setSingleShot(True)
+        self._debounce_timer.timeout.connect(self._on_rebuild_timeout)
+        self._debounce_timer.start(50)
+
+    def _set_needs_rebuild(self):
+        if self._rebuilding:
+            return
+        self._needs_rebuild = True
+        try:
+            self.Object.Status = "Needs regeneration"
+        except Exception:
+            pass
+
+    def _on_recompute_finished(self):
+        if not self._needs_rebuild:
+            return
+        if self._rebuilding:
+            return
+        if not self._values_changed():
+            self._needs_rebuild = False
+            return
+        self._needs_rebuild = False
+        QtCore.QTimer.singleShot(0, self._deferred_rebuild)
+
+    def _deferred_rebuild(self):
+        if self._rebuilding:
+            return
+        if not self._values_changed():
+            return
+        self._rebuild()
+
+    def _on_rebuild_timeout(self):
+        self._debounce_timer = None
+        if self._rebuilding:
+            return
+        if not self._values_changed():
+            return
+        self._rebuild()
+
+    def _rebuild(self):
+        self._rebuilding = True
+        varset_name = None
+        try:
+            v = self._getVarSet()
+            if not v:
+                return
+            varset_name = v.Name
+            self._last_m = float(v.Module.Value)
+            self._last_pa = float(v.PressureAngle.Value)
+            self._last_ps = float(v.ProfileShift)
+            self._last_bl = float(v.Backlash)
+            self._last_rt = float(v.RimThickness.Value)
+
+            if self._last_bl < 0:
+                self.Object.Status = "Invalid: backlash must be >= 0"
+                return
+
+            effective_shift = self._last_ps - self._last_bl
+            num_teeth = int(v.NumberOfTeeth)
+            pitch_dia = self._last_m * num_teeth
+            root_dia = pitch_dia - 2 * self._last_m * (1.25 - effective_shift)
+
+            if root_dia <= 0 or self._last_m <= 0 or effective_shift < -1.0 or effective_shift > 0.8:
+                self.Object.Status = f"Invalid params"
+                return
+
+            body_name = str(self.Object.BodyName)
+            doc = self.Object.Document
+
+            self._stopWatcher()
+
+            old = doc.getObject(body_name)
+            if old:
+                children = list(old.Group)
+                for child in children:
+                    for prop in child.PropertiesList:
+                        try:
+                            child.setExpression(prop, None)
+                        except Exception:
+                            pass
+                for child in reversed(children):
+                    try:
+                        doc.removeObject(child.Name)
+                    except Exception:
+                        pass
+                doc.removeObject(body_name)
+
+            parameters = {
+                "module": self._last_m,
+                "num_teeth": num_teeth,
+                "pressure_angle": self._last_pa,
+                "profile_shift": self._last_ps,
+                "backlash": self._last_bl,
+                "height": float(v.Height.Value),
+                "rim_thickness": self._last_rt,
+                "body_name": body_name,
+                "varset_name": v.Name,
+            }
+            internalSpurGear(doc, parameters)
+            self.Object.Status = "Up to date"
+        except Exception as e:
+            import traceback
+            App.Console.PrintError(traceback.format_exc())
+            try:
+                partial = doc.getObject(body_name)
+                if partial:
+                    for child in list(partial.Group):
+                        try:
+                            doc.removeObject(child.Name)
+                        except Exception:
+                            pass
+                    doc.removeObject(body_name)
+            except Exception:
+                pass
+            self.Object.Status = "Error"
+        finally:
+            if varset_name:
+                self._startWatcher(varset_name)
+            self._rebuilding = False
+
+    def force_Recompute(self):
+        self._rebuild()
 
 
 class InternalHelixGear:
@@ -1219,24 +1602,30 @@ class InternalSpurGearCommand:
             App.newDocument()
         doc = App.ActiveDocument
 
-        base_name = "InternalSpurGear"
+        base_name = "InternalSpurGear_values"
         unique_name = base_name
         count = 1
         while doc.getObject(unique_name):
-            unique_name = f"{base_name}{count:03d}"
+            unique_name = f"InternalSpurGear_values{count:03d}"
             count += 1
 
-        gear_obj = doc.addObject("Part::FeaturePython", "InternalSpurGearParameters")
-        gear = InternalSpurGear(gear_obj)
-        gear_obj.BodyName = unique_name
+        varset = createInternalSpurGearVarSet(doc, unique_name)
 
-        # Trigger initial gear creation
-        gear.recompute()
+        gen_name = "Regenerate"
+        count = 1
+        while doc.getObject(gen_name):
+            gen_name = f"Regenerate{count:03d}"
+            count += 1
+        gear_obj = doc.addObject("Part::FeaturePython", gen_name)
+        InternalSpurGearResult(gear_obj, varset)
+        ViewProviderGearResult(
+            gear_obj.ViewObject,
+            os.path.join(smWB_icons_path, "internalSpurGear.svg"),
+        )
 
-        doc.recompute()
+        gear_obj.Proxy.force_Recompute()
         FreeCADGui.SendMsgToActiveView("ViewFit")
         FreeCADGui.ActiveDocument.ActiveView.viewIsometric()
-        return gear
 
     def IsActive(self):
         return True

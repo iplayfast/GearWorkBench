@@ -192,6 +192,274 @@ def createSpurGearVarSet(doc, name):
     return var_set
 
 
+def createHelixGearVarSet(doc, name):
+    """Create a VarSet for HelixGear parameters."""
+    var_set = doc.addObject("App::VarSet", name)
+    H = gearMath.generateDefaultParameters()
+
+    var_set.addProperty(
+        "App::PropertyString",
+        "Version",
+        "read only",
+        QT_TRANSLATE_NOOP("App::Property", "Workbench version"),
+        1,
+    ).Version = version
+
+    var_set.addProperty(
+        "App::PropertyInteger",
+        "NumberOfTeeth",
+        "HelixGear",
+        QT_TRANSLATE_NOOP("App::Property", "Number of teeth"),
+    ).NumberOfTeeth = H["num_teeth"]
+
+    var_set.addProperty(
+        "App::PropertyLength",
+        "Module",
+        "HelixGear",
+        QT_TRANSLATE_NOOP("App::Property", "Gear module (tooth size)"),
+    ).Module = H["module"]
+
+    var_set.addProperty(
+        "App::PropertyLength",
+        "Height",
+        "HelixGear",
+        QT_TRANSLATE_NOOP("App::Property", "Gear thickness/height"),
+    ).Height = H["height"]
+
+    var_set.addProperty(
+        "App::PropertyAngle",
+        "HelixAngle",
+        "HelixGear",
+        QT_TRANSLATE_NOOP("App::Property", "Helix angle in degrees"),
+    ).HelixAngle = 15.0
+
+    var_set.addProperty(
+        "App::PropertyLength",
+        "BoreDiameter",
+        "Bore",
+        QT_TRANSLATE_NOOP("App::Property", "Diameter of center bore"),
+    ).BoreDiameter = H["bore_diameter"]
+
+    var_set.addProperty(
+        "App::PropertyLength",
+        "KeywayWidth",
+        "Bore",
+        QT_TRANSLATE_NOOP("App::Property", "Width of keyway (DIN 6885)"),
+    ).KeywayWidth = 2.0
+
+    var_set.addProperty(
+        "App::PropertyLength",
+        "KeywayDepth",
+        "Bore",
+        QT_TRANSLATE_NOOP("App::Property", "Depth of keyway"),
+    ).KeywayDepth = 1.0
+
+    var_set.addProperty(
+        "App::PropertyAngle",
+        "PressureAngle",
+        "HelixGear",
+        QT_TRANSLATE_NOOP("App::Property", "Pressure angle (normally 20)"),
+    ).PressureAngle = H["pressure_angle"]
+
+    var_set.addProperty(
+        "App::PropertyFloat",
+        "ProfileShift",
+        "HelixGear",
+        QT_TRANSLATE_NOOP("App::Property", "Profile shift coefficient (-1 to +1)"),
+    ).ProfileShift = H["profile_shift"]
+
+    var_set.addProperty(
+        "App::PropertyFloat",
+        "Backlash",
+        "HelixGear",
+        QT_TRANSLATE_NOOP("App::Property", "Backlash clearance for 3D printing (0.0-0.3mm)"),
+    ).Backlash = 0.0
+
+    var_set.addProperty(
+        "App::PropertyLength",
+        "PitchDiameter",
+        "read only",
+        QT_TRANSLATE_NOOP("App::Property", "Pitch diameter (where gears mesh)"),
+        1,
+    )
+    var_set.setExpression("PitchDiameter",
+        "Module / cos(HelixAngle) * NumberOfTeeth")
+
+    var_set.addProperty(
+        "App::PropertyLength",
+        "BaseDiameter",
+        "read only",
+        QT_TRANSLATE_NOOP("App::Property", "Base circle diameter (involute origin)"),
+        1,
+    )
+    var_set.setExpression(
+        "BaseDiameter", "PitchDiameter * cos(PressureAngle)"
+    )
+
+    var_set.addProperty(
+        "App::PropertyLength",
+        "OuterDiameter",
+        "read only",
+        QT_TRANSLATE_NOOP("App::Property", "Outer diameter (tip of teeth)"),
+        1,
+    )
+    var_set.setExpression(
+        "OuterDiameter",
+        "PitchDiameter + 2 * Module * (1 + ProfileShift)",
+    )
+
+    var_set.addProperty(
+        "App::PropertyLength",
+        "RootDiameter",
+        "read only",
+        QT_TRANSLATE_NOOP("App::Property", "Root diameter (bottom of teeth)"),
+        1,
+    )
+    var_set.setExpression(
+        "RootDiameter",
+        "PitchDiameter - 2 * Module * (1.25 - ProfileShift)",
+    )
+
+    return var_set
+
+
+def createHerringboneGearVarSet(doc, name):
+    """Create a VarSet for HerringboneGear parameters."""
+    var_set = doc.addObject("App::VarSet", name)
+    H = gearMath.generateDefaultParameters()
+
+    var_set.addProperty(
+        "App::PropertyString",
+        "Version",
+        "read only",
+        QT_TRANSLATE_NOOP("App::Property", "Workbench version"),
+        1,
+    ).Version = version
+
+    var_set.addProperty(
+        "App::PropertyInteger",
+        "NumberOfTeeth",
+        "HerringboneGear",
+        QT_TRANSLATE_NOOP("App::Property", "Number of teeth"),
+    ).NumberOfTeeth = H["num_teeth"]
+
+    var_set.addProperty(
+        "App::PropertyLength",
+        "Module",
+        "HerringboneGear",
+        QT_TRANSLATE_NOOP("App::Property", "Gear module (tooth size)"),
+    ).Module = H["module"]
+
+    var_set.addProperty(
+        "App::PropertyLength",
+        "Height",
+        "HerringboneGear",
+        QT_TRANSLATE_NOOP("App::Property", "Gear thickness/height"),
+    ).Height = H["height"]
+
+    var_set.addProperty(
+        "App::PropertyAngle",
+        "Angle1",
+        "HerringboneGear",
+        QT_TRANSLATE_NOOP("App::Property", "Helix angle bottom to middle (degrees)"),
+    ).Angle1 = 15.0
+
+    var_set.addProperty(
+        "App::PropertyAngle",
+        "Angle2",
+        "HerringboneGear",
+        QT_TRANSLATE_NOOP("App::Property", "Helix angle middle to top (degrees)"),
+    ).Angle2 = -15.0
+
+    var_set.addProperty(
+        "App::PropertyLength",
+        "BoreDiameter",
+        "Bore",
+        QT_TRANSLATE_NOOP("App::Property", "Diameter of center bore"),
+    ).BoreDiameter = H["bore_diameter"]
+
+    var_set.addProperty(
+        "App::PropertyLength",
+        "KeywayWidth",
+        "Bore",
+        QT_TRANSLATE_NOOP("App::Property", "Width of keyway (DIN 6885)"),
+    ).KeywayWidth = 2.0
+
+    var_set.addProperty(
+        "App::PropertyLength",
+        "KeywayDepth",
+        "Bore",
+        QT_TRANSLATE_NOOP("App::Property", "Depth of keyway"),
+    ).KeywayDepth = 1.0
+
+    var_set.addProperty(
+        "App::PropertyAngle",
+        "PressureAngle",
+        "HerringboneGear",
+        QT_TRANSLATE_NOOP("App::Property", "Pressure angle (normally 20)"),
+    ).PressureAngle = H["pressure_angle"]
+
+    var_set.addProperty(
+        "App::PropertyFloat",
+        "ProfileShift",
+        "HerringboneGear",
+        QT_TRANSLATE_NOOP("App::Property", "Profile shift coefficient (-1 to +1)"),
+    ).ProfileShift = H["profile_shift"]
+
+    var_set.addProperty(
+        "App::PropertyFloat",
+        "Backlash",
+        "HerringboneGear",
+        QT_TRANSLATE_NOOP("App::Property", "Backlash clearance for 3D printing (0.0-0.3mm)"),
+    ).Backlash = 0.0
+
+    var_set.addProperty(
+        "App::PropertyLength",
+        "PitchDiameter",
+        "read only",
+        QT_TRANSLATE_NOOP("App::Property", "Pitch diameter (where gears mesh)"),
+        1,
+    )
+    var_set.setExpression("PitchDiameter", "Module * NumberOfTeeth")
+
+    var_set.addProperty(
+        "App::PropertyLength",
+        "BaseDiameter",
+        "read only",
+        QT_TRANSLATE_NOOP("App::Property", "Base circle diameter (involute origin)"),
+        1,
+    )
+    var_set.setExpression(
+        "BaseDiameter", "PitchDiameter * cos(PressureAngle)"
+    )
+
+    var_set.addProperty(
+        "App::PropertyLength",
+        "OuterDiameter",
+        "read only",
+        QT_TRANSLATE_NOOP("App::Property", "Outer diameter (tip of teeth)"),
+        1,
+    )
+    var_set.setExpression(
+        "OuterDiameter",
+        "PitchDiameter + 2 * Module * (1 + ProfileShift)",
+    )
+
+    var_set.addProperty(
+        "App::PropertyLength",
+        "RootDiameter",
+        "read only",
+        QT_TRANSLATE_NOOP("App::Property", "Root diameter (bottom of teeth)"),
+        1,
+    )
+    var_set.setExpression(
+        "RootDiameter",
+        "PitchDiameter - 2 * Module * (1.25 - ProfileShift)",
+    )
+
+    return var_set
+
+
 def createMasterBore(body, parameters, height, varset_name):
     """Create bore with expression-based circle and keyway."""
     bore_diameter = parameters.get("bore_diameter", 0.0)
@@ -736,28 +1004,31 @@ class _VarSetWatcher:
     """Watches a VarSet for property changes that affect gear geometry.
 
     Two rebuild triggers:
-    - IMMEDIATE: Module (PropertyLength, commits on Enter) — rebuilds
-      via a short QTimer defer.
-    - DEFERRED: PressureAngle, ProfileShift, Backlash — these are
-      PropertyAngle/PropertyFloat which fire on every keystroke.  Sets a
-      flag and waits for slotRecomputedDocument (FreeCAD's busy cursor
-      ends), then rebuilds once with the final values.
+    - IMMEDIATE (default: Module): PropertyLength (commits on Enter) —
+      rebuilds via a short QTimer defer.
+    - DEFERRED: PropertyAngle/PropertyFloat (fire on every keystroke).
+      Sets a flag and waits for slotRecomputedDocument (FreeCAD's busy
+      cursor ends), then rebuilds once with the final values.
+
+    immediate / deferred can be passed as frozensets to __init__ to
+    configure which property names go in each bucket for a given gear.
     """
 
-    _IMMEDIATE = frozenset(("Module",))
-    _DEFERRED = frozenset(("PressureAngle", "ProfileShift", "Backlash"))
-
-    def __init__(self, generator, varset_name):
+    def __init__(self, generator, varset_name,
+                 immediate=frozenset(("Module",)),
+                 deferred=frozenset(("PressureAngle", "ProfileShift", "Backlash"))):
         self._generator = generator
         self._varset_name = varset_name
         self._doc_name = None
+        self._immediate = immediate
+        self._deferred = deferred
 
     def slotChangedObject(self, obj, prop):
         if obj.Name != self._varset_name:
             return
-        if prop in self._IMMEDIATE:
+        if prop in self._immediate:
             self._generator._on_tooth_param_changed()
-        elif prop in self._DEFERRED:
+        elif prop in self._deferred:
             self._doc_name = obj.Document.Name
             self._generator._set_needs_rebuild()
 
@@ -1091,6 +1362,576 @@ class SpurGearResult:
 
     def force_Recompute(self):
         """Force rebuild (used for initial creation from Activated)."""
+        self._rebuild()
+
+
+class HelixGearResult:
+    """FeaturePython for auto-regeneration of helical gear.
+
+    Same DocumentObserver pattern as SpurGearResult.  Tracks an
+    additional HelixAngle parameter.
+    """
+
+    def __init__(self, obj, varset):
+        self._varset = varset
+        self._rebuilding = False
+        self._last_m = None
+        self._last_pa = None
+        self._last_ps = None
+        self._last_bl = None
+        self._last_ha = None
+        self._watcher = None
+        self._debounce_timer = None
+        self._needs_rebuild = False
+        self.Type = "HelixGearResult"
+
+        obj.addProperty(
+            "App::PropertyString",
+            "VarSetName",
+            "Gear",
+            QT_TRANSLATE_NOOP("App::Property", "Name of parameter VarSet"),
+            1,
+        ).VarSetName = varset.Name
+
+        obj.addProperty(
+            "App::PropertyString",
+            "BodyName",
+            "Gear",
+            QT_TRANSLATE_NOOP("App::Property", "Name of generated body"),
+        ).BodyName = varset.Name.replace("_values", "_Body", 1)
+
+        obj.addProperty(
+            "App::PropertyString",
+            "Version",
+            "read only",
+            QT_TRANSLATE_NOOP("App::Property", "Workbench version"),
+            1,
+        ).Version = version
+
+        obj.addProperty(
+            "App::PropertyString",
+            "Status",
+            "read only",
+            QT_TRANSLATE_NOOP("App::Property", "Regeneration status"),
+            1,
+        )
+
+        obj.Proxy = self
+        self.Object = obj
+        obj.Status = "Not yet generated"
+
+        self._startWatcher(varset.Name)
+
+    def __getstate__(self):
+        return self.Type
+
+    def __setstate__(self, state):
+        if state:
+            self.Type = state
+        self._varset = None
+        self._rebuilding = False
+        self._last_m = None
+        self._last_pa = None
+        self._last_ps = None
+        self._last_bl = None
+        self._last_ha = None
+        self._watcher = None
+        self._debounce_timer = None
+        self._needs_rebuild = False
+
+    def onDocumentRestored(self, obj):
+        self.Object = obj
+        v = self._getVarSet()
+        if v:
+            self._last_m = float(v.Module.Value)
+            self._last_pa = float(v.PressureAngle.Value)
+            self._last_ps = float(v.ProfileShift)
+            self._last_bl = float(v.Backlash)
+            self._last_ha = float(v.HelixAngle.Value)
+            self._startWatcher(v.Name)
+            obj.Status = "Up to date"
+
+    def _startWatcher(self, varset_name):
+        self._stopWatcher()
+        self._watcher = _VarSetWatcher(
+            self, varset_name,
+            immediate=frozenset(("Module",)),
+            deferred=frozenset(("PressureAngle", "ProfileShift",
+                                "Backlash", "HelixAngle")),
+        )
+        App.addDocumentObserver(self._watcher)
+
+    def _stopWatcher(self):
+        if self._watcher:
+            try:
+                App.removeDocumentObserver(self._watcher)
+            except Exception:
+                pass
+            self._watcher = None
+
+    def _getVarSet(self):
+        if self._varset is None:
+            try:
+                name = self.Object.VarSetName
+                self._varset = self.Object.Document.getObject(name)
+            except AttributeError:
+                pass
+        return self._varset
+
+    def execute(self, obj):
+        pass
+
+    def _values_changed(self):
+        v = self._getVarSet()
+        if not v:
+            return False
+        if self._last_m is None:
+            return True
+        EPS = 1e-9
+        m = float(v.Module.Value)
+        pa = float(v.PressureAngle.Value)
+        ps = float(v.ProfileShift)
+        bl = float(v.Backlash)
+        ha = float(v.HelixAngle.Value)
+        return (abs(m - self._last_m) > EPS or
+                abs(pa - self._last_pa) > EPS or
+                abs(ps - self._last_ps) > EPS or
+                abs(bl - self._last_bl) > EPS or
+                abs(ha - self._last_ha) > EPS)
+
+    def _on_tooth_param_changed(self):
+        if self._rebuilding:
+            return
+        if self._debounce_timer is not None:
+            self._debounce_timer.stop()
+            self._debounce_timer.deleteLater()
+        self._debounce_timer = QtCore.QTimer()
+        self._debounce_timer.setSingleShot(True)
+        self._debounce_timer.timeout.connect(self._on_rebuild_timeout)
+        self._debounce_timer.start(50)
+
+    def _set_needs_rebuild(self):
+        if self._rebuilding:
+            return
+        self._needs_rebuild = True
+        try:
+            self.Object.Status = "Needs regeneration"
+        except Exception:
+            pass
+
+    def _on_recompute_finished(self):
+        if not self._needs_rebuild:
+            return
+        if self._rebuilding:
+            return
+        if not self._values_changed():
+            self._needs_rebuild = False
+            return
+        self._needs_rebuild = False
+        QtCore.QTimer.singleShot(0, self._deferred_rebuild)
+
+    def _deferred_rebuild(self):
+        if self._rebuilding:
+            return
+        if not self._values_changed():
+            return
+        self._rebuild()
+
+    def _on_rebuild_timeout(self):
+        self._debounce_timer = None
+        if self._rebuilding:
+            return
+        if not self._values_changed():
+            return
+        self._rebuild()
+
+    def _rebuild(self):
+        self._rebuilding = True
+        varset_name = None
+        try:
+            v = self._getVarSet()
+            if not v:
+                return
+            varset_name = v.Name
+            self._last_m = float(v.Module.Value)
+            self._last_pa = float(v.PressureAngle.Value)
+            self._last_ps = float(v.ProfileShift)
+            self._last_bl = float(v.Backlash)
+            self._last_ha = float(v.HelixAngle.Value)
+
+            if self._last_bl < 0:
+                self.Object.Status = "Invalid: backlash must be >= 0"
+                App.Console.PrintWarning(
+                    f"Helix Gear: skipping rebuild — {self.Object.Status}\n"
+                )
+                return
+
+            effective_shift = self._last_ps - self._last_bl
+            num_teeth = int(v.NumberOfTeeth)
+            pitch_dia = self._last_m * num_teeth
+            root_dia = pitch_dia - 2 * self._last_m * (1.25 - effective_shift)
+
+            if (root_dia <= 0 or self._last_m <= 0 or
+                    effective_shift < -1.0 or effective_shift > 0.8):
+                self.Object.Status = (
+                    f"Invalid: effective shift {effective_shift:.2f} "
+                    f"out of range (shift={self._last_ps:.2f} "
+                    f"backlash={self._last_bl:.2f})"
+                )
+                App.Console.PrintWarning(
+                    f"Helix Gear: skipping rebuild — {self.Object.Status}\n"
+                )
+                return
+
+            body_name = str(self.Object.BodyName)
+            doc = self.Object.Document
+
+            self._stopWatcher()
+
+            old = doc.getObject(body_name)
+            if old:
+                children = list(old.Group)
+
+                for child in children:
+                    for prop in child.PropertiesList:
+                        try:
+                            child.setExpression(prop, None)
+                        except Exception:
+                            pass
+
+                for child in reversed(children):
+                    name = child.Name
+                    try:
+                        doc.removeObject(name)
+                    except Exception as ex:
+                        App.Console.PrintError(f"Helix Gear Error: {str(ex)}\n")
+                doc.removeObject(body_name)
+
+            parameters = {
+                "module": self._last_m,
+                "num_teeth": int(v.NumberOfTeeth),
+                "pressure_angle": self._last_pa,
+                "profile_shift": self._last_ps,
+                "backlash": self._last_bl,
+                "height": float(v.Height.Value),
+                "body_name": body_name,
+                "bore_diameter": float(v.BoreDiameter.Value),
+                "keyway_width": float(v.KeywayWidth.Value),
+                "keyway_depth": float(v.KeywayDepth.Value),
+                "varset_name": v.Name,
+                "origin_x": 0.0, "origin_y": 0.0, "origin_z": 0.0, "angle": 0.0,
+            }
+            helixGear(doc, parameters, self._last_ha)
+            self.Object.Status = "Up to date"
+        except Exception as e:
+            import traceback
+            App.Console.PrintError(traceback.format_exc())
+            try:
+                partial = doc.getObject(body_name)
+                if partial:
+                    for child in list(partial.Group):
+                        try:
+                            doc.removeObject(child.Name)
+                        except Exception:
+                            pass
+                    doc.removeObject(body_name)
+            except Exception:
+                pass
+            self.Object.Status = "Error"
+        finally:
+            if varset_name:
+                self._startWatcher(varset_name)
+            self._rebuilding = False
+
+    def force_Recompute(self):
+        self._rebuild()
+
+
+class HerringboneGearResult:
+    """FeaturePython for auto-regeneration of herringbone gear.
+
+    Same DocumentObserver pattern as SpurGearResult.  Tracks
+    additional Angle1 and Angle2 parameters.
+    """
+
+    def __init__(self, obj, varset):
+        self._varset = varset
+        self._rebuilding = False
+        self._last_m = None
+        self._last_pa = None
+        self._last_ps = None
+        self._last_bl = None
+        self._last_a1 = None
+        self._last_a2 = None
+        self._watcher = None
+        self._debounce_timer = None
+        self._needs_rebuild = False
+        self.Type = "HerringboneGearResult"
+
+        obj.addProperty(
+            "App::PropertyString",
+            "VarSetName",
+            "Gear",
+            QT_TRANSLATE_NOOP("App::Property", "Name of parameter VarSet"),
+            1,
+        ).VarSetName = varset.Name
+
+        obj.addProperty(
+            "App::PropertyString",
+            "BodyName",
+            "Gear",
+            QT_TRANSLATE_NOOP("App::Property", "Name of generated body"),
+        ).BodyName = varset.Name.replace("_values", "_Body", 1)
+
+        obj.addProperty(
+            "App::PropertyString",
+            "Version",
+            "read only",
+            QT_TRANSLATE_NOOP("App::Property", "Workbench version"),
+            1,
+        ).Version = version
+
+        obj.addProperty(
+            "App::PropertyString",
+            "Status",
+            "read only",
+            QT_TRANSLATE_NOOP("App::Property", "Regeneration status"),
+            1,
+        )
+
+        obj.Proxy = self
+        self.Object = obj
+        obj.Status = "Not yet generated"
+
+        self._startWatcher(varset.Name)
+
+    def __getstate__(self):
+        return self.Type
+
+    def __setstate__(self, state):
+        if state:
+            self.Type = state
+        self._varset = None
+        self._rebuilding = False
+        self._last_m = None
+        self._last_pa = None
+        self._last_ps = None
+        self._last_bl = None
+        self._last_a1 = None
+        self._last_a2 = None
+        self._watcher = None
+        self._debounce_timer = None
+        self._needs_rebuild = False
+
+    def onDocumentRestored(self, obj):
+        self.Object = obj
+        v = self._getVarSet()
+        if v:
+            self._last_m = float(v.Module.Value)
+            self._last_pa = float(v.PressureAngle.Value)
+            self._last_ps = float(v.ProfileShift)
+            self._last_bl = float(v.Backlash)
+            self._last_a1 = float(v.Angle1.Value)
+            self._last_a2 = float(v.Angle2.Value)
+            self._startWatcher(v.Name)
+            obj.Status = "Up to date"
+
+    def _startWatcher(self, varset_name):
+        self._stopWatcher()
+        self._watcher = _VarSetWatcher(
+            self, varset_name,
+            immediate=frozenset(("Module",)),
+            deferred=frozenset(("PressureAngle", "ProfileShift",
+                                "Backlash", "Angle1", "Angle2")),
+        )
+        App.addDocumentObserver(self._watcher)
+
+    def _stopWatcher(self):
+        if self._watcher:
+            try:
+                App.removeDocumentObserver(self._watcher)
+            except Exception:
+                pass
+            self._watcher = None
+
+    def _getVarSet(self):
+        if self._varset is None:
+            try:
+                name = self.Object.VarSetName
+                self._varset = self.Object.Document.getObject(name)
+            except AttributeError:
+                pass
+        return self._varset
+
+    def execute(self, obj):
+        pass
+
+    def _values_changed(self):
+        v = self._getVarSet()
+        if not v:
+            return False
+        if self._last_m is None:
+            return True
+        EPS = 1e-9
+        m = float(v.Module.Value)
+        pa = float(v.PressureAngle.Value)
+        ps = float(v.ProfileShift)
+        bl = float(v.Backlash)
+        a1 = float(v.Angle1.Value)
+        a2 = float(v.Angle2.Value)
+        return (abs(m - self._last_m) > EPS or
+                abs(pa - self._last_pa) > EPS or
+                abs(ps - self._last_ps) > EPS or
+                abs(bl - self._last_bl) > EPS or
+                abs(a1 - self._last_a1) > EPS or
+                abs(a2 - self._last_a2) > EPS)
+
+    def _on_tooth_param_changed(self):
+        if self._rebuilding:
+            return
+        if self._debounce_timer is not None:
+            self._debounce_timer.stop()
+            self._debounce_timer.deleteLater()
+        self._debounce_timer = QtCore.QTimer()
+        self._debounce_timer.setSingleShot(True)
+        self._debounce_timer.timeout.connect(self._on_rebuild_timeout)
+        self._debounce_timer.start(50)
+
+    def _set_needs_rebuild(self):
+        if self._rebuilding:
+            return
+        self._needs_rebuild = True
+        try:
+            self.Object.Status = "Needs regeneration"
+        except Exception:
+            pass
+
+    def _on_recompute_finished(self):
+        if not self._needs_rebuild:
+            return
+        if self._rebuilding:
+            return
+        if not self._values_changed():
+            self._needs_rebuild = False
+            return
+        self._needs_rebuild = False
+        QtCore.QTimer.singleShot(0, self._deferred_rebuild)
+
+    def _deferred_rebuild(self):
+        if self._rebuilding:
+            return
+        if not self._values_changed():
+            return
+        self._rebuild()
+
+    def _on_rebuild_timeout(self):
+        self._debounce_timer = None
+        if self._rebuilding:
+            return
+        if not self._values_changed():
+            return
+        self._rebuild()
+
+    def _rebuild(self):
+        self._rebuilding = True
+        varset_name = None
+        try:
+            v = self._getVarSet()
+            if not v:
+                return
+            varset_name = v.Name
+            self._last_m = float(v.Module.Value)
+            self._last_pa = float(v.PressureAngle.Value)
+            self._last_ps = float(v.ProfileShift)
+            self._last_bl = float(v.Backlash)
+            self._last_a1 = float(v.Angle1.Value)
+            self._last_a2 = float(v.Angle2.Value)
+
+            if self._last_bl < 0:
+                self.Object.Status = "Invalid: backlash must be >= 0"
+                App.Console.PrintWarning(
+                    f"Herringbone Gear: skipping rebuild — {self.Object.Status}\n"
+                )
+                return
+
+            effective_shift = self._last_ps - self._last_bl
+            num_teeth = int(v.NumberOfTeeth)
+            pitch_dia = self._last_m * num_teeth
+            root_dia = pitch_dia - 2 * self._last_m * (1.25 - effective_shift)
+
+            if (root_dia <= 0 or self._last_m <= 0 or
+                    effective_shift < -1.0 or effective_shift > 0.8):
+                self.Object.Status = (
+                    f"Invalid: effective shift {effective_shift:.2f} "
+                    f"out of range (shift={self._last_ps:.2f} "
+                    f"backlash={self._last_bl:.2f})"
+                )
+                App.Console.PrintWarning(
+                    f"Herringbone Gear: skipping rebuild — {self.Object.Status}\n"
+                )
+                return
+
+            body_name = str(self.Object.BodyName)
+            doc = self.Object.Document
+
+            self._stopWatcher()
+
+            old = doc.getObject(body_name)
+            if old:
+                children = list(old.Group)
+
+                for child in children:
+                    for prop in child.PropertiesList:
+                        try:
+                            child.setExpression(prop, None)
+                        except Exception:
+                            pass
+
+                for child in reversed(children):
+                    name = child.Name
+                    try:
+                        doc.removeObject(name)
+                    except Exception as ex:
+                        App.Console.PrintError(f"Herringbone Gear Error: {str(ex)}\n")
+                doc.removeObject(body_name)
+
+            parameters = {
+                "module": self._last_m,
+                "num_teeth": int(v.NumberOfTeeth),
+                "pressure_angle": self._last_pa,
+                "profile_shift": self._last_ps,
+                "backlash": self._last_bl,
+                "height": float(v.Height.Value),
+                "body_name": body_name,
+                "bore_diameter": float(v.BoreDiameter.Value),
+                "keyway_width": float(v.KeywayWidth.Value),
+                "keyway_depth": float(v.KeywayDepth.Value),
+                "varset_name": v.Name,
+                "origin_x": 0.0, "origin_y": 0.0, "origin_z": 0.0, "angle": 0.0,
+            }
+            herringboneGear(doc, parameters, self._last_a1, self._last_a2)
+            self.Object.Status = "Up to date"
+        except Exception as e:
+            import traceback
+            App.Console.PrintError(traceback.format_exc())
+            try:
+                partial = doc.getObject(body_name)
+                if partial:
+                    for child in list(partial.Group):
+                        try:
+                            doc.removeObject(child.Name)
+                        except Exception:
+                            pass
+                    doc.removeObject(body_name)
+            except Exception:
+                pass
+            self.Object.Status = "Error"
+        finally:
+            if varset_name:
+                self._startWatcher(varset_name)
+            self._rebuilding = False
+
+    def force_Recompute(self):
         self._rebuild()
 
 
@@ -1964,23 +2805,28 @@ class HelixGearCommand:
             App.newDocument()
         doc = App.ActiveDocument
 
-        # Generate unique body name
-        base_name = "HelicalGear"
+        base_name = "HelixGear_values"
         unique_name = base_name
         count = 1
         while doc.getObject(unique_name):
-            unique_name = f"{base_name}{count:03d}"
+            unique_name = f"HelixGear_values{count:03d}"
             count += 1
 
-        gear_obj = doc.addObject("Part::FeaturePython", "HelixGearParameters")
-        helix_gear = HelixGear(gear_obj)
-        ViewProviderGenericGear(
-            gear_obj.ViewObject, os.path.join(smWB_icons_path, "HelicalGear.svg")
+        varset = createHelixGearVarSet(doc, unique_name)
+
+        gen_name = "Regenerate"
+        count = 1
+        while doc.getObject(gen_name):
+            gen_name = f"Regenerate{count:03d}"
+            count += 1
+        gear_obj = doc.addObject("Part::FeaturePython", gen_name)
+        HelixGearResult(gear_obj, varset)
+        ViewProviderGearResult(
+            gear_obj.ViewObject,
+            os.path.join(smWB_icons_path, "HelicalGear.svg"),
         )
 
-        gear_obj.BodyName = unique_name
-
-        doc.recompute()
+        gear_obj.Proxy.force_Recompute()
         FreeCADGui.SendMsgToActiveView("ViewFit")
         FreeCADGui.ActiveDocument.ActiveView.viewIsometric()
 
@@ -1990,10 +2836,6 @@ class HelixGearCommand:
 
     def Deactivated(self):
         """Called when workbench is deactivated."""
-        pass
-
-    def execute(self, obj):
-        """Execute the feature."""
         pass
 
 
@@ -2016,23 +2858,28 @@ class HerringboneGearCommand:
             App.newDocument()
         doc = App.ActiveDocument
 
-        # Generate unique body name
-        base_name = "HerringboneGear"
+        base_name = "HerringboneGear_values"
         unique_name = base_name
         count = 1
         while doc.getObject(unique_name):
-            unique_name = f"{base_name}{count:03d}"
+            unique_name = f"HerringboneGear_values{count:03d}"
             count += 1
 
-        gear_obj = doc.addObject("Part::FeaturePython", "HerringboneGearParameters")
-        herringbone_gear = HerringboneGear(gear_obj)
-        ViewProviderGenericGear(
-            gear_obj.ViewObject, os.path.join(smWB_icons_path, "DoubleHelicalGear.svg")
+        varset = createHerringboneGearVarSet(doc, unique_name)
+
+        gen_name = "Regenerate"
+        count = 1
+        while doc.getObject(gen_name):
+            gen_name = f"Regenerate{count:03d}"
+            count += 1
+        gear_obj = doc.addObject("Part::FeaturePython", gen_name)
+        HerringboneGearResult(gear_obj, varset)
+        ViewProviderGearResult(
+            gear_obj.ViewObject,
+            os.path.join(smWB_icons_path, "DoubleHelicalGear.svg"),
         )
 
-        gear_obj.BodyName = unique_name
-
-        doc.recompute()
+        gear_obj.Proxy.force_Recompute()
         FreeCADGui.SendMsgToActiveView("ViewFit")
         FreeCADGui.ActiveDocument.ActiveView.viewIsometric()
 
@@ -2042,10 +2889,6 @@ class HerringboneGearCommand:
 
     def Deactivated(self):
         """Called when workbench is deactivated."""
-        pass
-
-    def execute(self, obj):
-        """Execute the feature."""
         pass
 
 
