@@ -727,8 +727,6 @@ class InternalSpurGear:
         self.onChanged(obj, "Module")
 
     def onChanged(self, fp, prop):
-        self.Dirty = True
-
         if prop == "BodyName":
             old_name = self.last_body_name
             new_name = fp.BodyName
@@ -740,6 +738,10 @@ class InternalSpurGear:
                     if old_body:
                         doc.removeObject(old_name)  # removeObject expects a string
             self.last_body_name = new_name
+
+        # Only mark dirty for properties that require full gear rebuild
+        if prop in ["Module", "NumberOfTeeth", "PressureAngle", "ProfileShift", "Backlash"]:
+            self.Dirty = True
 
         if prop in [
             "Module",
@@ -884,6 +886,7 @@ class InternalSpurGearResult:
         self._last_ps = None
         self._last_bl = None
         self._last_rt = None
+        self._last_nt = None
         self._watcher = None
         self._debounce_timer = None
         self._needs_rebuild = False
@@ -927,6 +930,7 @@ class InternalSpurGearResult:
         self._last_ps = None
         self._last_bl = None
         self._last_rt = None
+        self._last_nt = None
         self._watcher = None
         self._debounce_timer = None
         self._needs_rebuild = False
@@ -940,6 +944,7 @@ class InternalSpurGearResult:
             self._last_ps = float(v.ProfileShift)
             self._last_bl = float(v.Backlash)
             self._last_rt = float(v.RimThickness.Value)
+            self._last_nt = int(v.NumberOfTeeth)
             self._startWatcher(v.Name)
             obj.Status = "Up to date"
 
@@ -947,8 +952,8 @@ class InternalSpurGearResult:
         self._stopWatcher()
         self._watcher = _VarSetWatcher(
             self, varset_name,
-            immediate=frozenset(("Module", "RimThickness")),
-            deferred=frozenset(("PressureAngle", "ProfileShift", "Backlash")),
+            immediate=frozenset(("Module",)),
+            deferred=frozenset(("NumberOfTeeth", "PressureAngle", "ProfileShift", "Backlash")),
         )
         App.addDocumentObserver(self._watcher)
 
@@ -979,25 +984,18 @@ class InternalSpurGearResult:
         if self._last_m is None:
             return True
         EPS = 1e-9
+        nt = int(v.NumberOfTeeth)
         return (abs(float(v.Module.Value) - self._last_m) > EPS or
                 abs(float(v.PressureAngle.Value) - self._last_pa) > EPS or
                 abs(float(v.ProfileShift) - self._last_ps) > EPS or
                 abs(float(v.Backlash) - self._last_bl) > EPS or
-                abs(float(v.RimThickness.Value) - self._last_rt) > EPS)
-
-    def _on_tooth_param_changed(self):
-        if self._rebuilding:
-            return
-        if self._debounce_timer is not None:
-            self._debounce_timer.stop()
-            self._debounce_timer.deleteLater()
-        self._debounce_timer = QtCore.QTimer()
-        self._debounce_timer.setSingleShot(True)
-        self._debounce_timer.timeout.connect(self._on_rebuild_timeout)
-        self._debounce_timer.start(50)
+                abs(float(v.RimThickness.Value) - self._last_rt) > EPS or
+                nt != self._last_nt)
 
     def _set_needs_rebuild(self):
         if self._rebuilding:
+            return
+        if not self._values_changed():
             return
         self._needs_rebuild = True
         try:
@@ -1014,22 +1012,7 @@ class InternalSpurGearResult:
             self._needs_rebuild = False
             return
         self._needs_rebuild = False
-        QtCore.QTimer.singleShot(0, self._deferred_rebuild)
-
-    def _deferred_rebuild(self):
-        if self._rebuilding:
-            return
-        if not self._values_changed():
-            return
-        self._rebuild()
-
-    def _on_rebuild_timeout(self):
-        self._debounce_timer = None
-        if self._rebuilding:
-            return
-        if not self._values_changed():
-            return
-        self._rebuild()
+        QtCore.QTimer.singleShot(0, self._rebuild)
 
     def _rebuild(self):
         self._rebuilding = True
@@ -1044,6 +1027,7 @@ class InternalSpurGearResult:
             self._last_ps = float(v.ProfileShift)
             self._last_bl = float(v.Backlash)
             self._last_rt = float(v.RimThickness.Value)
+            self._last_nt = int(v.NumberOfTeeth)
 
             if self._last_bl < 0:
                 self.Object.Status = "Invalid: backlash must be >= 0"
@@ -1185,8 +1169,6 @@ class InternalHelixGear:
         self.onChanged(obj, "Module")
 
     def onChanged(self, fp, prop):
-        self.Dirty = True
-
         if prop == "BodyName":
             old_name = self.last_body_name
             new_name = fp.BodyName
@@ -1198,6 +1180,10 @@ class InternalHelixGear:
                     if old_body:
                         doc.removeObject(old_name)  # removeObject expects a string
             self.last_body_name = new_name
+
+        # Only mark dirty for properties that require full gear rebuild
+        if prop in ["Module", "NumberOfTeeth", "PressureAngle", "ProfileShift", "Backlash"]:
+            self.Dirty = True
 
         if prop in [
             "Module",
@@ -1418,8 +1404,6 @@ class InternalHerringboneGear:
         self.onChanged(obj, "Module")
 
     def onChanged(self, fp, prop):
-        self.Dirty = True
-
         if prop == "BodyName":
             old_name = self.last_body_name
             new_name = fp.BodyName
@@ -1431,6 +1415,10 @@ class InternalHerringboneGear:
                     if old_body:
                         doc.removeObject(old_name)  # removeObject expects a string
             self.last_body_name = new_name
+
+        # Only mark dirty for properties that require full gear rebuild
+        if prop in ["Module", "NumberOfTeeth", "PressureAngle", "ProfileShift", "Backlash"]:
+            self.Dirty = True
 
         if prop in [
             "Module",

@@ -943,7 +943,6 @@ class SpurGear:
         if state: self.Type = state
 
     def onChanged(self, fp, prop):
-        self.Dirty = True
         if prop == "BodyName":
             old_name = self.last_body_name
             new_name = fp.BodyName
@@ -956,6 +955,9 @@ class SpurGear:
                             old_body.removeObjectsFromDocument()
                         doc.removeObject(old_name)
             self.last_body_name = new_name
+        # Only mark dirty for properties that require full gear rebuild
+        if prop in ["Module", "NumberOfTeeth", "PressureAngle", "ProfileShift", "Backlash"]:
+            self.Dirty = True
         if prop in ["Module", "NumberOfTeeth", "PressureAngle", "ProfileShift", "Backlash", "Height"]:
             try:
                 module = fp.Module.Value
@@ -1015,20 +1017,16 @@ class _VarSetWatcher:
     """
 
     def __init__(self, generator, varset_name,
-                 immediate=frozenset(("Module",)),
-                 deferred=frozenset(("PressureAngle", "ProfileShift", "Backlash"))):
+                 watched=frozenset(("Module", "NumberOfTeeth", "PressureAngle", "ProfileShift", "Backlash"))):
         self._generator = generator
         self._varset_name = varset_name
         self._doc_name = None
-        self._immediate = immediate
-        self._deferred = deferred
+        self._watched = watched
 
     def slotChangedObject(self, obj, prop):
         if obj.Name != self._varset_name:
             return
-        if prop in self._immediate:
-            self._generator._on_tooth_param_changed()
-        elif prop in self._deferred:
+        if prop in self._watched:
             self._doc_name = obj.Document.Name
             self._generator._set_needs_rebuild()
 
@@ -1060,6 +1058,7 @@ class SpurGearResult:
         self._last_pa = None
         self._last_ps = None
         self._last_bl = None
+        self._last_nt = None
         self._watcher = None
         self._rebuild_pending = False
         self._debounce_timer = None
@@ -1115,6 +1114,7 @@ class SpurGearResult:
         self._last_pa = None
         self._last_ps = None
         self._last_bl = None
+        self._last_nt = None
         self._watcher = None
         self._debounce_timer = None
         self._needs_rebuild = False
@@ -1128,12 +1128,16 @@ class SpurGearResult:
             self._last_pa = float(v.PressureAngle.Value)
             self._last_ps = float(v.ProfileShift)
             self._last_bl = float(v.Backlash)
+            self._last_nt = int(v.NumberOfTeeth)
             self._startWatcher(v.Name)
             obj.Status = "Up to date"
 
     def _startWatcher(self, varset_name):
         self._stopWatcher()
-        self._watcher = _VarSetWatcher(self, varset_name)
+        self._watcher = _VarSetWatcher(
+            self, varset_name,
+            watched=frozenset(("Module", "NumberOfTeeth", "PressureAngle", "ProfileShift", "Backlash"))
+        )
         App.addDocumentObserver(self._watcher)
 
     def _stopWatcher(self):
@@ -1174,39 +1178,24 @@ class SpurGearResult:
         pa = float(v.PressureAngle.Value)
         ps = float(v.ProfileShift)
         bl = float(v.Backlash)
+        nt = int(v.NumberOfTeeth)
         return (abs(m - self._last_m) > EPS or
                 abs(pa - self._last_pa) > EPS or
                 abs(ps - self._last_ps) > EPS or
-                abs(bl - self._last_bl) > EPS)
+                abs(bl - self._last_bl) > EPS or
+                nt != self._last_nt)
 
-    def _on_tooth_param_changed(self):
-        """Called by _VarSetWatcher when a tooth-profile property changes.
+    def _set_needs_rebuild(self):
+        """Called when any watched property changes.
 
-        Uses a restartable debounce timer so that rapid keystrokes
-        (e.g. typing "0.15" into Backlash) are batched into a single
-        rebuild after typing stops.  Each new change restarts the
-        timer, so intermediate values never trigger a rebuild.
+        Sets a flag so that slotRecomputedDocument triggers a rebuild
+        after FreeCAD finishes its expression recompute cycle.
+        This ensures read-only values (PitchDiameter, etc.) are calculated
+        FIRST via expressions, then the gear rebuilds ONCE.
         """
         if self._rebuilding:
             return
         if not self._values_changed():
-            return
-        # Stop any existing timer so it restarts from zero
-        if self._debounce_timer is not None:
-            self._debounce_timer.stop()
-            self._debounce_timer.deleteLater()
-        self._debounce_timer = QtCore.QTimer()
-        self._debounce_timer.setSingleShot(True)
-        self._debounce_timer.timeout.connect(self._on_rebuild_timeout)
-        self._debounce_timer.start(50)  # Short delay — Module is PropertyLength (commits on Enter)
-
-    def _set_needs_rebuild(self):
-        """Called when a deferred param changes (PressureAngle, ProfileShift, Backlash).
-
-        Sets a flag so that slotRecomputedDocument triggers a rebuild
-        after FreeCAD finishes its expression recompute cycle.
-        """
-        if self._rebuilding:
             return
         self._needs_rebuild = True
         try:
@@ -1231,23 +1220,7 @@ class SpurGearResult:
             self._needs_rebuild = False
             return
         self._needs_rebuild = False
-        QtCore.QTimer.singleShot(0, self._deferred_rebuild)
-
-    def _deferred_rebuild(self):
-        """Runs after exiting the slotRecomputedDocument callback."""
-        if self._rebuilding:
-            return
-        if not self._values_changed():
-            return
-        self._rebuild()
-
-    def _on_rebuild_timeout(self):
-        self._debounce_timer = None
-        if self._rebuilding:
-            return
-        if not self._values_changed():
-            return
-        self._rebuild()
+        QtCore.QTimer.singleShot(0, self._rebuild)
 
     def _rebuild(self):
         """Rebuild the gear body."""
@@ -1262,6 +1235,7 @@ class SpurGearResult:
             self._last_pa = float(v.PressureAngle.Value)
             self._last_ps = float(v.ProfileShift)
             self._last_bl = float(v.Backlash)
+            self._last_nt = int(v.NumberOfTeeth)
 
             # Validate before deleting old body — keep old gear if params are bad
             if self._last_bl < 0:
@@ -1380,6 +1354,7 @@ class HelixGearResult:
         self._last_ps = None
         self._last_bl = None
         self._last_ha = None
+        self._last_nt = None
         self._watcher = None
         self._debounce_timer = None
         self._needs_rebuild = False
@@ -1435,6 +1410,7 @@ class HelixGearResult:
         self._last_ps = None
         self._last_bl = None
         self._last_ha = None
+        self._last_nt = None
         self._watcher = None
         self._debounce_timer = None
         self._needs_rebuild = False
@@ -1448,6 +1424,7 @@ class HelixGearResult:
             self._last_ps = float(v.ProfileShift)
             self._last_bl = float(v.Backlash)
             self._last_ha = float(v.HelixAngle.Value)
+            self._last_nt = int(v.NumberOfTeeth)
             self._startWatcher(v.Name)
             obj.Status = "Up to date"
 
@@ -1455,8 +1432,7 @@ class HelixGearResult:
         self._stopWatcher()
         self._watcher = _VarSetWatcher(
             self, varset_name,
-            immediate=frozenset(("Module",)),
-            deferred=frozenset(("PressureAngle", "ProfileShift",
+            watched=frozenset(("Module", "NumberOfTeeth", "PressureAngle", "ProfileShift",
                                 "Backlash", "HelixAngle")),
         )
         App.addDocumentObserver(self._watcher)
@@ -1493,25 +1469,18 @@ class HelixGearResult:
         ps = float(v.ProfileShift)
         bl = float(v.Backlash)
         ha = float(v.HelixAngle.Value)
+        nt = int(v.NumberOfTeeth)
         return (abs(m - self._last_m) > EPS or
                 abs(pa - self._last_pa) > EPS or
                 abs(ps - self._last_ps) > EPS or
                 abs(bl - self._last_bl) > EPS or
-                abs(ha - self._last_ha) > EPS)
-
-    def _on_tooth_param_changed(self):
-        if self._rebuilding:
-            return
-        if self._debounce_timer is not None:
-            self._debounce_timer.stop()
-            self._debounce_timer.deleteLater()
-        self._debounce_timer = QtCore.QTimer()
-        self._debounce_timer.setSingleShot(True)
-        self._debounce_timer.timeout.connect(self._on_rebuild_timeout)
-        self._debounce_timer.start(50)
+                abs(ha - self._last_ha) > EPS or
+                nt != self._last_nt)
 
     def _set_needs_rebuild(self):
         if self._rebuilding:
+            return
+        if not self._values_changed():
             return
         self._needs_rebuild = True
         try:
@@ -1528,22 +1497,7 @@ class HelixGearResult:
             self._needs_rebuild = False
             return
         self._needs_rebuild = False
-        QtCore.QTimer.singleShot(0, self._deferred_rebuild)
-
-    def _deferred_rebuild(self):
-        if self._rebuilding:
-            return
-        if not self._values_changed():
-            return
-        self._rebuild()
-
-    def _on_rebuild_timeout(self):
-        self._debounce_timer = None
-        if self._rebuilding:
-            return
-        if not self._values_changed():
-            return
-        self._rebuild()
+        QtCore.QTimer.singleShot(0, self._rebuild)
 
     def _rebuild(self):
         self._rebuilding = True
@@ -1558,6 +1512,7 @@ class HelixGearResult:
             self._last_ps = float(v.ProfileShift)
             self._last_bl = float(v.Backlash)
             self._last_ha = float(v.HelixAngle.Value)
+            self._last_nt = int(v.NumberOfTeeth)
 
             if self._last_bl < 0:
                 self.Object.Status = "Invalid: backlash must be >= 0"
@@ -1663,6 +1618,7 @@ class HerringboneGearResult:
         self._last_bl = None
         self._last_a1 = None
         self._last_a2 = None
+        self._last_nt = None
         self._watcher = None
         self._debounce_timer = None
         self._needs_rebuild = False
@@ -1719,6 +1675,7 @@ class HerringboneGearResult:
         self._last_bl = None
         self._last_a1 = None
         self._last_a2 = None
+        self._last_nt = None
         self._watcher = None
         self._debounce_timer = None
         self._needs_rebuild = False
@@ -1733,6 +1690,7 @@ class HerringboneGearResult:
             self._last_bl = float(v.Backlash)
             self._last_a1 = float(v.Angle1.Value)
             self._last_a2 = float(v.Angle2.Value)
+            self._last_nt = int(v.NumberOfTeeth)
             self._startWatcher(v.Name)
             obj.Status = "Up to date"
 
@@ -1740,8 +1698,7 @@ class HerringboneGearResult:
         self._stopWatcher()
         self._watcher = _VarSetWatcher(
             self, varset_name,
-            immediate=frozenset(("Module",)),
-            deferred=frozenset(("PressureAngle", "ProfileShift",
+            watched=frozenset(("Module", "NumberOfTeeth", "PressureAngle", "ProfileShift",
                                 "Backlash", "Angle1", "Angle2")),
         )
         App.addDocumentObserver(self._watcher)
@@ -1779,23 +1736,14 @@ class HerringboneGearResult:
         bl = float(v.Backlash)
         a1 = float(v.Angle1.Value)
         a2 = float(v.Angle2.Value)
+        nt = int(v.NumberOfTeeth)
         return (abs(m - self._last_m) > EPS or
                 abs(pa - self._last_pa) > EPS or
                 abs(ps - self._last_ps) > EPS or
                 abs(bl - self._last_bl) > EPS or
                 abs(a1 - self._last_a1) > EPS or
-                abs(a2 - self._last_a2) > EPS)
-
-    def _on_tooth_param_changed(self):
-        if self._rebuilding:
-            return
-        if self._debounce_timer is not None:
-            self._debounce_timer.stop()
-            self._debounce_timer.deleteLater()
-        self._debounce_timer = QtCore.QTimer()
-        self._debounce_timer.setSingleShot(True)
-        self._debounce_timer.timeout.connect(self._on_rebuild_timeout)
-        self._debounce_timer.start(50)
+                abs(a2 - self._last_a2) > EPS or
+                nt != self._last_nt)
 
     def _set_needs_rebuild(self):
         if self._rebuilding:
@@ -1815,22 +1763,7 @@ class HerringboneGearResult:
             self._needs_rebuild = False
             return
         self._needs_rebuild = False
-        QtCore.QTimer.singleShot(0, self._deferred_rebuild)
-
-    def _deferred_rebuild(self):
-        if self._rebuilding:
-            return
-        if not self._values_changed():
-            return
-        self._rebuild()
-
-    def _on_rebuild_timeout(self):
-        self._debounce_timer = None
-        if self._rebuilding:
-            return
-        if not self._values_changed():
-            return
-        self._rebuild()
+        QtCore.QTimer.singleShot(0, self._rebuild)
 
     def _rebuild(self):
         self._rebuilding = True
@@ -1846,6 +1779,7 @@ class HerringboneGearResult:
             self._last_bl = float(v.Backlash)
             self._last_a1 = float(v.Angle1.Value)
             self._last_a2 = float(v.Angle2.Value)
+            self._last_nt = int(v.NumberOfTeeth)
 
             if self._last_bl < 0:
                 self.Object.Status = "Invalid: backlash must be >= 0"
