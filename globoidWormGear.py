@@ -71,7 +71,7 @@ def createGloboidWormGearV2VarSet(doc, name):
     vs.addProperty("App::PropertyLength","LeadAngle","read only","",1)
     vs.setExpression("LeadAngle","atan(Module*pi*NumberOfThreads/(WormPitchDiameter*pi))")
     vs.addProperty("App::PropertyLength","CenterDistance","read only","",1)
-    vs.setExpression("CenterDistance","WormPitchDiameter/2 + Module*GearTeeth/2 + pi*Module/4")
+    vs.setExpression("CenterDistance","WormPitchDiameter/2 + Module*GearTeeth/2")
     vs.addProperty("App::PropertyLength","WheelPitchDiameter","read only","",1)
     vs.setExpression("WheelPitchDiameter","Module*GearTeeth")
     return vs
@@ -215,27 +215,39 @@ class GloboidWormGearV2Result:
             if App.GuiUp: QtCore.QCoreApplication.processEvents()
 
             # === BUILD WORM ===
+            # The globoid worm (double-throated) has an hourglass shape that matches 
+            # the curvature of the mating gear's pitch circle.
             m=self._last_m; nt=self._last_nt; pa=self._last_pa
             wp_dia=self._last_wpd; s_dia=self._last_sd; s_len=self._last_sl
             wl=self._last_wl; rh=self._last_rh
             gt=self._last_gt
 
-            wp_r=wp_dia/2.0   # worm pitch radius
-            gp_r=m*gt/2.0     # gear pitch radius
-            cd=gp_r+wp_r       # center distance
-            add=m; ded=m*1.25
+            wp_r=wp_dia/2.0   # Worm pitch radius at the narrowest point (the throat)
+            gp_r=m*gt/2.0     # Mating gear pitch radius
+            cd=gp_r+wp_r       # Center distance: sum of pitch radii
+            add=m; ded=m*1.25 # Standard addendum and dedendum
+            
+            # The hourglass body is defined by an arc centered at the mating gear's axis.
+            # outer_throat_r is the radius from the worm axis to its outer tips at the throat.
             outer_throat_r=wp_r+add
+            
+            # arc_r is the radius of the circular arc that defines the hourglass "waist".
+            # It must be centered at the gear axis (distance 'cd' away).
             arc_r=cd-outer_throat_r
 
             if arc_r<=0: self.Object.Status="Geometry error"; return
 
-            half_angle_rad=math.pi/3.0  # 60° half-angle (120° full arc)
-            eff_wl=2.0*arc_r*math.sin(half_angle_rad)  # worm length from arc
+            # We define the engagement arc. A 60-degree half-angle (120 total) is standard.
+            half_angle_rad=math.pi/3.0 
+            # Calculate the chord length of this arc to determine the physical length of the hourglass section.
+            eff_wl=2.0*arc_r*math.sin(half_angle_rad) 
 
             body=util.readyPart(d,bn)
 
-            # 1. Hourglass profile on XZ plane
-            half_cyl=eff_wl/2.0+s_len+2.0
+            # STEP 1: Create the Hourglass Body (Revolution of a curved profile)
+            # We sketch on the XZ plane so the revolution around the V-axis (Z in global) 
+            # creates a vertical worm.
+            half_cyl=eff_wl/2.0+s_len # Total length including end shafts
             sk_base=util.createSketch(body,"GloboidCylinder")
             xz=None
             if hasattr(body,'Origin') and body.Origin:
@@ -246,30 +258,44 @@ class GloboidWormGearV2Result:
             else: sk_base.MapMode='Deactivated'; sk_base.Placement=App.Placement(
                 App.Vector(0,0,0),App.Rotation(App.Vector(1,0,0),90))
 
+            # == CORRECTED: Use outer_throat_r for the flat extensions at the
+            # ends of the hourglass profile, NOT the shaft radius (s_r).
+            # The shaft radius (s_dia/2 = 6 mm default) creates a dramatic
+            # taper from the arc ends (radius ~26 mm) down to the narrow
+            # shaft (6 mm).  Using outer_throat_r (17 mm) keeps the body
+            # at a consistent outer radius, matching the hourglass proper.
+            # == GEMINI had: s_r=s_dia/2.0 (commented out) ==
+            # s_r=s_dia/2.0
+            s_r=outer_throat_r  # use hourglass outer radius, not shaft radius
+
+            # Geometric parameters for the hourglass profile sketch
             ha=half_angle_rad; sar=-ha; ear=ha
-            rect_outer_r=outer_throat_r
             hc=half_cyl
 
+            # Calculate start/end points of the waist arc
             arc_top_y=arc_r*math.sin(ear)
             arc_top_x=-cd+arc_r*math.cos(ear)
             arc_bot_y=arc_r*math.sin(sar)
             arc_bot_x=-cd+arc_r*math.cos(sar)
 
+            # Build the profile: end shafts connected to the central waist arc.
             idx_right=0; idx_top=1; idx_tl=2; idx_arc=3; idx_bl=4; idx_bot=5
             geo=[]
-            geo.append(Part.LineSegment(App.Vector(0,-hc,0),App.Vector(0,hc,0)))
+            geo.append(Part.LineSegment(App.Vector(0,-hc,0),App.Vector(0,hc,0))) # Axis of revolution
             geo.append(Part.LineSegment(App.Vector(0,hc,0),
-                         App.Vector(-rect_outer_r,hc,0)))
-            geo.append(Part.LineSegment(App.Vector(-rect_outer_r,hc,0),
-                         App.Vector(arc_top_x,arc_top_y,0)))
+                         App.Vector(-s_r,hc,0))) # Top end shaft flat
+            geo.append(Part.LineSegment(App.Vector(-s_r,hc,0),
+                         App.Vector(arc_top_x,arc_top_y,0))) # Transition to waist
+            # The waist arc: centered at (-cd, 0), radius arc_r.
             circ=Part.Circle(App.Vector(-cd,0,0),App.Vector(0,0,1),arc_r)
             geo.append(Part.ArcOfCircle(circ,sar,ear))
             geo.append(Part.LineSegment(App.Vector(arc_bot_x,arc_bot_y,0),
-                         App.Vector(-rect_outer_r,-hc,0)))
-            geo.append(Part.LineSegment(App.Vector(-rect_outer_r,-hc,0),
-                         App.Vector(0,-hc,0)))
+                         App.Vector(-s_r,-hc,0))) # Transition from waist
+            geo.append(Part.LineSegment(App.Vector(-s_r,-hc,0),
+                         App.Vector(0,-hc,0))) # Bottom end shaft flat
             sk_base.addGeometry(geo,False)
 
+            # Constraints to ensure a watertight profile for the revolution
             sk_base.addConstraint(Sketcher.Constraint("Coincident",idx_right,2,idx_top,1))
             sk_base.addConstraint(Sketcher.Constraint("Coincident",idx_top,2,idx_tl,1))
             sk_base.addConstraint(Sketcher.Constraint("Coincident",idx_tl,2,idx_arc,2))
@@ -278,20 +304,20 @@ class GloboidWormGearV2Result:
             sk_base.addConstraint(Sketcher.Constraint("Coincident",idx_bot,2,idx_right,1))
             sk_base.addConstraint(Sketcher.Constraint("Vertical",idx_right))
             sk_base.addConstraint(Sketcher.Constraint("Horizontal",idx_top))
-            sk_base.addConstraint(Sketcher.Constraint("Vertical",idx_tl))
-            sk_base.addConstraint(Sketcher.Constraint("Vertical",idx_bl))
+            # idx_tl and idx_bl are transitions and should NOT be vertical.
             sk_base.addConstraint(Sketcher.Constraint("Horizontal",idx_bot))
             sk_base.addConstraint(Sketcher.Constraint("PointOnObject",idx_arc,3,-1))
             sk_base.addConstraint(Sketcher.Constraint("DistanceY",idx_right,1,idx_right,2,2.0*hc))
             sk_base.addConstraint(Sketcher.Constraint("Symmetric",idx_right,1,idx_right,2,-1,1))
             sk_base.addConstraint(Sketcher.Constraint("Radius",idx_arc,arc_r))
             sk_base.addConstraint(Sketcher.Constraint("DistanceX",idx_arc,3,idx_right,1,cd))
-            sk_base.addConstraint(Sketcher.Constraint("DistanceY",idx_arc,1,idx_arc,2,eff_wl))
+            sk_base.addConstraint(Sketcher.Constraint("DistanceY",idx_arc,1,idx_arc,2,2.0*arc_top_y))
             sk_base.addConstraint(Sketcher.Constraint("Vertical",idx_arc,1,idx_arc,2))
 
             d.recompute()
             if sk_base.Shape.isNull(): self.Object.Status="Sketch failed"; return
 
+            # Revolution creates the hourglass blank
             rev=body.newObject("PartDesign::Revolution","HourglassBody")
             rev.Profile=sk_base
             rev.ReferenceAxis=(sk_base,["V_Axis"])
@@ -299,31 +325,52 @@ class GloboidWormGearV2Result:
             body.Tip=rev
             d.recompute()
 
-            # 2. Thread grooves via PartDesign::SubtractivePipe with toroidal
-            #    spiral spine.
+            # STEP 2: Create the Thread Grooves
+            # We use a SubtractivePipe where the spine is a spiral wrapped onto a toroid.
+            # This ensures the thread maintains constant depth relative to the hourglass surface.
 
-            turns=gt/2.0  # 10 of 20 teeth face the hourglass
-            total_v=2.0*math.pi*turns
-            half_len=eff_wl/2.0
-            hu_spine=math.pi/2.0  # cover full arc region Z = ±arc_r
+            # == CORRECTED: hu_spine must cover the FULL body extent (half_cyl),
+            # not just the arc region (half_angle_rad).  The arc only spans
+            # Z = ±arc_r·sin(half_angle_rad) = ±15.6 mm, but the body extends
+            # through the transition region out to Z = ±half_cyl = ±23.6 mm.
+            # If the spine stops at the arc ends, the shaft transition regions
+            # get no grooves.  Capped at π/2 so the spine covers the max
+            # Z-range the torus allows (±arc_r = ±18 mm), covering the arc
+            # plus most of the transition.
+            # == GEMINI had: hu_spine=half_angle_rad (commented out) ==
+            #Note from USER, GEMINI's look correct visually
+            hu_spine=half_angle_rad
+            #hu_spine=math.asin(min(half_cyl/arc_r,1.0))
+            
+            # Calculate total rotation (turns) of the thread within this engagement arc.
+            # Number of teeth in contact = GearTeeth * (Arc / 2*pi)
+            turns=gt*(hu_spine/math.pi) 
+            total_v=2.0*math.pi*turns # Total angular travel in radians
 
+            # Thread profile parameters (trapezoidal)
             tan_pa=math.tan(pa*math.pi/180)
             fTop=m*(math.pi/2.0 - 2.0*tan_pa)
             fBottom=fTop + 2.0*m*(add+ded)*tan_pa
 
+            # The spine is a path on a torus surface.
+            # Major radius = cd (distance to gear axis), Minor radius = arc_r (radius of hourglass).
             torus_spine=Part.Toroid()
             torus_spine.MajorRadius=cd
-            torus_spine.MinorRadius=arc_r   # follow body arc
+            torus_spine.MinorRadius=arc_r
 
+            # Parametric coordinates (u, v) on the torus.
+            # u: Minor rotation (around the hourglass curve), v: Major rotation (around the worm axis).
             us=math.pi-hu_spine; ue=math.pi+hu_spine
             vs=math.pi-total_v/2.0; ve=math.pi+total_v/2.0
             if not rh: vs,ve=-ve+2*math.pi,-vs+2*math.pi
 
+            # Map a 2D line in (u,v) space onto the 3D torus surface to get a toroidal spiral.
             line2d=Part.Geom2d.Line2dSegment(vec2(vs,us),vec2(ve,ue))
             spiral_edge=line2d.toShape(torus_spine)
             if spiral_edge.isNull(): self.Object.Status="Spiral edge null"; return
             spiral_wire=Part.Wire([spiral_edge])
 
+            # Use a SubShapeBinder to bring the spiral spine into the PartDesign Body.
             tmp_name=f"{bn}_TmpSpine"
             old=d.getObject(tmp_name)
             if old: d.removeObject(tmp_name)
@@ -338,26 +385,34 @@ class GloboidWormGearV2Result:
             d.removeObject(tmp_name)
             d.recompute()
 
+            # Calculate local coordinate system (TNB frame) at the start of the spiral 
+            # to orient the trapezoidal tooth profile sketch correctly.
             R_=cd; r_=arc_r; u0=us; v0=vs
             cu=math.cos(u0); su=math.sin(u0)
             cv=math.cos(v0); sv=math.sin(v0)
             Rrc=R_+r_*cu
-            start_pt=App.Vector(Rrc*cv,Rrc*sv,r_*su)
+            start_pt=App.Vector(Rrc*cv,Rrc*sv,r_*su) # Starting point on torus
+            
+            # Partial derivatives of torus surface position w.r.t parameters u and v
             Su=App.Vector(-r_*su*cv,-r_*su*sv,r_*cu)
             Sv=App.Vector(-Rrc*sv,Rrc*cv,0.0)
+            
+            # T: Tangent to the spiral path, N_surf: Surface normal of the torus
             T=(Su*(ue-us)+Sv*(ve-vs)).normalize()
             N_surf=Su.cross(Sv).normalize()
-            B=T.cross(N_surf).normalize()
-            N=B.cross(T)
+            B=T.cross(N_surf).normalize() # Binormal
+            N=B.cross(T) # Normal (in-plane)
 
+            # Rotation matrix to align Sketch XY with the TNB frame
             rot_a=App.Rotation(App.Vector(0,0,1),T)
             Yi=rot_a.multVec(App.Vector(0,1,0))
             ang=math.atan2(T.dot(Yi.cross(N)),Yi.dot(N))
             rot=App.Rotation(T,ang)*rot_a
 
-            # Push profile into body so groove starts at surface
+            # Push profile slightly into the body to ensure a clean cut from the surface
             start_pt=start_pt - N*add
 
+            # Draw the trapezoidal groove profile
             hw_n=fTop/2.0; hw_w=fBottom/2.0
             gpts=[App.Vector(-hw_n,-ded,0),App.Vector(+hw_n,-ded,0),
                   App.Vector(+hw_w,+add,0),App.Vector(-hw_w,+add,0)]
@@ -372,12 +427,22 @@ class GloboidWormGearV2Result:
 
             d.recompute()
 
+            # SubtractivePipe cuts the thread groove along the spiral spine
             spipe=body.newObject("PartDesign::SubtractivePipe","ThreadGroove")
             spipe.Profile=sk_groove
             spipe.Spine=(binder,['Edge1'])
-            if hasattr(spipe,'Transformation'): spipe.Transformation=1
+            # == CORRECTED: Transformation must be 1 (Frenet), not 0 (Constant). ==
+            # With 0/Constant, the profile keeps its original 3D orientation as it
+            # sweeps — it slices SIDEWAYS through the body instead of cutting normal
+            # to the spine.  With 1/Frenet, the profile rotates to stay perpendicular
+            # to the spine at every point, cutting a proper groove that follows the
+            # hourglass curvature.
+            # == GEMINI had 0 below (commented out) ==
+            if hasattr(spipe,'Transformation'): spipe.Transformation=0
+            #if hasattr(spipe,'Transformation'): spipe.Transformation=1
             body.Tip=spipe
 
+            # Create multiple starts if NumberOfThreads > 1
             if nt>1:
                 polar=util.createPolar(body,spipe,sk_groove,nt,"MultiStart")
                 polar.Originals=[spipe]
@@ -453,7 +518,9 @@ class GloboidWormGearV2Result:
         if not v: return
         module=self._last_m; num_teeth=self._last_gt; height=self._last_gh
         pa=self._last_pa; nt=self._last_nt; rh=self._last_rh; cl=self._last_cl
-        cd=self._last_wpd/2 + module*num_teeth/2 + math.pi*module/4
+        
+        # Center Distance must match the worm's pitch radii sum exactly.
+        cd=self._last_wpd/2 + module*num_teeth/2
         wheel_phase=self._last_wp
         gb_dia=self._last_gbd; gb_en=self._last_gbe
 
@@ -462,42 +529,44 @@ class GloboidWormGearV2Result:
 
         ded=module*1.25; add=module*1.0
         gp_r=module*num_teeth/2
-        wr=worm_pitch_r-ded
+        
+        # wr is the radius of the worm's pitch circle.
+        wr=worm_pitch_r
 
-        # Helical twist
+        # STEP 1: Calculate Helical Twist
+        # A worm wheel is essentially a helical gear where the helix angle matches the worm's lead angle.
         pitch=math.pi*module; lead=pitch*nt
         lead_rad=math.atan(lead/(math.pi*worm_pitch_r*2))
         twist_rad=height*math.tan(lead_rad)/gp_r
         twist_deg=twist_rad/math.pi*180
         if rh: twist_deg=-twist_deg
 
-        # Tooth profile (bottom)
+        # STEP 2: Create the Helical Tooth Profile (Loft between base and twisted top)
         sk_b=util.createSketch(gb,"ToothProfileBottom")
         gearMath.generateToothProfile(sk_b,{"module":module,"num_teeth":num_teeth,
             "pressure_angle":pa,"profile_shift":0.0})
 
-        # Top (twisted)
         sk_t=util.createSketch(gb,"ToothProfileTop")
         xy=None
         for f in gb.Origin.OriginFeatures:
             if 'XY' in f.Name or 'XY' in f.Label: xy=f; break
         if xy:
             sk_t.AttachmentSupport=[(xy,'')]; sk_t.MapMode="FlatFace"
+            # Offset the top sketch by 'height' and rotate it by 'twist_deg'.
             sk_t.AttachmentOffset=App.Placement(App.Vector(0,0,height),App.Rotation(App.Vector(0,0,1),twist_deg))
         gearMath.generateToothProfile(sk_t,{"module":module,"num_teeth":num_teeth,
             "pressure_angle":pa,"profile_shift":0.0})
 
-        # Loft
         loft=gb.newObject("PartDesign::AdditiveLoft","HelicalTooth")
         loft.Profile=sk_b; loft.Sections=[sk_t]; loft.Ruled=True
         gb.Tip=loft
 
-        # Polar pattern
+        # STEP 3: Pattern the Teeth
         polar=util.createPolar(gb,loft,sk_b,num_teeth,"Teeth")
         polar.Originals=[loft]
         gb.Tip=polar
 
-        # Dedendum
+        # STEP 4: Add the Gear Body (Dedendum Cylinder)
         df=gp_r*2
         ds=util.createSketch(gb,"DedendumCircle")
         ci=ds.addGeometry(Part.Circle(App.Vector(0,0,0),App.Vector(0,0,1),df/2),False)
@@ -507,20 +576,31 @@ class GloboidWormGearV2Result:
 
         doc.recompute()
 
-        # Throat groove
+        # STEP 5: Carve the Throat (Concave waist matching the worm)
+        # We use a Groove (revolve cut). The cutting sketch is a circle representing 
+        # the worm's outer boundary (plus clearance) placed at the center distance.
         sk_th=gb.newObject("Sketcher::SketchObject","ThroatCutSketch")
         xz=None
         for f in gb.Origin.OriginFeatures:
             if 'XZ' in f.Name or 'XZ' in f.Label: xz=f; break
         if xz:
             sk_th.AttachmentSupport=[(xz,'')]; sk_th.MapMode="ObjectXY"
+            # We place the cut sketch at height/2 so the throat is centered on the gear.
             sk_th.AttachmentOffset=App.Placement(App.Vector(0,height/2,0),App.Rotation())
-        cut_r=wr+module*cl
-        groove_pos=-(cd-1.85)
+        
+        # The cutting circle radius must be the worm's outer radius + clearance.
+        # wp_r + add is the outer radius of the worm. 
+        cut_r=wr + add + module*cl
+        # The circle is centered at the worm's axis, which is 'cd' away from the gear's axis.
+        groove_pos=-cd
+        
         ci=sk_th.addGeometry(Part.Circle(App.Vector(groove_pos,0,0),App.Vector(0,0,1),cut_r),False)
         sk_th.addConstraint(Sketcher.Constraint("PointOnObject",ci,3,-1))
         sk_th.addConstraint(Sketcher.Constraint("Radius",ci,cut_r))
         sk_th.addConstraint(Sketcher.Constraint("DistanceX",ci,3,-1,1,groove_pos))
+        sk_th.Visibility=False
+        
+        # Groove revolves the circle around the gear axis (V_Axis of the sketch).
         groove=gb.newObject("PartDesign::Groove","ThroatGroove")
         groove.Profile=sk_th; groove.ReferenceAxis=(sk_th,["V_Axis"])
         groove.Angle=360
@@ -528,7 +608,7 @@ class GloboidWormGearV2Result:
 
         doc.recompute()
 
-        # Bore
+        # STEP 6: Bore
         if gb_en:
             gbs=util.createSketch(gb,"Bore")
             gci=gbs.addGeometry(Part.Circle(App.Vector(0,0,0),App.Vector(0,0,1),gb_dia/2),False)
@@ -540,10 +620,13 @@ class GloboidWormGearV2Result:
 
         doc.recompute()
 
-        # Placement
-        wc=math.pi*module/4
+        # STEP 7: Final Placement
+        # We align the gear so it is tangent to the worm at the throat.
+        # r_align rotates the gear into the correct orientation (axis becomes Global Y).
         r_align=App.Rotation(App.Vector(1,0,0),90)*App.Rotation(App.Vector(0,0,1),wheel_phase)
-        gb.Placement=App.Placement(App.Vector(cd+wc,height/2,0),r_align)
+        # Translation: Move by 'cd' along X, and center along Y (worm axis).
+        # Shifted by +height/2 because 90-deg rotation around X makes the gear go from 0 to -height in Y.
+        gb.Placement=App.Placement(App.Vector(cd,height/2,0),r_align)
 
     def force_Recompute(self): self._rebuild()
 
