@@ -229,10 +229,8 @@ class GloboidWormGearV2Result:
 
             if arc_r<=0: self.Object.Status="Geometry error"; return
 
-            max_wl=arc_r*2.0*0.98
-            eff_wl=wl
-            if eff_wl>max_wl: eff_wl=max_wl
-            half_angle_rad=math.asin(min(eff_wl/2.0/arc_r,1.0))
+            half_angle_rad=math.pi/3.0  # 60° half-angle (120° full arc)
+            eff_wl=2.0*arc_r*math.sin(half_angle_rad)  # worm length from arc
 
             body=util.readyPart(d,bn)
 
@@ -304,22 +302,18 @@ class GloboidWormGearV2Result:
             # 2. Thread grooves via PartDesign::SubtractivePipe with toroidal
             #    spiral spine.
 
-            lead=m*math.pi*nt
-            turns=eff_wl/lead
+            turns=gt/2.0  # 10 of 20 teeth face the hourglass
             total_v=2.0*math.pi*turns
             half_len=eff_wl/2.0
-            hu_spine=math.asin(min(half_len/gp_r,1.0))
-
-            gap_at_end=math.sqrt(max(gp_r**2-half_len**2,0))-math.sqrt(max(arc_r**2-half_len**2,0))
-            eff_add=max(add,gap_at_end+0.5)
+            hu_spine=math.pi/2.0  # cover full arc region Z = ±arc_r
 
             tan_pa=math.tan(pa*math.pi/180)
             fTop=m*(math.pi/2.0 - 2.0*tan_pa)
-            fBottom=fTop + 2.0*m*(eff_add+ded)*tan_pa
+            fBottom=fTop + 2.0*m*(add+ded)*tan_pa
 
             torus_spine=Part.Toroid()
             torus_spine.MajorRadius=cd
-            torus_spine.MinorRadius=gp_r
+            torus_spine.MinorRadius=arc_r   # follow body arc
 
             us=math.pi-hu_spine; ue=math.pi+hu_spine
             vs=math.pi-total_v/2.0; ve=math.pi+total_v/2.0
@@ -344,7 +338,7 @@ class GloboidWormGearV2Result:
             d.removeObject(tmp_name)
             d.recompute()
 
-            R_=cd; r_=gp_r; u0=us; v0=vs
+            R_=cd; r_=arc_r; u0=us; v0=vs
             cu=math.cos(u0); su=math.sin(u0)
             cv=math.cos(v0); sv=math.sin(v0)
             Rrc=R_+r_*cu
@@ -361,9 +355,12 @@ class GloboidWormGearV2Result:
             ang=math.atan2(T.dot(Yi.cross(N)),Yi.dot(N))
             rot=App.Rotation(T,ang)*rot_a
 
+            # Push profile into body so groove starts at surface
+            start_pt=start_pt - N*add
+
             hw_n=fTop/2.0; hw_w=fBottom/2.0
             gpts=[App.Vector(-hw_n,-ded,0),App.Vector(+hw_n,-ded,0),
-                  App.Vector(+hw_w,+eff_add,0),App.Vector(-hw_w,+eff_add,0)]
+                  App.Vector(+hw_w,+add,0),App.Vector(-hw_w,+add,0)]
             sk_groove=util.createSketch(body,"ThreadGrooveProfile")
             sk_groove.MapMode="Deactivated"
             sk_groove.Placement=App.Placement(start_pt,rot)
@@ -574,6 +571,7 @@ class GloboidWormGearV2Command:
         ViewProviderGearResult(go.ViewObject,mainIcon)
         go.Proxy.force_Recompute()
         FreeCADGui.SendMsgToActiveView("ViewFit")
+        FreeCADGui.ActiveDocument.ActiveView.viewFront()
 
     def IsActive(self): return True
 
