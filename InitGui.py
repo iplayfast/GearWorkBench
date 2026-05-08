@@ -62,24 +62,17 @@ class GearWorkbenchWB(Workbench):
             # List of gear creation commands
             # Generic gears replace old implementations
             gear_items = [
-                # External gears
-                "SpurGearCommand",
-                "HelixGearCommand",
-                "HerringboneGearCommand",
-                # Internal gears
-                "InternalSpurGearCommand",
-                "InternalHelixGearCommand",
-                "InternalHerringboneGearCommand",
+                # Unified gears (spur, helix, herringbone, cycloidal)
+                "GearCommand",
+                "InternalGearCommand",
                 # Systems
                 "PlanetaryGearCreatorCommand",
                 # Other gear types
                 "RackGearCreateObject",
-                "CycloidGearCreateObject",
-                "CycloidRackCreateObject",
                 "BevelGearCreateObject",
                 "CrownGearCreateObject",
                 "WormGearCreateObject",
-                "GloboidWormGearCreateObject",
+                "GloboidWormGearV2Command",
                 "HypoidGearCreateObject",
                 "ScrewGearCreateObject",
                 "NonCircularGearCreateObject",

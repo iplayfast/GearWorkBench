@@ -20,6 +20,7 @@ import os
 import math
 from PySide import QtCore
 import genericGear
+from genericGear import _VarSetWatcher, ViewProviderGearResult
 
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, "icons")
@@ -187,6 +188,272 @@ def generateCycloidGearPart(doc, parameters):
     return result
 
 
+def createCycloidGearVarSet(doc, name):
+    """Create a VarSet for CycloidGear parameters."""
+    var_set = doc.addObject("App::VarSet", name)
+    H = gearMath.generateDefaultCycloidParameters()
+
+    var_set.addProperty(
+        "App::PropertyString", "Version", "read only",
+        QT_TRANSLATE_NOOP("App::Property", "Workbench version"), 1,
+    ).Version = version
+
+    var_set.addProperty(
+        "App::PropertyInteger", "NumberOfTeeth", "CycloidGear",
+        QT_TRANSLATE_NOOP("App::Property", "Number of teeth"),
+    ).NumberOfTeeth = H["num_teeth"]
+
+    var_set.addProperty(
+        "App::PropertyLength", "Module", "CycloidGear",
+        QT_TRANSLATE_NOOP("App::Property", "Gear module (tooth size)"),
+    ).Module = H["module"]
+
+    var_set.addProperty(
+        "App::PropertyLength", "Height", "CycloidGear",
+        QT_TRANSLATE_NOOP("App::Property", "Gear thickness/height"),
+    ).Height = H["height"]
+
+    var_set.addProperty(
+        "App::PropertyFloat", "AddendumFactor", "CycloidGear",
+        QT_TRANSLATE_NOOP("App::Property", "Head height factor (standard ~1.4)"),
+    ).AddendumFactor = H["addendum_factor"]
+
+    var_set.addProperty(
+        "App::PropertyFloat", "DedendumFactor", "CycloidGear",
+        QT_TRANSLATE_NOOP("App::Property", "Root depth factor (standard ~1.6)"),
+    ).DedendumFactor = H["dedendum_factor"]
+
+    var_set.addProperty(
+        "App::PropertyLength", "BoreDiameter", "Bore",
+        QT_TRANSLATE_NOOP("App::Property", "Diameter of center bore"),
+    ).BoreDiameter = H["bore_diameter"]
+
+    var_set.addProperty(
+        "App::PropertyLength", "PitchDiameter", "read only",
+        QT_TRANSLATE_NOOP("App::Property", "Pitch diameter"), 1,
+    )
+    var_set.setExpression("PitchDiameter", "Module * NumberOfTeeth")
+
+    var_set.addProperty(
+        "App::PropertyLength", "OuterDiameter", "read only",
+        QT_TRANSLATE_NOOP("App::Property", "Tip diameter"), 1,
+    )
+    var_set.setExpression("OuterDiameter",
+        "PitchDiameter + 2 * Module * AddendumFactor")
+
+    var_set.addProperty(
+        "App::PropertyLength", "RootDiameter", "read only",
+        QT_TRANSLATE_NOOP("App::Property", "Root diameter"), 1,
+    )
+    var_set.setExpression("RootDiameter",
+        "PitchDiameter - 2 * Module * DedendumFactor")
+
+    return var_set
+
+
+class CycloidGearResult:
+    """FeaturePython for auto-regeneration of cycloid gear."""
+
+    def __init__(self, obj, varset):
+        self._varset = varset
+        self._rebuilding = False
+        self._last_m = None
+        self._last_nt = None
+        self._last_af = None
+        self._last_df = None
+        self._watcher = None
+        self._needs_rebuild = False
+        self.Type = "CycloidGearResult"
+
+        obj.addProperty(
+            "App::PropertyString", "VarSetName", "Gear",
+            QT_TRANSLATE_NOOP("App::Property", "Name of parameter VarSet"), 1,
+        ).VarSetName = varset.Name
+
+        obj.addProperty(
+            "App::PropertyString", "BodyName", "Gear",
+            QT_TRANSLATE_NOOP("App::Property", "Name of generated body"),
+        ).BodyName = varset.Name.replace("_values", "_Body", 1)
+
+        obj.addProperty(
+            "App::PropertyString", "Version", "read only",
+            QT_TRANSLATE_NOOP("App::Property", "Workbench version"), 1,
+        ).Version = version
+
+        obj.addProperty(
+            "App::PropertyString", "Status", "read only",
+            QT_TRANSLATE_NOOP("App::Property", "Regeneration status"), 1,
+        )
+
+        obj.Proxy = self
+        self.Object = obj
+        obj.Status = "Not yet generated"
+        self._startWatcher(varset.Name)
+
+    def __getstate__(self):
+        return self.Type
+
+    def __setstate__(self, state):
+        if state:
+            self.Type = state
+        self._varset = None
+        self._rebuilding = False
+        self._last_m = self._last_nt = self._last_af = self._last_df = None
+        self._watcher = None
+        self._needs_rebuild = False
+
+    def onDocumentRestored(self, obj):
+        self.Object = obj
+        v = self._getVarSet()
+        if v:
+            self._last_m = float(v.Module.Value)
+            self._last_nt = int(v.NumberOfTeeth)
+            self._last_af = float(v.AddendumFactor)
+            self._last_df = float(v.DedendumFactor)
+            self._startWatcher(v.Name)
+            obj.Status = "Up to date"
+
+    def _startWatcher(self, varset_name):
+        self._stopWatcher()
+        self._watcher = _VarSetWatcher(
+            self, varset_name,
+            watched=frozenset(("Module", "NumberOfTeeth",
+                               "AddendumFactor", "DedendumFactor")),
+        )
+        App.addDocumentObserver(self._watcher)
+
+    def _stopWatcher(self):
+        if self._watcher:
+            try:
+                App.removeDocumentObserver(self._watcher)
+            except Exception:
+                pass
+            self._watcher = None
+
+    def _getVarSet(self):
+        if self._varset is None:
+            try:
+                name = self.Object.VarSetName
+                self._varset = self.Object.Document.getObject(name)
+            except AttributeError:
+                pass
+        return self._varset
+
+    def execute(self, obj):
+        pass
+
+    def _values_changed(self):
+        v = self._getVarSet()
+        if not v:
+            return False
+        if self._last_m is None:
+            return True
+        EPS = 1e-9
+        return (abs(float(v.Module.Value) - self._last_m) > EPS or
+                int(v.NumberOfTeeth) != self._last_nt or
+                abs(float(v.AddendumFactor) - self._last_af) > EPS or
+                abs(float(v.DedendumFactor) - self._last_df) > EPS)
+
+    def _set_needs_rebuild(self):
+        if self._rebuilding:
+            return
+        if not self._values_changed():
+            return
+        self._needs_rebuild = True
+        try:
+            self.Object.Status = "Needs regeneration"
+        except Exception:
+            pass
+
+    def _on_recompute_finished(self):
+        if not self._needs_rebuild or self._rebuilding:
+            return
+        if not self._values_changed():
+            self._needs_rebuild = False
+            return
+        self._needs_rebuild = False
+        QtCore.QTimer.singleShot(0, self._deferred_rebuild)
+
+    def _deferred_rebuild(self):
+        if self._rebuilding or not self._values_changed():
+            return
+        self._rebuild()
+
+    def _rebuild(self):
+        self._rebuilding = True
+        varset_name = None
+        try:
+            v = self._getVarSet()
+            if not v:
+                return
+            varset_name = v.Name
+            self._last_m = float(v.Module.Value)
+            self._last_nt = int(v.NumberOfTeeth)
+            self._last_af = float(v.AddendumFactor)
+            self._last_df = float(v.DedendumFactor)
+
+            if self._last_m <= 0 or self._last_nt < 3:
+                self.Object.Status = "Invalid params"
+                return
+
+            body_name = str(self.Object.BodyName)
+            doc = self.Object.Document
+
+            self._stopWatcher()
+
+            old = doc.getObject(body_name)
+            if old:
+                children = list(old.Group)
+                for child in children:
+                    for prop in child.PropertiesList:
+                        try:
+                            child.setExpression(prop, None)
+                        except Exception:
+                            pass
+                for child in reversed(children):
+                    try:
+                        doc.removeObject(child.Name)
+                    except Exception:
+                        pass
+                doc.removeObject(body_name)
+
+            parameters = {
+                "module": self._last_m,
+                "num_teeth": self._last_nt,
+                "height": float(v.Height.Value),
+                "addendum_factor": self._last_af,
+                "dedendum_factor": self._last_df,
+                "body_name": body_name,
+                "bore_type": "none",
+                "bore_diameter": float(v.BoreDiameter.Value),
+            }
+            genericGear.herringboneGear(doc, parameters, 0.0, 0.0,
+                                        generateCycloidToothProfile)
+            self.Object.Status = "Up to date"
+        except Exception as e:
+            import traceback
+            App.Console.PrintError(traceback.format_exc())
+            try:
+                partial = doc.getObject(body_name)
+                if partial:
+                    for child in list(partial.Group):
+                        try:
+                            doc.removeObject(child.Name)
+                        except Exception:
+                            pass
+                    doc.removeObject(body_name)
+            except Exception:
+                pass
+            self.Object.Status = "Error"
+        finally:
+            if varset_name:
+                self._startWatcher(varset_name)
+            self._rebuilding = False
+
+    def force_Recompute(self):
+        self._rebuild()
+
+
 class CycloidGearCreateObject:
     """Command to create a new cycloid gear object."""
 
@@ -202,23 +469,29 @@ class CycloidGearCreateObject:
             App.newDocument()
         doc = App.ActiveDocument
 
-        # Unique Body Name
-        base_name = "CycloidGear"
+        base_name = "CycloidGear_values"
         unique_name = base_name
         count = 1
         while doc.getObject(unique_name):
-            unique_name = f"{base_name}{count:03d}"
+            unique_name = f"CycloidGear_values{count:03d}"
             count += 1
 
-        gear_obj = doc.addObject("Part::FeaturePython", "CycloidGearParameters")
-        cycloid_gear = CycloidGear(gear_obj)
+        varset = createCycloidGearVarSet(doc, unique_name)
 
-        gear_obj.BodyName = unique_name
+        gen_name = "Regenerate"
+        count = 1
+        while doc.getObject(gen_name):
+            gen_name = f"Regenerate{count:03d}"
+            count += 1
+        gear_obj = doc.addObject("Part::FeaturePython", gen_name)
+        CycloidGearResult(gear_obj, varset)
+        ViewProviderGearResult(
+            gear_obj.ViewObject, mainIcon,
+        )
 
-        doc.recompute()
+        gear_obj.Proxy.force_Recompute()
         FreeCADGui.SendMsgToActiveView("ViewFit")
         FreeCADGui.ActiveDocument.ActiveView.viewIsometric()
-        return cycloid_gear
 
     def IsActive(self):
         return True

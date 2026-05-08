@@ -8,6 +8,7 @@ import os
 import math
 from PySide import QtCore
 import genericScrew
+from genericGear import _VarSetWatcher, ViewProviderGearResult
 
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, "icons")
@@ -54,6 +55,194 @@ def generateScrewGearPart(doc, parameters):
     return result
 
 
+def createScrewGearVarSet(doc, name):
+    """Create a VarSet for ScrewGear parameters."""
+    vs = doc.addObject("App::VarSet", name)
+    vs.addProperty("App::PropertyString","Version","read only","",1).Version = version
+    vs.addProperty("App::PropertyInteger","NumberOfTeeth","ScrewGear","Number of teeth").NumberOfTeeth = 20
+    vs.addProperty("App::PropertyLength","Module","ScrewGear","Normal module").Module = 1.0
+    vs.addProperty("App::PropertyAngle","PressureAngle","ScrewGear","Normal pressure angle").PressureAngle = 20.0
+    vs.addProperty("App::PropertyFloat","ProfileShift","ScrewGear","Profile shift").ProfileShift = 0.0
+    vs.addProperty("App::PropertyAngle","HelixAngle","ScrewGear","Helix angle").HelixAngle = 30.0
+    vs.addProperty("App::PropertyLength","FaceWidth","ScrewGear","Face width").FaceWidth = 10.0
+    vs.addProperty("App::PropertyEnumeration","Handedness","ScrewGear","Handedness")
+    vs.Handedness = ["Right","Left"]; vs.Handedness = "Right"
+    vs.addProperty("App::PropertyLength","BoreDiameter","Bore","Bore diameter").BoreDiameter = 5.0
+    vs.addProperty("App::PropertyLength","KeywayWidth","Bore","Keyway width").KeywayWidth = 2.0
+    vs.addProperty("App::PropertyLength","KeywayDepth","Bore","Keyway depth").KeywayDepth = 1.0
+    vs.addProperty("App::PropertyBool","BoreEnabled","Bore","Enable bore").BoreEnabled = True
+    vs.addProperty("App::PropertyBool","KeywayEnabled","Bore","Enable keyway").KeywayEnabled = False
+    vs.addProperty("App::PropertyLength","PitchDiameter","read only","Transverse pitch diameter",1)
+    vs.setExpression("PitchDiameter","Module / cos(HelixAngle) * NumberOfTeeth")
+    vs.addProperty("App::PropertyLength","BaseDiameter","read only","",1)
+    vs.setExpression("BaseDiameter","PitchDiameter * cos(PressureAngle)")
+    vs.addProperty("App::PropertyLength","OuterDiameter","read only","",1)
+    vs.setExpression("OuterDiameter","PitchDiameter + 2 * Module / cos(HelixAngle) * (1 + ProfileShift)")
+    vs.addProperty("App::PropertyLength","RootDiameter","read only","",1)
+    vs.setExpression("RootDiameter","PitchDiameter - 2 * Module / cos(HelixAngle) * (1.25 - ProfileShift)")
+    return vs
+
+
+class ScrewGearResult:
+    """FeaturePython for auto-regeneration of screw gear."""
+
+    def __init__(self, obj, varset):
+        self._varset = varset; self._rebuilding = False
+        self._last_m=self._last_nt=self._last_pa=self._last_ps=self._last_ha=self._last_fw=self._last_hd=None
+        self._watcher=None; self._needs_rebuild=False; self.Type = "ScrewGearResult"
+        obj.addProperty("App::PropertyString","VarSetName","Gear","",1).VarSetName = varset.Name
+        obj.addProperty("App::PropertyString","BodyName","Gear","").BodyName = varset.Name.replace("_values","_Body",1)
+        obj.addProperty("App::PropertyString","Version","read only","",1).Version = version
+        obj.addProperty("App::PropertyString","Status","read only","",1)
+        obj.Proxy = self; self.Object = obj; obj.Status = "Not yet generated"
+        self._startWatcher(varset.Name)
+
+    def __getstate__(self): return self.Type
+    def __setstate__(self,s):
+        if s: self.Type = s
+        self._varset=None; self._rebuilding=False
+        self._last_m=self._last_nt=self._last_pa=self._last_ps=self._last_ha=self._last_fw=self._last_hd=None
+        self._watcher=None; self._needs_rebuild=False
+
+    def onDocumentRestored(self,obj):
+        self.Object=obj; v=self._getVarSet()
+        if v:
+            self._last_m=float(v.Module.Value); self._last_nt=int(v.NumberOfTeeth); self._last_pa=float(v.PressureAngle.Value)
+            self._last_ps=float(v.ProfileShift); self._last_ha=float(v.HelixAngle.Value); self._last_fw=float(v.FaceWidth.Value)
+            self._last_hd=str(v.Handedness)
+            self._startWatcher(v.Name); obj.Status="Up to date"
+
+    def _startWatcher(self,vn):
+        self._stopWatcher(); self._watcher=_VarSetWatcher(self,vn,watched=frozenset((
+            "Module","NumberOfTeeth","PressureAngle","ProfileShift","HelixAngle",
+            "FaceWidth","Handedness","BoreEnabled","KeywayEnabled","BoreDiameter",
+            "KeywayWidth","KeywayDepth")))
+        App.addDocumentObserver(self._watcher)
+
+    def _stopWatcher(self):
+        if self._watcher:
+            try: App.removeDocumentObserver(self._watcher)
+            except: pass
+            self._watcher=None
+
+    def _getVarSet(self):
+        if self._varset is None:
+            try: self._varset=self.Object.Document.getObject(self.Object.VarSetName)
+            except: pass
+        return self._varset
+
+    def execute(self,obj): pass
+
+    def _values_changed(self):
+        try:
+            v=self._getVarSet()
+            if not v or self._last_m is None: return v is not None
+            E=1e-9
+            return (abs(float(v.Module.Value)-self._last_m)>E or int(v.NumberOfTeeth)!=self._last_nt or
+                    abs(float(v.PressureAngle.Value)-self._last_pa)>E or abs(float(v.ProfileShift)-self._last_ps)>E or
+                    abs(float(v.HelixAngle.Value)-self._last_ha)>E or abs(float(v.FaceWidth.Value)-self._last_fw)>E or
+                    str(v.Handedness)!=self._last_hd)
+        except ReferenceError:
+            self._varset=None
+            return False
+
+    def _set_needs_rebuild(self):
+        if self._rebuilding or not self._values_changed(): return
+        self._needs_rebuild=True
+        try: self.Object.Status="Regenerating..."
+        except: pass
+        QtCore.QTimer.singleShot(0,self._deferred_rebuild)
+
+    def _on_recompute_finished(self):
+        if not self._needs_rebuild or self._rebuilding: return
+        if not self._values_changed(): self._needs_rebuild=False; return
+        self._needs_rebuild=False; QtCore.QTimer.singleShot(0,self._deferred_rebuild)
+
+    def _deferred_rebuild(self):
+        if self._rebuilding or not self._values_changed(): return
+        self._rebuild()
+
+    def _rebuild(self):
+        self._rebuilding=True; vn=None
+        try:
+            v=self._getVarSet()
+            if not v: return
+            vn=v.Name; bn=str(self.Object.BodyName); d=self.Object.Document
+            self._last_m=float(v.Module.Value); self._last_nt=int(v.NumberOfTeeth); self._last_pa=float(v.PressureAngle.Value)
+            self._last_ps=float(v.ProfileShift); self._last_ha=float(v.HelixAngle.Value); self._last_fw=float(v.FaceWidth.Value)
+            self._last_hd=str(v.Handedness)
+            if self._last_m<=0 or self._last_nt<3 or self._last_fw<=0: self.Object.Status="Invalid params"; return
+            self._stopWatcher()
+            old=d.getObject(bn)
+            if old:
+                ch=list(old.Group)
+                for c in ch:
+                    for p in c.PropertiesList:
+                        try: c.setExpression(p,None)
+                        except: pass
+                for c in reversed(ch):
+                    try: d.removeObject(c.Name)
+                    except: pass
+                d.removeObject(bn)
+            self.Object.Status="Generating...";
+            if App.GuiUp: QtCore.QCoreApplication.processEvents()
+            genericScrew.screwGear(d,{
+                "module":self._last_m,"num_teeth":self._last_nt,"pressure_angle":self._last_pa,
+                "profile_shift":self._last_ps,"helix_angle":self._last_ha,"face_width":self._last_fw,
+                "handedness":self._last_hd,"bore_type":"none",
+                "bore_diameter":float(v.BoreDiameter.Value),
+                "keyway_width":float(v.KeywayWidth.Value),
+                "keyway_depth":float(v.KeywayDepth.Value),"body_name":bn,
+            },gearMath.generateHelicalGearProfile)
+            bo=d.getObject(bn)
+            if bo:
+                sk=util.createSketch(bo,"Bore")
+                ci=sk.addGeometry(Part.Circle(App.Vector(0,0,0),App.Vector(0,0,1),float(v.BoreDiameter.Value)/2),False)
+                sk.addConstraint(Sketcher.Constraint("Coincident",ci,3,-1,1))
+                cst=sk.addConstraint(Sketcher.Constraint("Diameter",ci,float(v.BoreDiameter.Value)))
+                sk.setExpression(f"Constraints[{cst}]",f"<<{v.Name}>>.BoreDiameter")
+                pk=util.createPocket(bo,sk,100.0,"Bore"); pk.Reversed=True
+                pk.setExpression("Suppressed",f"<<{v.Name}>>.BoreEnabled ? False : True")
+                tiny=0.01; kw=util.createSketch(bo,"Keyway")
+                pts=[App.Vector(-0.5,-0.5,0),App.Vector(0.5,-0.5,0),App.Vector(0.5,0.5,0),App.Vector(-0.5,0.5,0)]
+                ls=[]
+                for i in range(4): ls.append(kw.addGeometry(Part.LineSegment(pts[i],pts[(i+1)%4]),False))
+                for i in range(4): kw.addConstraint(Sketcher.Constraint("Coincident",ls[i],2,ls[(i+1)%4],1))
+                kw.addConstraint(Sketcher.Constraint("Horizontal",ls[0]))
+                kw.addConstraint(Sketcher.Constraint("Vertical",ls[1]))
+                kw.addConstraint(Sketcher.Constraint("Horizontal",ls[2]))
+                kw.addConstraint(Sketcher.Constraint("Vertical",ls[3]))
+                c=kw.addConstraint(Sketcher.Constraint("DistanceX",ls[0],1,-1,1,-tiny))
+                kw.setExpression(f"Constraints[{c}]",f"<<{v.Name}>>.KeywayWidth / -2.0")
+                c=kw.addConstraint(Sketcher.Constraint("DistanceY",ls[0],1,-1,1,-tiny))
+                kw.setExpression(f"Constraints[{c}]",f"<<{v.Name}>>.BoreDiameter/2 - <<{v.Name}>>.KeywayDepth")
+                c=kw.addConstraint(Sketcher.Constraint("DistanceX",ls[0],2,-1,1,tiny))
+                kw.setExpression(f"Constraints[{c}]",f"<<{v.Name}>>.KeywayWidth / 2.0")
+                c=kw.addConstraint(Sketcher.Constraint("DistanceY",ls[1],2,-1,1,tiny))
+                kw.setExpression(f"Constraints[{c}]",f"<<{v.Name}>>.BoreDiameter/2 + <<{v.Name}>>.KeywayDepth")
+                kp=util.createPocket(bo,kw,100.0,"Keyway"); kp.Reversed=True
+                kp.setExpression("Suppressed",f"<<{v.Name}>>.KeywayEnabled ? False : True")
+                bo.Tip=kp; d.recompute()
+            self.Object.Status="Up to date"
+            if App.GuiUp: QtCore.QCoreApplication.processEvents()
+        except Exception as e:
+            import traceback; App.Console.PrintError(traceback.format_exc())
+            try:
+                p=d.getObject(bn)
+                if p:
+                    for c in list(p.Group):
+                        try: d.removeObject(c.Name)
+                        except: pass
+                    d.removeObject(bn)
+            except: pass
+            self.Object.Status="Error"
+        finally:
+            if vn: self._startWatcher(vn)
+            self._rebuilding=False
+
+    def force_Recompute(self): self._rebuild()
+
+
 class ScrewGearCreateObject:
     """Command to create a new screw gear object."""
 
@@ -68,29 +257,19 @@ class ScrewGearCreateObject:
         pass
 
     def Activated(self):
-        """Called when command is activated."""
-        if not App.ActiveDocument:
-            App.newDocument()
+        if not App.ActiveDocument: App.newDocument()
         doc = App.ActiveDocument
-
-        # --- Generate Unique Body Name ---
-        base_name = "ScrewGear"
-        unique_name = base_name
-        count = 1
-        while doc.getObject(unique_name):
-            unique_name = f"{base_name}{count:03d}"
-            count += 1
-
-        gear_obj = doc.addObject("Part::FeaturePython", "ScrewGearParameters")
-        screw_gear = ScrewGear(gear_obj)
-
-        # Assign unique name to the property so gearMath uses it
-        gear_obj.BodyName = unique_name
-
-        doc.recompute()
+        base="ScrewGear_values"; un=base; c=1
+        while doc.getObject(un): un=f"{base}{c:03d}"; c+=1
+        vs=createScrewGearVarSet(doc,un)
+        gn="Regenerate"; c=1
+        while doc.getObject(gn): gn=f"Regenerate{c:03d}"; c+=1
+        go=doc.addObject("Part::FeaturePython",gn)
+        ScrewGearResult(go,vs)
+        ViewProviderGearResult(go.ViewObject,mainIcon)
+        go.Proxy.force_Recompute()
         FreeCADGui.SendMsgToActiveView("ViewFit")
         FreeCADGui.ActiveDocument.ActiveView.viewIsometric()
-        return screw_gear
 
     def IsActive(self):
         """Return True if command can be activated."""

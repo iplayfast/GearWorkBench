@@ -353,7 +353,7 @@ def createPolar(body, pad, sketch, count, name=''):
     return polar
 
 
-def createPocket(body, sketch, height, name='', reversed=True):
+def createPocket(body, sketch, height, name='', suppressed=False):
     """Create a pocket feature from a sketch.
 
     Args:
@@ -361,7 +361,7 @@ def createPocket(body, sketch, height, name='', reversed=True):
         sketch: Sketch to pocket
         height: Pocket depth
         name: Base name for the pocket (will append 'Pocket')
-        reversed: Direction
+        suppressed: Whether to suppress (disable) the pocket
 
     Returns:
         Created pocket object
@@ -371,7 +371,7 @@ def createPocket(body, sketch, height, name='', reversed=True):
     body.addObject(pocket)
     pocket.Length = height
     pocket.Profile = sketch
-    pocket.Reversed = reversed
+    pocket.Suppressed = suppressed
     # Hide the sketch directly (pocket.Profile returns a tuple, not the object)
     sketch.Visibility = False
     return pocket
@@ -380,7 +380,7 @@ def createPocket(body, sketch, height, name='', reversed=True):
 # BORE GENERATION
 # ============================================================================
 
-def createBore(body, parameters, height, placement=None, reversed=True):
+def createBore(body, parameters, height, placement=None, suppressed=False, keyway_enabled=True):
     """
     Dispatcher function to create a bore based on type.
     """
@@ -388,39 +388,39 @@ def createBore(body, parameters, height, placement=None, reversed=True):
     bore_diameter = parameters.get("bore_diameter", 0.0)
 
     if bore_type == "circular":
-        _createCircularBore(body, bore_diameter, height, placement, reversed)
+        _createCircularBore(body, bore_diameter, height, placement, suppressed)
     elif bore_type == "square":
-        _createSquareBore(body, bore_diameter, parameters.get("square_corner_radius", 0.5), height, placement, reversed)
+        _createSquareBore(body, bore_diameter, parameters.get("square_corner_radius", 0.5), height, placement, suppressed)
     elif bore_type == "hexagonal":
-        _createHexBore(body, bore_diameter, parameters.get("hex_corner_radius", 0.5), height, placement, reversed)
+        _createHexBore(body, bore_diameter, parameters.get("hex_corner_radius", 0.5), height, placement, suppressed)
     elif bore_type == "keyway":
-        _createKeywayBore(body, bore_diameter, parameters.get("keyway_width", 2.0), parameters.get("keyway_depth", 1.0), height, placement, reversed)
+        _createKeywayBore(body, bore_diameter, parameters.get("keyway_width", 2.0), parameters.get("keyway_depth", 1.0), height, placement, suppressed, keyway_enabled)
 
 def _applyPlacement(sketch, placement):
     if placement:
         sketch.MapMode = 'Deactivated'
         sketch.Placement = placement
 
-def _createCircularBore(body, diameter, height, placement, reversed):
+def _createCircularBore(body, diameter, height, placement, suppressed):
     sketch = createSketch(body, 'CircularBore')
     _applyPlacement(sketch, placement)
     circle = sketch.addGeometry(Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), diameter / 2), False)
     sketch.addConstraint(Sketcher.Constraint('Coincident', circle, 3, -1, 1))
     sketch.addConstraint(Sketcher.Constraint('Diameter', circle, diameter))
-    pocket = createPocket(body, sketch, height, 'Bore', reversed)
+    pocket = createPocket(body, sketch, height, 'Bore', suppressed)
     body.Tip = pocket
 
-def _createSquareBore(body, size, corner_radius, height, placement, reversed):
+def _createSquareBore(body, size, corner_radius, height, placement, suppressed):
     sketch = createSketch(body, 'SquareBore')
     _applyPlacement(sketch, placement)
     half_size = size / (2 * math.sqrt(2))
     points = [App.Vector(half_size, half_size, 0), App.Vector(-half_size, half_size, 0),
               App.Vector(-half_size, -half_size, 0), App.Vector(half_size, -half_size, 0)]
     addPolygonToSketch(sketch, points, closed=True)
-    pocket = createPocket(body, sketch, height, 'Bore', reversed)
+    pocket = createPocket(body, sketch, height, 'Bore', suppressed)
     body.Tip = pocket
 
-def _createHexBore(body, diameter, corner_radius, height, placement, reversed):
+def _createHexBore(body, diameter, corner_radius, height, placement, suppressed):
     sketch = createSketch(body, 'HexBore')
     _applyPlacement(sketch, placement)
     radius = diameter / 2.0
@@ -429,37 +429,38 @@ def _createHexBore(body, diameter, corner_radius, height, placement, reversed):
         angle = i * 60 * DEG_TO_RAD
         points.append(App.Vector(radius * math.cos(angle), radius * math.sin(angle), 0))
     addPolygonToSketch(sketch, points, closed=True)
-    pocket = createPocket(body, sketch, height, 'Bore', reversed)
+    pocket = createPocket(body, sketch, height, 'Bore', suppressed)
     body.Tip = pocket
 
-def _createKeywayBore(body, bore_diameter, keyway_width, keyway_depth, height, placement, reversed):
+def _createKeywayBore(body, bore_diameter, keyway_width, keyway_depth, height, placement, suppressed, keyway_enabled=True):
     # Keyway consists of a circular bore + a keyway slot
-    _createCircularBore(body, bore_diameter, height, placement, reversed)
+    _createCircularBore(body, bore_diameter, height, placement, suppressed)
 
-    sketch = createSketch(body, 'Keyway')
-    _applyPlacement(sketch, placement)
+    if keyway_enabled:
+        sketch = createSketch(body, 'Keyway')
+        _applyPlacement(sketch, placement)
 
-    # Keyway rectangle: centered on X-axis, extending from bore edge outward
-    w = keyway_width / 2.0
-    r = bore_diameter / 2.0  # Bore radius
+        # Keyway rectangle: centered on X-axis, extending from bore edge outward
+        w = keyway_width / 2.0
+        r = bore_diameter / 2.0  # Bore radius
 
-    # Position keyway so it starts at the bore edge and extends outward
-    # The keyway slot sits at the top of the bore (positive Y direction)
-    points = [
-        App.Vector(-w, r - keyway_depth, 0),  # Inner edge, left
-        App.Vector(w, r - keyway_depth, 0),   # Inner edge, right
-        App.Vector(w, r + keyway_depth, 0),   # Outer edge, right
-        App.Vector(-w, r + keyway_depth, 0),  # Outer edge, left
-    ]
+        # Position keyway so it starts at the bore edge and extends outward
+        # The keyway slot sits at the top of the bore (positive Y direction)
+        points = [
+            App.Vector(-w, r - keyway_depth, 0),  # Inner edge, left
+            App.Vector(w, r - keyway_depth, 0),   # Inner edge, right
+            App.Vector(w, r + keyway_depth, 0),   # Outer edge, right
+            App.Vector(-w, r + keyway_depth, 0),  # Outer edge, left
+        ]
 
-    addPolygonToSketch(sketch, points, closed=True)
+        addPolygonToSketch(sketch, points, closed=True)
 
-    # Recompute to ensure sketch is valid
-    body.Document.recompute()
+        # Recompute to ensure sketch is valid
+        body.Document.recompute()
 
-    # Keyway pocket cuts through the full height (same as bore)
-    pocket = createPocket(body, sketch, height, 'Keyway', reversed)
-    body.Tip = pocket
+        # Keyway pocket cuts through the full height (same as bore)
+        pocket = createPocket(body, sketch, height, 'Keyway', suppressed)
+        body.Tip = pocket
 def _constrainSketchPoint(sketch, geo_index, point_index, point_vector):
     """
     Helper function to apply X and Y position constraints to a specific point 

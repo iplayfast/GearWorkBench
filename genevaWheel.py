@@ -20,6 +20,7 @@ import Sketcher
 import os
 import math
 from PySide import QtCore
+from genericGear import _VarSetWatcher, ViewProviderGearResult
 
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, "icons")
@@ -142,7 +143,8 @@ def _buildGenevaWheel(doc, params, geo, body_name):
     cy_stop = c * math.sin(stop_angle)
 
     sk_stop = _addCircleSketch(body, "StopArc", y, cx_stop, cy_stop)
-    stop_pocket = util.createPocket(body, sk_stop, h, "StopArc", reversed=True)
+    stop_pocket = util.createPocket(body, sk_stop, h, "StopArc")
+    stop_pocket.Reversed = True
     body.Tip = stop_pocket
 
     stop_polar = util.createPolar(body, stop_pocket, sk_disc, n, "StopArcs")
@@ -177,7 +179,8 @@ def _buildGenevaWheel(doc, params, geo, body_name):
     geo_indices = [g0, g1, g2, g3]
     util.finalizeSketchGeometry(sk_slot, geo_indices, closed=True, block=True)
 
-    slot_pocket = util.createPocket(body, sk_slot, h, "Slot", reversed=True)
+    slot_pocket = util.createPocket(body, sk_slot, h, "Slot")
+    slot_pocket.Reversed = True
     body.Tip = slot_pocket
 
     slot_polar = util.createPolar(body, slot_pocket, sk_disc, n, "Slots")
@@ -228,7 +231,8 @@ def _buildDriveCrank(doc, params, geo, body_name):
 
     # 3. Clearance cut — circle at (-m, 0), radius v, through locking disc
     sk_clear = _addCircleSketch(body, "ClearanceCut", v, -m, 0.0)
-    clear_pocket = util.createPocket(body, sk_clear, h, "ClearanceCut", reversed=True)
+    clear_pocket = util.createPocket(body, sk_clear, h, "ClearanceCut")
+    clear_pocket.Reversed = True
     body.Tip = clear_pocket
 
     # 4. Drive pin — circle at (-a, 0), radius p, same height as locking disc
@@ -277,6 +281,145 @@ def generateGenevaWheelPart(doc, params):
     doc.recompute()
 
 
+def createGenevaWheelVarSet(doc, name):
+    vs = doc.addObject("App::VarSet", name)
+    H = gearMath.generateDefaultGenevaParameters()
+    vs.addProperty("App::PropertyString","Version","read only","",1).Version = version
+    vs.addProperty("App::PropertyInteger","NumberOfSlots","GenevaWheel","Number of slots").NumberOfSlots = H["num_slots"]
+    vs.addProperty("App::PropertyLength","CrankRadius","GenevaWheel","Drive crank radius").CrankRadius = H["crank_radius"]
+    vs.addProperty("App::PropertyLength","PinRadius","GenevaWheel","Drive pin radius").PinRadius = H["pin_radius"]
+    vs.addProperty("App::PropertyLength","Tolerance","GenevaWheel","Clearance tolerance").Tolerance = H["tolerance"]
+    vs.addProperty("App::PropertyLength","Height","GenevaWheel","Mechanism thickness").Height = H["height"]
+    vs.addProperty("App::PropertyLength","CrankBoreDiameter","CrankBore","Crank bore diameter").CrankBoreDiameter = H["bore_diameter"]
+    vs.addProperty("App::PropertyBool","CrankBoreEnabled","CrankBore","Enable crank bore").CrankBoreEnabled = True
+    vs.addProperty("App::PropertyLength","WheelBoreDiameter","WheelBore","Wheel bore diameter").WheelBoreDiameter = H["bore_diameter"]
+    vs.addProperty("App::PropertyBool","WheelBoreEnabled","WheelBore","Enable wheel bore").WheelBoreEnabled = True
+    vs.addProperty("App::PropertyLength","WheelRadius","read only","Wheel radius",1)
+    vs.addProperty("App::PropertyLength","CenterDistance","read only","Center distance",1)
+    vs.addProperty("App::PropertyLength","SlotCenterWidth","read only","Slot center width",1)
+    return vs
+
+
+class GenevaWheelResult:
+    def __init__(self, obj, varset):
+        self._varset=varset; self._rebuilding=False
+        self._last_ns=self._last_cr=self._last_pr=self._last_tol=self._last_h=None
+        self._watcher=None; self._needs_rebuild=False; self.Type="GenevaWheelResult"
+        obj.addProperty("App::PropertyString","VarSetName","Gear","",1).VarSetName=varset.Name
+        obj.addProperty("App::PropertyString","CrankBodyName","GenevaWheel","").CrankBodyName=varset.Name.replace("_values","_Crank",1)
+        obj.addProperty("App::PropertyString","WheelBodyName","GenevaWheel","").WheelBodyName=varset.Name.replace("_values","_Wheel",1)
+        obj.addProperty("App::PropertyString","Version","read only","",1).Version=version
+        obj.addProperty("App::PropertyString","Status","read only","",1)
+        obj.Proxy=self; self.Object=obj; obj.Status="Not yet generated"
+        self._startWatcher(varset.Name)
+    def __getstate__(self): return self.Type
+    def __setstate__(self,s):
+        if s: self.Type=s
+        self._varset=None; self._rebuilding=False
+        self._last_ns=self._last_cr=self._last_pr=self._last_tol=self._last_h=None
+        self._watcher=None; self._needs_rebuild=False
+    def onDocumentRestored(self,obj):
+        self.Object=obj; v=self._getVarSet()
+        if v:
+            self._last_ns=int(v.NumberOfSlots); self._last_cr=float(v.CrankRadius.Value)
+            self._last_pr=float(v.PinRadius.Value); self._last_tol=float(v.Tolerance.Value)
+            self._last_h=float(v.Height.Value)
+            self._startWatcher(v.Name); obj.Status="Up to date"
+    def _startWatcher(self,vn):
+        self._stopWatcher(); self._watcher=_VarSetWatcher(self,vn,watched=frozenset((
+            "NumberOfSlots","CrankRadius","PinRadius","Tolerance","Height",
+            "CrankBoreEnabled","CrankBoreDiameter","WheelBoreEnabled","WheelBoreDiameter")))
+        App.addDocumentObserver(self._watcher)
+    def _stopWatcher(self):
+        if self._watcher:
+            try: App.removeDocumentObserver(self._watcher)
+            except: pass
+            self._watcher=None
+    def _getVarSet(self):
+        if self._varset is None:
+            try: self._varset=self.Object.Document.getObject(self.Object.VarSetName)
+            except: pass
+        return self._varset
+    def execute(self,obj): pass
+    def _values_changed(self):
+        v=self._getVarSet()
+        if not v or self._last_ns is None: return v is not None
+        E=1e-9
+        return (int(v.NumberOfSlots)!=self._last_ns or abs(float(v.CrankRadius.Value)-self._last_cr)>E or
+                abs(float(v.PinRadius.Value)-self._last_pr)>E or abs(float(v.Tolerance.Value)-self._last_tol)>E or
+                abs(float(v.Height.Value)-self._last_h)>E)
+    def _set_needs_rebuild(self):
+        if self._rebuilding or not self._values_changed(): return
+        self._needs_rebuild=True
+        try: self.Object.Status="Regenerating..."
+        except: pass
+        QtCore.QTimer.singleShot(0,self._deferred_rebuild)
+    def _on_recompute_finished(self):
+        if not self._needs_rebuild or self._rebuilding: return
+        if not self._values_changed(): self._needs_rebuild=False; return
+        self._needs_rebuild=False; QtCore.QTimer.singleShot(0,self._deferred_rebuild)
+    def _deferred_rebuild(self):
+        if self._rebuilding or not self._values_changed(): return
+        self._rebuild()
+    def _rebuild(self):
+        self._rebuilding=True; vn=None
+        try:
+            v=self._getVarSet()
+            if not v: return
+            vn=v.Name; d=self.Object.Document
+            self._last_ns=int(v.NumberOfSlots); self._last_cr=float(v.CrankRadius.Value)
+            self._last_pr=float(v.PinRadius.Value); self._last_tol=float(v.Tolerance.Value)
+            self._last_h=float(v.Height.Value)
+            if self._last_ns<3 or self._last_cr<=0 or self._last_h<=0:
+                self.Object.Status="Invalid params"; return
+            for bn in [self.Object.CrankBodyName, self.Object.WheelBodyName]:
+                self._stopWatcher()
+                old=d.getObject(bn)
+                if old:
+                    ch=list(old.Group)
+                    for c in ch:
+                        for p in c.PropertiesList:
+                            try: c.setExpression(p,None)
+                            except: pass
+                    for c in reversed(ch):
+                        try: d.removeObject(c.Name)
+                        except: pass
+                    d.removeObject(bn)
+            self.Object.Status="Generating..."
+            if App.GuiUp: QtCore.QCoreApplication.processEvents()
+            generateGenevaWheelPart(d,{
+                "num_slots":self._last_ns,"crank_radius":self._last_cr,"pin_radius":self._last_pr,
+                "tolerance":self._last_tol,"height":self._last_h,
+                "crank_body_name":str(self.Object.CrankBodyName),
+                "wheel_body_name":str(self.Object.WheelBodyName),
+            })
+            for name, boren, borkey in [
+                (str(self.Object.CrankBodyName),"CrankBoreEnabled","CrankBoreDiameter"),
+                (str(self.Object.WheelBodyName),"WheelBoreEnabled","WheelBoreDiameter"),
+            ]:
+                bo=d.getObject(name)
+                if bo:
+                    sk=util.createSketch(bo,"Bore")
+                    bd=float(getattr(v,borkey).Value)
+                    ci=sk.addGeometry(Part.Circle(App.Vector(0,0,0),App.Vector(0,0,1),bd/2),False)
+                    sk.addConstraint(Sketcher.Constraint("Coincident",ci,3,-1,1))
+                    cs=sk.addConstraint(Sketcher.Constraint("Diameter",ci,bd))
+                    sk.setExpression(f"Constraints[{cs}]",f"<<{v.Name}>>.{borkey}")
+                    pk=util.createPocket(bo,sk,100.0,"Bore"); pk.Reversed=True
+                    pk.setExpression("Suppressed",f"<<{v.Name}>>.{boren} ? False : True")
+                    bo.Tip=pk
+            d.recompute()
+            self.Object.Status="Up to date"
+            if App.GuiUp: QtCore.QCoreApplication.processEvents()
+        except Exception as e:
+            import traceback; App.Console.PrintError(traceback.format_exc())
+            self.Object.Status="Error"
+        finally:
+            if vn: self._startWatcher(vn)
+            self._rebuilding=False
+    def force_Recompute(self): self._rebuild()
+
+
 # ============================================================================
 # FEATUREPYTHON CLASSES
 # ============================================================================
@@ -295,37 +438,19 @@ class GenevaWheelCreateObject:
         }
 
     def Activated(self):
-        if not App.ActiveDocument:
-            App.newDocument()
+        if not App.ActiveDocument: App.newDocument()
         doc = App.ActiveDocument
-
-        # Unique body names for crank
-        crank_base = "GenevaCrank"
-        crank_name = crank_base
-        count = 1
-        while doc.getObject(crank_name):
-            crank_name = f"{crank_base}{count:03d}"
-            count += 1
-
-        # Unique body names for wheel
-        wheel_base = "GenevaWheel"
-        wheel_name = wheel_base
-        count = 1
-        while doc.getObject(wheel_name):
-            wheel_name = f"{wheel_base}{count:03d}"
-            count += 1
-
-        gear_obj = doc.addObject("Part::FeaturePython", "GenevaWheelParameters")
-        geneva = GenevaWheel(gear_obj)
-        ViewProviderGenevaWheel(gear_obj.ViewObject)
-
-        gear_obj.CrankBodyName = crank_name
-        gear_obj.WheelBodyName = wheel_name
-
-        doc.recompute()
+        base = "GenevaWheel_values"; un = base; c = 1
+        while doc.getObject(un): un = f"{base}{c:03d}"; c += 1
+        vs = createGenevaWheelVarSet(doc, un)
+        gn = "Regenerate"; c = 1
+        while doc.getObject(gn): gn = f"Regenerate{c:03d}"; c += 1
+        go = doc.addObject("Part::FeaturePython", gn)
+        GenevaWheelResult(go, vs)
+        ViewProviderGearResult(go.ViewObject, mainIcon)
+        go.Proxy.force_Recompute()
         FreeCADGui.SendMsgToActiveView("ViewFit")
         FreeCADGui.ActiveDocument.ActiveView.viewIsometric()
-        return geneva
 
     def IsActive(self):
         return True

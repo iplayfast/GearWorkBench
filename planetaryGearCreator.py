@@ -23,10 +23,19 @@ except ImportError:
     GUI_AVAILABLE = False
 
 # Import gear creation functions and feature classes
-from genericGear import spurGear, helixGear, herringboneGear
-from genericGear import SpurGear, HelixGear, HerringboneGear, ViewProviderGenericGear
-from genericInternalGear import internalSpurGear, internalHelixGear, internalHerringboneGear
-from genericInternalGear import InternalSpurGear, InternalHelixGear, InternalHerringboneGear
+from genericGear import (
+    spurGear, helixGear, herringboneGear,
+    SpurGear, HelixGear, HerringboneGear, ViewProviderGenericGear,
+    GearResult,
+    ViewProviderGearResult,
+    createGearVarSet,
+)
+from genericInternalGear import (
+    internalSpurGear, internalHelixGear, internalHerringboneGear,
+    InternalSpurGear, InternalHelixGear, InternalHerringboneGear,
+    InternalGearResult,
+    createInternalGearVarSet,
+)
 import util
 
 # Get icons path
@@ -82,6 +91,26 @@ def calculateSunTeeth(planet: int, ring: int) -> int:
         Number of sun gear teeth
     """
     return ring - 2 * planet
+
+
+def _nearby_values(current: int, step: int, count: int = 2,
+                    min_val: int = 6, max_val: int = 200) -> str:
+    """Build a label string showing nearby valid values around *current*.
+    
+    Example for current=20, step=3:  "17, 20, 23"  (with current marked).
+    """
+    parts = []
+    for offset in range(-count * step, (count + 1) * step, step):
+        v = current + offset
+        if v < min_val or v > max_val:
+            continue
+        if v == current:
+            parts.append(f"->{v}<-")
+        else:
+            parts.append(str(v))
+        if len(parts) >= count * 2 + 1:
+            break
+    return ", ".join(parts)
 
 
 def validatePlanetInterference(sun_teeth: int, planet_teeth: int, num_planets: int,
@@ -234,11 +263,68 @@ def calculatePlanetaryPositions(sun_teeth: int, planet_teeth: int, ring_teeth: i
 # Gear Creation Function
 # ============================================================================
 
+def _makeGear(doc, gear_type, is_internal, name, params, positions, icon, idx=None):
+    """Create a single gear using the unified VarSet + Result pattern."""
+    create_var = createInternalGearVarSet if is_internal else createGearVarSet
+    result_cls = InternalGearResult if is_internal else GearResult
+
+    vs_name = f"{name}_values"
+    count = 1
+    while doc.getObject(vs_name):
+        vs_name = f"{name}_values{count:03d}"
+        count += 1
+    varset = create_var(doc, vs_name)
+
+    varset.GearType = gear_type
+    varset.ToothProfile = params.get("tooth_profile", "Involute")
+    varset.NumberOfTeeth = params["teeth"]
+    varset.Module = params["module"]
+    varset.Height = params["height"]
+    varset.PressureAngle = params["pressure_angle"]
+    varset.ProfileShift = params["profile_shift"]
+    varset.Backlash = params["backlash"]
+    varset.Angle1 = params.get("angle1", 0.0)
+    varset.Angle2 = params.get("angle2", 0.0)
+    if params.get("tooth_profile") == "Cycloidal":
+        varset.AddendumFactor = params.get("addendum_factor", 1.4)
+        varset.DedendumFactor = params.get("dedendum_factor", 1.6)
+    if hasattr(varset, "BoreEnabled"):
+        varset.BoreEnabled = False
+    if hasattr(varset, "KeywayEnabled"):
+        varset.KeywayEnabled = False
+    if hasattr(varset, "RimThickness") and "rim" in params:
+        varset.RimThickness = params["rim"]
+
+    gen_name = f"Regenerate_{name}"
+    count = 1
+    while doc.getObject(gen_name):
+        gen_name = f"Regenerate_{name}{count:03d}"
+        count += 1
+    gear_obj = doc.addObject("Part::FeaturePython", gen_name)
+    result_cls(gear_obj, varset)
+    ViewProviderGearResult(gear_obj.ViewObject, icon)
+
+    gear_obj.Proxy.force_Recompute()
+
+    # Position the body
+    if positions:
+        body = doc.getObject(gear_obj.BodyName)
+        if body:
+            tx, ty, tz, angle = positions
+            body.Placement = App.Placement(
+                App.Vector(tx, ty, tz),
+                App.Rotation(App.Vector(0, 0, 1), angle),
+            )
+
+    return {"gear": gear_obj, "varset": varset}
+
+
 def createPlanetarySystem(doc, gear_type: str, sun_teeth: int, planet_teeth: int,
                           ring_teeth: int, num_planets: int, module: float,
                           pressure_angle: float, height: float, profile_shift: float,
                           backlash: float, helix_angle: float = 0.0,
-                          angle2: float = None) -> Dict:
+                          angle2: float = None,
+                          tooth_profile: str = "Involute") -> Dict:
     """Create complete planetary gear system with all gears positioned.
 
     Creates FeaturePython objects with editable properties for each gear.
@@ -261,125 +347,49 @@ def createPlanetarySystem(doc, gear_type: str, sun_teeth: int, planet_teeth: int
     Returns:
         Dictionary with created gear parameter objects
     """
-    # Select appropriate feature classes and icons
-    if gear_type == "Spur":
-        ExternalGearClass = SpurGear
-        InternalGearClass = InternalSpurGear
-        external_icon = "spurGear.svg"
-        internal_icon = "internalSpurGear.svg"
-    elif gear_type == "Helix":
-        ExternalGearClass = HelixGear
-        InternalGearClass = InternalHelixGear
-        external_icon = "HelicalGear.svg"
-        internal_icon = "internalHelicalGear.svg"
-    elif gear_type == "Herringbone":
-        ExternalGearClass = HerringboneGear
-        InternalGearClass = InternalHerringboneGear
-        external_icon = "herringboneGear.svg"
-        internal_icon = "internalHerringboneGear.svg"
-    else:
-        raise ValueError(f"Unknown gear type: {gear_type}")
+    ext_icon = {"Spur": "spurGear.svg", "Helix": "HelicalGear.svg", "Herringbone": "DoubleHelicalGear.svg"}
+    int_icon = {"Spur": "internalSpurGear.svg", "Helix": "internalHelicalGear.svg", "Herringbone": "InternalDoubleHelicalGear.svg"}
+    ext_f = os.path.join(smWB_icons_path, ext_icon[gear_type])
+    int_f = os.path.join(smWB_icons_path, int_icon[gear_type])
 
-    # Calculate positions
     positions = calculatePlanetaryPositions(sun_teeth, planet_teeth, ring_teeth,
                                            num_planets, module, helix_angle)
 
-    # CRITICAL: For helical/herringbone gears, planets have OPPOSITE helix angle from sun/ring
-    planet_helix_angle = -helix_angle if helix_angle != 0.0 else 0.0
-    planet_angle2 = -angle2 if angle2 is not None else None
+    planet_helix = -helix_angle if helix_angle != 0.0 else 0.0
+    planet_a2 = -angle2 if angle2 is not None else None
 
-    # ===== CREATE SUN GEAR =====
-    sun_obj = doc.addObject("Part::FeaturePython", "SunGearParameters")
-    sun_gear = ExternalGearClass(sun_obj)
-    ViewProviderGenericGear(sun_obj.ViewObject, os.path.join(smWB_icons_path, external_icon))
-
-    # Set sun gear properties
-    # Set BodyName first before other properties to ensure body is created with correct name
-    sun_obj.BodyName = "Sun_Gear"
-    sun_obj.Module = module
-    sun_obj.NumberOfTeeth = sun_teeth
-    sun_obj.PressureAngle = pressure_angle
-    sun_obj.Height = height
-    sun_obj.ProfileShift = profile_shift
-    sun_obj.Backlash = backlash
-    sun_obj.OriginX = 0.0
-    sun_obj.OriginY = 0.0
-    sun_obj.OriginZ = 0.0
-    sun_obj.Angle = 0.0
-    sun_obj.BoreType = "none"
-
-    if gear_type == "Helix":
-        sun_obj.HelixAngle = helix_angle
-    elif gear_type == "Herringbone":
-        sun_obj.Angle1 = helix_angle
-        sun_obj.Angle2 = angle2
-
+    # ---- sun ----
+    sun_p = {"teeth": sun_teeth, "module": module, "height": height,
+             "pressure_angle": pressure_angle, "profile_shift": profile_shift,
+             "backlash": backlash, "tooth_profile": tooth_profile,
+             "angle1": helix_angle, "angle2": angle2}
+    sun_r = _makeGear(doc, gear_type, False, "SunGear", sun_p,
+                      (0.0, 0.0, 0.0, 0.0), ext_f)
     App.Console.PrintMessage(f"Created sun gear with {sun_teeth} teeth\n")
 
-    # ===== CREATE PLANET GEARS =====
+    # ---- planets ----
     planet_objs = []
-    for i, (x, y, z, angle) in enumerate(positions["planet_positions"]):
-        planet_obj = doc.addObject("Part::FeaturePython", f"Planet{i+1}GearParameters")
-        planet_gear = ExternalGearClass(planet_obj)
-        ViewProviderGenericGear(planet_obj.ViewObject, os.path.join(smWB_icons_path, external_icon))
+    for i, pos in enumerate(positions["planet_positions"]):
+        pp = {"teeth": planet_teeth, "module": module, "height": height,
+              "pressure_angle": pressure_angle, "profile_shift": profile_shift,
+              "backlash": backlash, "tooth_profile": tooth_profile,
+              "angle1": planet_helix, "angle2": planet_a2}
+        pr = _makeGear(doc, gear_type, False, f"Planet{i+1}Gear", pp, pos, ext_f)
+        planet_objs.append(pr)
+        App.Console.PrintMessage(f"Created planet {i+1} ({planet_teeth}t) at ({pos[0]:.1f},{pos[1]:.1f})\n")
 
-        # Set planet gear properties
-        planet_obj.BodyName = f"Planet_Gear_{i+1}"
-        planet_obj.Module = module
-        planet_obj.NumberOfTeeth = planet_teeth
-        planet_obj.PressureAngle = pressure_angle
-        planet_obj.Height = height
-        planet_obj.ProfileShift = profile_shift
-        planet_obj.Backlash = backlash
-        planet_obj.OriginX = x
-        planet_obj.OriginY = y
-        planet_obj.OriginZ = z
-        planet_obj.Angle = angle
-        planet_obj.BoreType = "none"
-
-        if gear_type == "Helix":
-            planet_obj.HelixAngle = planet_helix_angle  # OPPOSITE angle
-        elif gear_type == "Herringbone":
-            planet_obj.Angle1 = planet_helix_angle  # OPPOSITE angles
-            planet_obj.Angle2 = planet_angle2
-
-        planet_objs.append(planet_obj)
-        App.Console.PrintMessage(f"Created planet gear {i+1} with {planet_teeth} teeth at ({x:.1f}, {y:.1f})\n")
-
-    # ===== CREATE RING GEAR =====
-    ring_obj = doc.addObject("Part::FeaturePython", "RingGearParameters")
-    ring_gear = InternalGearClass(ring_obj)
-    ViewProviderGenericGear(ring_obj.ViewObject, os.path.join(smWB_icons_path, internal_icon))
-
-    # Set ring gear properties
-    # NOTE: Internal gears don't have OriginX/Y/Z or Angle properties
-    # They are always created at origin and must be moved manually if needed
-    ring_obj.BodyName = "Ring_Gear"
-    ring_obj.Module = module
-    ring_obj.NumberOfTeeth = ring_teeth
-    ring_obj.PressureAngle = pressure_angle
-    ring_obj.Height = height
-    ring_obj.ProfileShift = profile_shift
-    ring_obj.Backlash = backlash
-    ring_obj.RimThickness = 3.0
-
-    if gear_type == "Helix":
-        ring_obj.HelixAngle = helix_angle  # Same as sun
-    elif gear_type == "Herringbone":
-        ring_obj.Angle1 = helix_angle  # Same as sun
-        ring_obj.Angle2 = angle2
-
+    # ---- ring ----
+    ring_p = {"teeth": ring_teeth, "module": module, "height": height,
+              "pressure_angle": pressure_angle, "profile_shift": profile_shift,
+              "backlash": backlash, "rim": 3.0, "tooth_profile": tooth_profile,
+              "angle1": helix_angle, "angle2": angle2}
+    ring_r = _makeGear(doc, gear_type, True, "RingGear", ring_p,
+                       (0.0, 0.0, 0.0, 0.0), int_f)
     App.Console.PrintMessage(f"Created ring gear with {ring_teeth} teeth\n")
-    App.Console.PrintMessage(f"Planetary system complete: {num_planets} planets, center distance = {positions['center_distance']:.2f}mm\n")
+    App.Console.PrintMessage(f"Planetary system complete: {num_planets} planets, "
+                             f"center distance = {positions['center_distance']:.2f}mm\n")
 
-    # Let FreeCAD handle recomputation naturally after all properties are set
-    # Calling recompute() manually causes deleted object errors
-
-    return {
-        "sun": sun_obj,
-        "planets": planet_objs,
-        "ring": ring_obj
-    }
+    return {"sun": sun_r, "planets": planet_objs, "ring": ring_r}
 
 
 # ============================================================================
@@ -466,7 +476,7 @@ if GUI_AVAILABLE:
             self.sun_teeth_spin.setValue(20)
             sun_layout.addWidget(self.sun_teeth_spin)
             self.sun_teeth_label = QtGui.QLabel("")
-            self.sun_teeth_label.setStyleSheet("color: blue; font-weight: bold;")
+            self.sun_teeth_label.setStyleSheet("color: #E0A000; font-weight: bold;")
             sun_layout.addWidget(self.sun_teeth_label)
             sun_layout.addStretch()
             teeth_layout.addLayout(sun_layout)
@@ -479,7 +489,7 @@ if GUI_AVAILABLE:
             self.planet_teeth_spin.setValue(15)
             planet_layout.addWidget(self.planet_teeth_spin)
             self.planet_teeth_label = QtGui.QLabel("")
-            self.planet_teeth_label.setStyleSheet("color: blue; font-weight: bold;")
+            self.planet_teeth_label.setStyleSheet("color: #E0A000; font-weight: bold;")
             planet_layout.addWidget(self.planet_teeth_label)
             planet_layout.addStretch()
             teeth_layout.addLayout(planet_layout)
@@ -492,7 +502,7 @@ if GUI_AVAILABLE:
             self.ring_teeth_spin.setValue(50)
             ring_layout.addWidget(self.ring_teeth_spin)
             self.ring_teeth_label = QtGui.QLabel("50 (calculated)")
-            self.ring_teeth_label.setStyleSheet("color: blue; font-weight: bold;")
+            self.ring_teeth_label.setStyleSheet("color: #E0A000; font-weight: bold;")
             ring_layout.addWidget(self.ring_teeth_label)
             ring_layout.addStretch()
             teeth_layout.addLayout(ring_layout)
@@ -645,9 +655,49 @@ if GUI_AVAILABLE:
 
             self.recalculateAndValidate()
 
+        def _hint_for(self, vary: str, current: int, step: int,
+                      num_planets: int, module: float, helix: float,
+                      count: int = 2) -> str:
+            """Comma-separated nearby valid values for the varied parameter."""
+            valid = []
+            for offset in range(-count * step, (count + 1) * step, step):
+                v = current + offset
+                if v < 6 or v > 200:
+                    continue
+                if self.lock_sun_planet_radio.isChecked():
+                    if vary == "sun":
+                        s, p, r = v, self.planet_teeth_value, calculateRingTeeth(v, self.planet_teeth_value)
+                    else:
+                        s, p, r = self.sun_teeth_value, v, calculateRingTeeth(self.sun_teeth_value, v)
+                elif self.lock_sun_ring_radio.isChecked():
+                    if vary == "sun":
+                        p2 = calculatePlanetTeeth(v, self.ring_teeth_value)
+                        if p2 is None: continue
+                        s, p, r = v, p2, self.ring_teeth_value
+                    else:
+                        p2 = calculatePlanetTeeth(self.sun_teeth_value, v)
+                        if p2 is None: continue
+                        s, p, r = self.sun_teeth_value, p2, v
+                else:  # lock_planet_ring
+                    if vary == "planet":
+                        s, p, r = calculateSunTeeth(v, self.ring_teeth_value), v, self.ring_teeth_value
+                    else:
+                        s, p, r = calculateSunTeeth(self.planet_teeth_value, v), self.planet_teeth_value, v
+                if s < 6 or p < 6 or r < 20:
+                    continue
+                ok, _ = validatePlanetarySystem(s, p, r, num_planets, module, helix)
+                if ok:
+                    valid.append(f"->{v}<-" if v == current else str(v))
+                    if len(valid) >= count * 2 + 1:
+                        break
+            return ", ".join(valid)
+
         def recalculateAndValidate(self):
             """Recalculate dependent values and validate system."""
-            # Get current values and calculate dependent value
+            num_planets = self.num_planets_spin.value()
+            module = self.module_spin.value()
+            helix = self.helix_angle_spin.value() if self.gear_type_combo.currentText() != "Spur" else 0.0
+
             if self.lock_sun_planet_radio.isChecked():
                 sun = self.sun_teeth_spin.value()
                 planet = self.planet_teeth_spin.value()
@@ -656,6 +706,8 @@ if GUI_AVAILABLE:
                 self.sun_teeth_value = sun
                 self.planet_teeth_value = planet
                 self.ring_teeth_value = ring
+                self.sun_teeth_label.setText(self._hint_for("sun", sun, 1, num_planets, module, helix))
+                self.planet_teeth_label.setText(self._hint_for("planet", planet, 1, num_planets, module, helix))
             elif self.lock_sun_ring_radio.isChecked():
                 sun = self.sun_teeth_spin.value()
                 ring = self.ring_teeth_spin.value()
@@ -670,6 +722,8 @@ if GUI_AVAILABLE:
                 self.sun_teeth_value = sun
                 self.planet_teeth_value = planet
                 self.ring_teeth_value = ring
+                self.sun_teeth_label.setText(self._hint_for("sun", sun, 2, num_planets, module, helix))
+                self.ring_teeth_label.setText(self._hint_for("ring", ring, 2, num_planets, module, helix))
             else:  # lock_planet_ring
                 planet = self.planet_teeth_spin.value()
                 ring = self.ring_teeth_spin.value()
@@ -678,11 +732,8 @@ if GUI_AVAILABLE:
                 self.sun_teeth_value = sun
                 self.planet_teeth_value = planet
                 self.ring_teeth_value = ring
-
-            # Validate full system
-            num_planets = self.num_planets_spin.value()
-            module = self.module_spin.value()
-            helix_angle = self.helix_angle_spin.value() if self.gear_type_combo.currentText() != "Spur" else 0.0
+                self.planet_teeth_label.setText(self._hint_for("planet", planet, 2, num_planets, module, helix))
+                self.ring_teeth_label.setText(self._hint_for("ring", ring, 2, num_planets, module, helix))
 
             is_valid, message = validatePlanetarySystem(
                 self.sun_teeth_value,
@@ -690,11 +741,11 @@ if GUI_AVAILABLE:
                 self.ring_teeth_value,
                 num_planets,
                 module,
-                helix_angle
+                helix
             )
 
             if is_valid:
-                self.validation_label.setText(message)
+                self.validation_label.setText(f"✓ {message}" if message and "OK" not in message else "✓ All constraints satisfied")
                 self.validation_label.setStyleSheet("color: green; font-weight: bold;")
                 self.create_btn.setEnabled(True)
             else:

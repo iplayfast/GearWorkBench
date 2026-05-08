@@ -19,6 +19,8 @@ import Sketcher
 import os
 import math
 import genericBevel
+from PySide import QtCore
+from genericGear import _VarSetWatcher, ViewProviderGearResult
 
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, "icons")
@@ -64,6 +66,381 @@ def generateBevelGearPart(doc, parameters):
     return result
 
 
+def createBevelGearVarSet(doc, name):
+    """Create a VarSet for BevelGear parameters."""
+    var_set = doc.addObject("App::VarSet", name)
+
+    var_set.addProperty(
+        "App::PropertyString", "Version", "read only",
+        QT_TRANSLATE_NOOP("App::Property", "Workbench version"), 1,
+    ).Version = "0.2"
+
+    var_set.addProperty(
+        "App::PropertyInteger", "NumberOfTeeth", "BevelGear",
+        QT_TRANSLATE_NOOP("App::Property", "Number of teeth"),
+    ).NumberOfTeeth = 20
+
+    var_set.addProperty(
+        "App::PropertyLength", "Module", "BevelGear",
+        QT_TRANSLATE_NOOP("App::Property", "Gear module (tooth size)"),
+    ).Module = 1.0
+
+    var_set.addProperty(
+        "App::PropertyAngle", "PressureAngle", "BevelGear",
+        QT_TRANSLATE_NOOP("App::Property", "Pressure angle (normally 20)"),
+    ).PressureAngle = 20.0
+
+    var_set.addProperty(
+        "App::PropertyAngle", "PitchAngle", "BevelGear",
+        QT_TRANSLATE_NOOP("App::Property", "Pitch cone angle (45° for 1:1)"),
+    ).PitchAngle = 45.0
+
+    var_set.addProperty(
+        "App::PropertyAngle", "SpiralAngle", "BevelGear",
+        QT_TRANSLATE_NOOP("App::Property", "Spiral angle (0 for straight)"),
+    ).SpiralAngle = 0.0
+
+    var_set.addProperty(
+        "App::PropertyLength", "FaceWidth", "BevelGear",
+        QT_TRANSLATE_NOOP("App::Property", "Face width along cone surface"),
+    ).FaceWidth = 5.0
+
+    var_set.addProperty(
+        "App::PropertyLength", "BoreDiameter", "Bore",
+        QT_TRANSLATE_NOOP("App::Property", "Diameter of center bore"),
+    ).BoreDiameter = 5.0
+
+    var_set.addProperty(
+        "App::PropertyLength", "KeywayWidth", "Bore",
+        QT_TRANSLATE_NOOP("App::Property", "Width of keyway (DIN 6885)"),
+    ).KeywayWidth = 2.0
+
+    var_set.addProperty(
+        "App::PropertyLength", "KeywayDepth", "Bore",
+        QT_TRANSLATE_NOOP("App::Property", "Depth of keyway"),
+    ).KeywayDepth = 1.0
+
+    var_set.addProperty(
+        "App::PropertyBool", "BoreEnabled", "Bore",
+        QT_TRANSLATE_NOOP("App::Property", "Enable bore hole"),
+    ).BoreEnabled = True
+
+    var_set.addProperty(
+        "App::PropertyBool", "KeywayEnabled", "Bore",
+        QT_TRANSLATE_NOOP("App::Property", "Enable keyway in bore"),
+    ).KeywayEnabled = False
+
+    var_set.addProperty(
+        "App::PropertyLength", "PitchDiameter", "read only",
+        QT_TRANSLATE_NOOP("App::Property", "Pitch diameter"), 1,
+    )
+    var_set.setExpression("PitchDiameter", "Module * NumberOfTeeth")
+
+    var_set.addProperty(
+        "App::PropertyLength", "ConeDistance", "read only",
+        QT_TRANSLATE_NOOP("App::Property", "Outer cone distance"), 1,
+    )
+    var_set.setExpression("ConeDistance",
+        "PitchDiameter / 2 / sin(PitchAngle)")
+
+    return var_set
+
+
+class BevelGearResult:
+    """FeaturePython for auto-regeneration of bevel gear."""
+
+    def __init__(self, obj, varset):
+        self._varset = varset
+        self._rebuilding = False
+        self._last_m = None
+        self._last_nt = None
+        self._last_pa = None
+        self._last_pt = None
+        self._last_sa = None
+        self._last_fw = None
+        self._watcher = None
+        self._needs_rebuild = False
+        self.Type = "BevelGearResult"
+
+        obj.addProperty(
+            "App::PropertyString", "VarSetName", "Gear",
+            QT_TRANSLATE_NOOP("App::Property", "Name of parameter VarSet"), 1,
+        ).VarSetName = varset.Name
+
+        obj.addProperty(
+            "App::PropertyString", "BodyName", "Gear",
+            QT_TRANSLATE_NOOP("App::Property", "Name of generated body"),
+        ).BodyName = varset.Name.replace("_values", "_Body", 1)
+
+        obj.addProperty(
+            "App::PropertyString", "Version", "read only",
+            QT_TRANSLATE_NOOP("App::Property", "Workbench version"), 1,
+        ).Version = "0.2"
+
+        obj.addProperty(
+            "App::PropertyString", "Status", "read only",
+            QT_TRANSLATE_NOOP("App::Property", "Regeneration status"), 1,
+        )
+
+        obj.Proxy = self
+        self.Object = obj
+        obj.Status = "Not yet generated"
+        self._startWatcher(varset.Name)
+
+    def __getstate__(self):
+        return self.Type
+
+    def __setstate__(self, state):
+        if state:
+            self.Type = state
+        self._varset = None
+        self._rebuilding = False
+        self._last_m = self._last_nt = self._last_pa = None
+        self._last_pt = self._last_sa = self._last_fw = None
+        self._watcher = None
+        self._needs_rebuild = False
+
+    def onDocumentRestored(self, obj):
+        self.Object = obj
+        v = self._getVarSet()
+        if v:
+            self._last_m = float(v.Module.Value)
+            self._last_nt = int(v.NumberOfTeeth)
+            self._last_pa = float(v.PressureAngle.Value)
+            self._last_pt = float(v.PitchAngle.Value)
+            self._last_sa = float(v.SpiralAngle.Value)
+            self._last_fw = float(v.FaceWidth.Value)
+            self._startWatcher(v.Name)
+            obj.Status = "Up to date"
+
+    def _startWatcher(self, varset_name):
+        self._stopWatcher()
+        self._watcher = _VarSetWatcher(
+            self, varset_name,
+            watched=frozenset(("Module", "NumberOfTeeth", "PressureAngle",
+                               "PitchAngle", "SpiralAngle", "FaceWidth")),
+        )
+        App.addDocumentObserver(self._watcher)
+
+    def _stopWatcher(self):
+        if self._watcher:
+            try:
+                App.removeDocumentObserver(self._watcher)
+            except Exception:
+                pass
+            self._watcher = None
+
+    def _getVarSet(self):
+        if self._varset is None:
+            try:
+                name = self.Object.VarSetName
+                self._varset = self.Object.Document.getObject(name)
+            except AttributeError:
+                pass
+        return self._varset
+
+    def execute(self, obj):
+        pass
+
+    def _values_changed(self):
+        v = self._getVarSet()
+        if not v:
+            return False
+        if self._last_m is None:
+            return True
+        EPS = 1e-9
+        return (abs(float(v.Module.Value) - self._last_m) > EPS or
+                int(v.NumberOfTeeth) != self._last_nt or
+                abs(float(v.PressureAngle.Value) - self._last_pa) > EPS or
+                abs(float(v.PitchAngle.Value) - self._last_pt) > EPS or
+                abs(float(v.SpiralAngle.Value) - self._last_sa) > EPS or
+                abs(float(v.FaceWidth.Value) - self._last_fw) > EPS)
+
+    def _set_needs_rebuild(self):
+        if self._rebuilding:
+            return
+        if not self._values_changed():
+            return
+        self._needs_rebuild = True
+        try:
+            self.Object.Status = "Regenerating..."
+        except Exception:
+            pass
+        QtCore.QTimer.singleShot(0, self._deferred_rebuild)
+
+    def _on_recompute_finished(self):
+        if not self._needs_rebuild or self._rebuilding:
+            return
+        if not self._values_changed():
+            self._needs_rebuild = False
+            return
+        self._needs_rebuild = False
+        QtCore.QTimer.singleShot(0, self._deferred_rebuild)
+
+    def _deferred_rebuild(self):
+        if self._rebuilding or not self._values_changed():
+            return
+        self._rebuild()
+
+    def _rebuild(self):
+        self._rebuilding = True
+        varset_name = None
+        try:
+            v = self._getVarSet()
+            if not v:
+                return
+            varset_name = v.Name
+            self._last_m = float(v.Module.Value)
+            self._last_nt = int(v.NumberOfTeeth)
+            self._last_pa = float(v.PressureAngle.Value)
+            self._last_pt = float(v.PitchAngle.Value)
+            self._last_sa = float(v.SpiralAngle.Value)
+            self._last_fw = float(v.FaceWidth.Value)
+
+            if self._last_m <= 0 or self._last_nt < 3 or self._last_fw <= 0:
+                self.Object.Status = "Invalid params"
+                return
+            if self._last_pt <= 0 or self._last_pt > 90:
+                self.Object.Status = "Pitch angle must be 0-90°"
+                return
+
+            body_name = str(self.Object.BodyName)
+            doc = self.Object.Document
+
+            self._stopWatcher()
+
+            old = doc.getObject(body_name)
+            if old:
+                children = list(old.Group)
+                for child in children:
+                    for prop in child.PropertiesList:
+                        try:
+                            child.setExpression(prop, None)
+                        except Exception:
+                            pass
+                for child in reversed(children):
+                    try:
+                        doc.removeObject(child.Name)
+                    except Exception:
+                        pass
+                doc.removeObject(body_name)
+
+            self.Object.Status = "Generating gear geometry..."
+            if App.GuiUp:
+                QtCore.QCoreApplication.processEvents()
+
+            parameters = {
+                "module": self._last_m,
+                "num_teeth": self._last_nt,
+                "pressure_angle": self._last_pa,
+                "pitch_angle": self._last_pt,
+                "spiral_angle": self._last_sa,
+                "face_width": self._last_fw,
+                "bore_type": "none",
+                "bore_diameter": float(v.BoreDiameter.Value),
+                "keyway_width": float(v.KeywayWidth.Value),
+                "keyway_depth": float(v.KeywayDepth.Value),
+                "body_name": body_name,
+            }
+            genericBevel.bevelGear(doc, parameters,
+                                   gearMath.generateToothProfile)
+
+            # Flip so the small end (inner sketch) faces the viewer
+            body_out = doc.getObject(body_name)
+            if body_out:
+                body_out.Placement = App.Placement(
+                    App.Vector(0, 0, 0),
+                    App.Rotation(App.Vector(1, 0, 0), 180),
+                )
+
+            # Always create bore and keyway sketches (suppressed when disabled)
+            sin_delta = math.sin(math.radians(self._last_pt))
+            if sin_delta < 0.001:
+                sin_delta = 0.001
+            cone_dist = (self._last_m * self._last_nt / 2.0) / sin_delta
+
+            # Bore sketch + pocket (suppressed via <<v>>.BoreEnabled)
+            bore_sk = util.createSketch(body_out, "Bore")
+            bore_circle = bore_sk.addGeometry(
+                Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1),
+                            float(v.BoreDiameter.Value) / 2.0),
+                False)
+            bore_sk.addConstraint(Sketcher.Constraint("Coincident", bore_circle, 3, -1, 1))
+            cst = bore_sk.addConstraint(
+                Sketcher.Constraint("Diameter", bore_circle, float(v.BoreDiameter.Value)))
+            bore_sk.setExpression(f"Constraints[{cst}]", f"<<{v.Name}>>.BoreDiameter")
+            bore_sk.Placement = App.Placement(
+                App.Vector(0, 0, cone_dist), App.Rotation(0, 0, 0))
+            bore_sk.MapMode = "Deactivated"
+            bore_pocket = util.createPocket(body_out, bore_sk, cone_dist + 10.0, "Bore")
+            bore_pocket.setExpression("Length", f"<<{v.Name}>>.ConeDistance + 10mm")
+            bore_pocket.setExpression("Suppressed", f"<<{v.Name}>>.BoreEnabled ? False : True")
+
+            # Keyway sketch + pocket (suppressed via <<v>>.KeywayEnabled)
+            tiny = 0.01
+            kw_sk = util.createSketch(body_out, "Keyway")
+            pts = [App.Vector(-0.5, -0.5, 0), App.Vector(0.5, -0.5, 0),
+                   App.Vector(0.5, 0.5, 0), App.Vector(-0.5, 0.5, 0)]
+            kw_lines = []
+            for i in range(4):
+                kw_lines.append(kw_sk.addGeometry(
+                    Part.LineSegment(pts[i], pts[(i + 1) % 4]), False))
+            for i in range(4):
+                kw_sk.addConstraint(Sketcher.Constraint("Coincident",
+                    kw_lines[i], 2, kw_lines[(i + 1) % 4], 1))
+            kw_sk.addConstraint(Sketcher.Constraint("Horizontal", kw_lines[0]))
+            kw_sk.addConstraint(Sketcher.Constraint("Vertical", kw_lines[1]))
+            kw_sk.addConstraint(Sketcher.Constraint("Horizontal", kw_lines[2]))
+            kw_sk.addConstraint(Sketcher.Constraint("Vertical", kw_lines[3]))
+            cst = kw_sk.addConstraint(Sketcher.Constraint("DistanceX",
+                kw_lines[0], 1, -1, 1, -tiny))
+            kw_sk.setExpression(f"Constraints[{cst}]", f"<<{v.Name}>>.KeywayWidth / -2.0")
+            cst = kw_sk.addConstraint(Sketcher.Constraint("DistanceY",
+                kw_lines[0], 1, -1, 1, -tiny))
+            kw_sk.setExpression(f"Constraints[{cst}]",
+                f"<<{v.Name}>>.BoreDiameter / 2.0 - <<{v.Name}>>.KeywayDepth")
+            cst = kw_sk.addConstraint(Sketcher.Constraint("DistanceX",
+                kw_lines[0], 2, -1, 1, tiny))
+            kw_sk.setExpression(f"Constraints[{cst}]", f"<<{v.Name}>>.KeywayWidth / 2.0")
+            cst = kw_sk.addConstraint(Sketcher.Constraint("DistanceY",
+                kw_lines[1], 2, -1, 1, tiny))
+            kw_sk.setExpression(f"Constraints[{cst}]",
+                f"<<{v.Name}>>.BoreDiameter / 2.0 + <<{v.Name}>>.KeywayDepth")
+            kw_sk.Placement = App.Placement(
+                App.Vector(0, 0, cone_dist), App.Rotation(0, 0, 0))
+            kw_sk.MapMode = "Deactivated"
+            kw_pocket = util.createPocket(body_out, kw_sk, cone_dist + 10.0, "Keyway")
+            kw_pocket.setExpression("Suppressed", f"<<{v.Name}>>.KeywayEnabled ? False : True")
+            body_out.Tip = kw_pocket
+            doc.recompute()
+
+            self.Object.Status = "Up to date"
+            if App.GuiUp:
+                QtCore.QCoreApplication.processEvents()
+        except Exception as e:
+            import traceback
+            App.Console.PrintError(traceback.format_exc())
+            try:
+                partial = doc.getObject(body_name)
+                if partial:
+                    for child in list(partial.Group):
+                        try:
+                            doc.removeObject(child.Name)
+                        except Exception:
+                            pass
+                    doc.removeObject(body_name)
+            except Exception:
+                pass
+            self.Object.Status = "Error"
+        finally:
+            if varset_name:
+                self._startWatcher(varset_name)
+            self._rebuilding = False
+
+    def force_Recompute(self):
+        self._rebuild()
+
+
 class BevelGearCreateObject:
     def GetResources(self):
         return {
@@ -77,20 +454,28 @@ class BevelGearCreateObject:
             App.newDocument()
         doc = App.ActiveDocument
 
-        base_name = "BevelGear"
+        base_name = "BevelGear_values"
         unique_name = base_name
         count = 1
         while doc.getObject(unique_name):
-            unique_name = f"{base_name}{count:03d}"
+            unique_name = f"BevelGear_values{count:03d}"
             count += 1
 
-        gear_obj = doc.addObject("Part::FeaturePython", "BevelGearParameters")
-        gear = BevelGear(gear_obj)
-        gear_obj.BodyName = unique_name
+        varset = createBevelGearVarSet(doc, unique_name)
 
-        doc.recompute()
+        gen_name = "Regenerate"
+        count = 1
+        while doc.getObject(gen_name):
+            gen_name = f"Regenerate{count:03d}"
+            count += 1
+        gear_obj = doc.addObject("Part::FeaturePython", gen_name)
+        BevelGearResult(gear_obj, varset)
+        ViewProviderGearResult(
+            gear_obj.ViewObject, mainIcon,
+        )
+
+        gear_obj.Proxy.force_Recompute()
         FreeCADGui.SendMsgToActiveView("ViewFit")
-        return gear
 
     def IsActive(self):
         return True
@@ -267,8 +652,6 @@ class BevelGear:
                 App.Console.PrintError(f"Bevel Error: {e}\n")
 
     def execute(self, obj):
-        import PySide.QtCore as QtCore
-
         t = QtCore.QTimer()
         t.singleShot(50, self.recompute)
 

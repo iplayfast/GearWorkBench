@@ -89,7 +89,7 @@ def screwGear(doc, parameters, profile_func):
     tooth_profile_sketch = util.createSketch(body, "ToothProfile2D")
 
     profile_params = parameters.copy()
-    profile_params["module"] = transverse_mod
+    profile_params["module"] = module  # normal module — profile func converts if needed
     profile_params["pressure_angle"] = pressure_angle_t_deg
 
     profile_func(tooth_profile_sketch, profile_params)

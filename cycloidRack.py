@@ -69,7 +69,7 @@ def generateCycloidRackToothProfile(sketch, parameters):
     for i in range(steps + 1):
         t = i * (t_max_add / steps)
         x = half_tooth_width - r_roll * (t - math.sin(t))
-        y = r_roll * (1.0 - math.cos(t))
+        y = -r_roll * (1.0 - math.cos(t))  # negative = toward viewer
         addendum_pts.append(App.Vector(x, y, 0))
 
     # Dedendum (Root)
@@ -79,9 +79,8 @@ def generateCycloidRackToothProfile(sketch, parameters):
     dedendum_pts = []
     for i in range(steps + 1):
         t = i * (t_max_ded / steps)
-        # Use ADDITION to make root wider (flare outwards)
         x = half_tooth_width + r_roll * (t - math.sin(t))
-        y = -r_roll * (1.0 - math.cos(t))
+        y = r_roll * (1.0 - math.cos(t))  # positive = away from viewer
         dedendum_pts.append(App.Vector(x, y, 0))
 
     right_flank = list(reversed(dedendum_pts)) + addendum_pts[1:]

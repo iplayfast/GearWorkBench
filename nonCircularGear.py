@@ -18,6 +18,7 @@ import os
 import math
 from PySide import QtCore
 import genericNonCircular
+from genericGear import _VarSetWatcher, ViewProviderGearResult
 
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, "icons")
@@ -83,6 +84,342 @@ def generateLobedProfile(parameters):
     return profile_points
 
 
+def _generateToothProfilePoints(module, num_teeth, pressure_angle_deg=20.0, profile_shift=0.0):
+    """Generate involute tooth profile points relative to the pitch point.
+
+    Returns two lists of App.Vector points in a local coordinate frame where:
+      - Origin is at the pitch point
+      - Y-axis points radially outward (tooth extends in +Y)
+      - X-axis points in the tangent direction
+
+    Returns:
+        (right_flank, left_flank)
+        right_flank: list from root to tip on the right side
+        left_flank:  list from tip to root on the left side (mirrored, reversed)
+    """
+    pressure_angle_rad = pressure_angle_deg * util.DEG_TO_RAD
+
+    dw = module * num_teeth
+    rb = dw * math.cos(pressure_angle_rad) / 2.0
+    r_pitch = dw / 2.0
+    ra = r_pitch + module * gearMath.ADDENDUM_FACTOR
+    rf = r_pitch - module * gearMath.DEDENDUM_FACTOR
+
+    s_pitch = module * (math.pi / 2.0 + 2.0 * profile_shift * math.tan(pressure_angle_rad))
+    inv_alpha = math.tan(pressure_angle_rad) - pressure_angle_rad
+    theta_base = s_pitch / dw + inv_alpha
+    rotation = math.pi / 2.0 - theta_base
+
+    num_points = 12
+    start_radius = max(rb + 0.001, rf)
+    right_flank = []
+
+    for i in range(num_points):
+        t = i / (num_points - 1)
+        r = start_radius + t * (ra - start_radius)
+
+        if r <= rb:
+            roll_angle = 0.0
+        else:
+            phi = math.acos(rb / r)
+            roll_angle = math.tan(phi)
+
+        x_inv = rb * (math.cos(roll_angle) + roll_angle * math.sin(roll_angle))
+        y_inv = rb * (math.sin(roll_angle) - roll_angle * math.cos(roll_angle))
+
+        x_rot = x_inv * math.cos(rotation) - y_inv * math.sin(rotation)
+        y_rot = x_inv * math.sin(rotation) + y_inv * math.cos(rotation)
+
+        if x_rot <= 0.001:
+            r_pt = math.hypot(x_inv, y_inv)
+            right_flank.append(App.Vector(0.0, r_pt - r_pitch, 0.0))
+            break
+
+        right_flank.append(App.Vector(x_rot, y_rot - r_pitch, 0.0))
+
+    left_flank = [App.Vector(-p.x, p.y, 0.0) for p in reversed(right_flank)]
+
+    return right_flank, left_flank
+
+
+def _arc_to_theta(target_arc, theta_samples, arc_samples):
+    """Interpolate theta from arc-length position using sampled data."""
+    idx = 0
+    for i in range(len(arc_samples)):
+        if arc_samples[i] <= target_arc:
+            idx = i
+    if idx >= len(arc_samples) - 1:
+        return theta_samples[-1]
+    t = ((target_arc - arc_samples[idx])
+         / (arc_samples[idx + 1] - arc_samples[idx] + 1e-12))
+    return theta_samples[idx] + t * (theta_samples[idx + 1] - theta_samples[idx])
+
+
+def generateToothedProfile(parameters):
+    """Generate a toothed non-circular gear profile with involute teeth.
+
+    Places involute teeth along the lobed pitch curve at correct arc-length
+    spacing. Each tooth is oriented perpendicular to the curve tangent.
+    Root sections connect adjacent teeth following the pitch curve offset
+    inward by dedendum.
+
+    The lobed pitch curve is: R(theta) = R_avg + Amplitude * cos(N * theta)
+
+    Args:
+        parameters: Dictionary containing:
+            - module: Tooth module (default 1.0)
+            - num_teeth: Number of teeth (default 20)
+            - pressure_angle: Pressure angle in degrees (default 20)
+            - number_of_lobes: Number of lobes
+            - major_radius: Maximum radius
+            - minor_radius: Minimum radius
+
+    Returns:
+        List of App.Vector points defining the closed toothed gear outline
+    """
+    module = parameters.get("module", 1.0)
+    num_teeth = parameters.get("num_teeth", 20)
+    pressure_angle = parameters.get("pressure_angle", 20.0)
+    profile_shift = parameters.get("profile_shift", 0.0)
+    number_of_lobes = parameters["number_of_lobes"]
+    major_radius = parameters["major_radius"]
+    minor_radius = parameters["minor_radius"]
+
+    r_avg = (major_radius + minor_radius) / 2.0
+    amplitude = (major_radius - minor_radius) / 2.0
+    dedendum = module * gearMath.DEDENDUM_FACTOR
+
+    # Generate canonical tooth profile relative to pitch point
+    right_flank, left_flank = _generateToothProfilePoints(
+        module, num_teeth, pressure_angle, profile_shift
+    )
+
+    n_samples = max(num_teeth * 16, 1440)
+    theta_samples = [0.0] * (n_samples + 1)
+    arc_samples = [0.0] * (n_samples + 1)
+
+    dtheta = 2.0 * math.pi / n_samples
+    for i in range(n_samples + 1):
+        theta = i * dtheta
+        theta_samples[i] = theta
+        if i > 0:
+            theta_mid = (theta + theta_samples[i - 1]) * 0.5
+            r = r_avg + amplitude * math.cos(number_of_lobes * theta_mid)
+            dr = -number_of_lobes * amplitude * math.sin(number_of_lobes * theta_mid)
+            ds = math.hypot(r, dr) * dtheta
+            arc_samples[i] = arc_samples[i - 1] + ds
+        else:
+            arc_samples[i] = 0.0
+
+    total_arc = arc_samples[-1]
+    tooth_spacing = total_arc / num_teeth
+
+    outline = []
+
+    for k in range(num_teeth):
+        target_arc = k * tooth_spacing
+        theta_k = _arc_to_theta(target_arc, theta_samples, arc_samples)
+
+        r = r_avg + amplitude * math.cos(number_of_lobes * theta_k)
+        dr_dtheta = -number_of_lobes * amplitude * math.sin(number_of_lobes * theta_k)
+
+        P = App.Vector(r * math.cos(theta_k), r * math.sin(theta_k), 0.0)
+
+        dx = dr_dtheta * math.cos(theta_k) - r * math.sin(theta_k)
+        dy = dr_dtheta * math.sin(theta_k) + r * math.cos(theta_k)
+        T = App.Vector(dx, dy, 0.0)
+        T.normalize()
+
+        N = App.Vector(math.cos(theta_k), math.sin(theta_k), 0.0)
+
+        for pt in right_flank:
+            outline.append(P + T * pt.x + N * pt.y)
+
+        tip_right = right_flank[-1]
+        tip_left = left_flank[0]
+        num_tip = 3
+        for i in range(1, num_tip + 1):
+            t = i / num_tip
+            mx = tip_right.x + t * (tip_left.x - tip_right.x)
+            my = tip_right.y + t * (tip_left.y - tip_right.y)
+            outline.append(P + T * mx + N * my)
+
+        for pt in left_flank:
+            outline.append(P + T * pt.x + N * pt.y)
+
+        n_root = 10
+        for i in range(1, n_root + 1):
+            t = i / (n_root + 1)
+            arc_pos = target_arc + t * tooth_spacing
+            if abs(arc_pos - total_arc) < 1e-12:
+                arc_pos = 0.0
+
+            theta_mid = _arc_to_theta(arc_pos, theta_samples, arc_samples)
+            r_mid = r_avg + amplitude * math.cos(number_of_lobes * theta_mid)
+            nx = math.cos(theta_mid)
+            ny = math.sin(theta_mid)
+
+            outline.append(App.Vector(
+                r_mid * nx - dedendum * nx,
+                r_mid * ny - dedendum * ny,
+                0.0
+            ))
+
+    return outline
+
+
+def generateControlPointProfile(parameters):
+    """Generate a toothed gear profile from control-point-defined pitch curve.
+
+    Reads N control points (1-5) from parameters, creates a smooth closed
+    B-spline pitch curve, then places involute teeth along the curve using
+    arc-length parameterization.
+
+    Args:
+        parameters: Dictionary containing:
+            - point_count: Number of control points (1-5)
+            - p1_x, p1_y, ... p5_x, p5_y: Control point coordinates
+            - module: Tooth module
+            - num_teeth: Number of teeth
+            - pressure_angle: Pressure angle in degrees
+            - profile_shift: Profile shift coefficient
+
+    Returns:
+        List of App.Vector points defining the closed toothed gear outline
+    """
+    module = parameters.get("module", 1.0)
+    num_teeth = parameters.get("num_teeth", 20)
+    pressure_angle = parameters.get("pressure_angle", 20.0)
+    profile_shift = parameters.get("profile_shift", 0.0)
+    point_count = parameters["point_count"]
+
+    dedendum = module * gearMath.DEDENDUM_FACTOR
+
+    # Collect active control points
+    pts = []
+    for i in range(point_count):
+        pts.append(App.Vector(
+            parameters[f"p{i+1}_x"],
+            parameters[f"p{i+1}_y"],
+            0.0
+        ))
+
+    # Close the loop by adding first point at the end
+    closed_pts = pts + [pts[0]]
+
+    # Create non-periodic B-spline through the closed point set
+    bspline = Part.BSplineCurve()
+    bspline.interpolate(closed_pts, False)
+
+    u_start = bspline.FirstParameter
+    u_end = bspline.LastParameter
+
+    # Generate canonical tooth profile relative to pitch point
+    right_flank, left_flank = _generateToothProfilePoints(
+        module, num_teeth, pressure_angle, profile_shift
+    )
+
+    # Build dense arc-length parameterization of the B-spline
+    n_dense = 500
+    u_samples = [0.0] * (n_dense + 1)
+    arc_samples = [0.0] * (n_dense + 1)
+
+    prev_pt = None
+    for i in range(n_dense + 1):
+        u = u_start + (u_end - u_start) * i / n_dense
+        u_samples[i] = u
+        pt = bspline.value(u)
+        if i > 0:
+            ds = (pt - prev_pt).Length
+            arc_samples[i] = arc_samples[i - 1] + ds
+        else:
+            arc_samples[i] = 0.0
+        prev_pt = pt
+
+    total_arc = arc_samples[-1]
+    tooth_spacing = total_arc / num_teeth
+
+    # Centroid of control points for outward normal determination
+    centroid = App.Vector(0, 0, 0)
+    for p in pts:
+        centroid += p
+    centroid /= len(pts)
+
+    def _arc_to_u(target_arc):
+        idx = 0
+        for i in range(len(arc_samples)):
+            if arc_samples[i] <= target_arc:
+                idx = i
+        if idx >= len(arc_samples) - 1:
+            return u_samples[-1]
+        t = ((target_arc - arc_samples[idx])
+             / (arc_samples[idx + 1] - arc_samples[idx] + 1e-12))
+        return u_samples[idx] + t * (u_samples[idx + 1] - u_samples[idx])
+
+    outline = []
+
+    for k in range(num_teeth):
+        target_arc = k * tooth_spacing
+        u_k = _arc_to_u(target_arc)
+
+        P = bspline.value(u_k)
+
+        eps = 1e-6
+        p_lo = bspline.value(u_k - eps)
+        p_hi = bspline.value(u_k + eps)
+        deriv = (p_hi - p_lo) * (0.5 / eps)
+        T = App.Vector(deriv.x, deriv.y, 0.0)
+        T.normalize()
+
+        # Outward normal: perpendicular to tangent, pointing away from centroid
+        N = App.Vector(-T.y, T.x, 0.0)
+        if N.dot(P - centroid) < 0:
+            N = -N
+
+        # Right flank
+        for pt in right_flank:
+            outline.append(P + T * pt.x + N * pt.y)
+
+        # Tooth tip (arc across top of tooth)
+        tip_right = right_flank[-1]
+        tip_left = left_flank[0]
+        num_tip = 3
+        for i in range(1, num_tip + 1):
+            t = i / num_tip
+            mx = tip_right.x + t * (tip_left.x - tip_right.x)
+            my = tip_right.y + t * (tip_left.y - tip_right.y)
+            outline.append(P + T * mx + N * my)
+
+        # Left flank
+        for pt in left_flank:
+            outline.append(P + T * pt.x + N * pt.y)
+
+        # Root section between this tooth and the next
+        n_root = 10
+        for i in range(1, n_root + 1):
+            t = i / (n_root + 1)
+            arc_pos = target_arc + t * tooth_spacing
+            if abs(arc_pos - total_arc) < 1e-12:
+                arc_pos = 0.0
+
+            u_mid = _arc_to_u(arc_pos)
+            P_mid = bspline.value(u_mid)
+
+            eps = 1e-6
+            p_lo = bspline.value(u_mid - eps)
+            p_hi = bspline.value(u_mid + eps)
+            deriv_mid = (p_hi - p_lo) * (0.5 / eps)
+            T_mid = App.Vector(deriv_mid.x, deriv_mid.y, 0.0)
+            T_mid.normalize()
+            N_mid = App.Vector(-T_mid.y, T_mid.x, 0.0)
+            if N_mid.dot(P_mid - centroid) < 0:
+                N_mid = -N_mid
+
+            outline.append(P_mid - N_mid * dedendum)
+
+    return outline
+
+
 def generateNonCircularGearPart(doc, parameters):
     """Generate non-circular gear using the generic non-circular system.
 
@@ -91,12 +428,236 @@ def generateNonCircularGearPart(doc, parameters):
     """
     validateNonCircularParameters(parameters)
 
-    # Use the generic non-circular builder with lobed profile
+    toothed = parameters.get("module", None) is not None
+    if "point_count" in parameters:
+        profile_func = generateControlPointProfile
+    else:
+        profile_func = generateToothedProfile if toothed else generateLobedProfile
+
     result = genericNonCircular.nonCircularGear(
-        doc, parameters, profile_func=generateLobedProfile
+        doc, parameters, profile_func=profile_func
     )
 
     return result
+
+
+def createNonCircularGearVarSet(doc, name):
+    vs = doc.addObject("App::VarSet", name)
+    vs.addProperty("App::PropertyString","Version","read only","",1).Version = version
+    vs.addProperty("App::PropertyInteger","PointCount","Profile","Number of control points (1-5)").PointCount = 3
+    vs.addProperty("App::PropertyLength","P1_X","Profile","Point 1 X").P1_X = 15.0
+    vs.addProperty("App::PropertyLength","P1_Y","Profile","Point 1 Y").P1_Y = 0.0
+    vs.addProperty("App::PropertyLength","P2_X","Profile","Point 2 X").P2_X = 0.0
+    vs.addProperty("App::PropertyLength","P2_Y","Profile","Point 2 Y").P2_Y = 12.0
+    vs.addProperty("App::PropertyLength","P3_X","Profile","Point 3 X").P3_X = -15.0
+    vs.addProperty("App::PropertyLength","P3_Y","Profile","Point 3 Y").P3_Y = 0.0
+    vs.addProperty("App::PropertyLength","P4_X","Profile","Point 4 X").P4_X = 0.0
+    vs.addProperty("App::PropertyLength","P4_Y","Profile","Point 4 Y").P4_Y = -12.0
+    vs.addProperty("App::PropertyLength","P5_X","Profile","Point 5 X").P5_X = 0.0
+    vs.addProperty("App::PropertyLength","P5_Y","Profile","Point 5 Y").P5_Y = 0.0
+    vs.addProperty("App::PropertyInteger","NumberOfLobes","NonCircular","Number of lobes").NumberOfLobes = 2
+    vs.addProperty("App::PropertyLength","MajorRadius","NonCircular","Major radius").MajorRadius = 15.0
+    vs.addProperty("App::PropertyLength","MinorRadius","NonCircular","Minor radius").MinorRadius = 10.0
+    vs.addProperty("App::PropertyFloat","Module","Tooth","Tooth module").Module = 1.0
+    vs.addProperty("App::PropertyInteger","NumberOfTeeth","Tooth","Number of teeth").NumberOfTeeth = 20
+    vs.addProperty("App::PropertyLength","Height","NonCircular","Gear height").Height = 10.0
+    vs.addProperty("App::PropertyLength","BoreDiameter","Bore","Bore diameter").BoreDiameter = 5.0
+    vs.addProperty("App::PropertyLength","KeywayWidth","Bore","Keyway width").KeywayWidth = 2.0
+    vs.addProperty("App::PropertyLength","KeywayDepth","Bore","Keyway depth").KeywayDepth = 1.0
+    vs.addProperty("App::PropertyBool","BoreEnabled","Bore","Enable bore").BoreEnabled = True
+    vs.addProperty("App::PropertyBool","KeywayEnabled","Bore","Enable keyway").KeywayEnabled = False
+    vs.addProperty("App::PropertyLength","PitchDiameter","read only","",1).PitchDiameter = 0.0
+    vs.addProperty("App::PropertyLength","BaseDiameter","read only","",1).BaseDiameter = 0.0
+    vs.addProperty("App::PropertyLength","OuterDiameter","read only","",1).OuterDiameter = 0.0
+    vs.addProperty("App::PropertyLength","RootDiameter","read only","",1).RootDiameter = 0.0
+    return vs
+
+
+class NonCircularGearResult:
+    def __init__(self, obj, varset):
+        self._varset = varset; self._rebuilding = False
+        self._last_nl = self._last_mjr = self._last_mnr = self._last_h = None
+        self._last_mod = self._last_nt = None
+        self._last_pc = None
+        self._last_p1x = self._last_p1y = None
+        self._last_p2x = self._last_p2y = None
+        self._last_p3x = self._last_p3y = None
+        self._last_p4x = self._last_p4y = None
+        self._last_p5x = self._last_p5y = None
+        self._watcher = None; self._needs_rebuild = False
+        self.Type = "NonCircularGearResult"
+        obj.addProperty("App::PropertyString","VarSetName","Gear","",1).VarSetName=varset.Name
+        obj.addProperty("App::PropertyString","BodyName","Gear","").BodyName=varset.Name.replace("_values","_Body",1)
+        obj.addProperty("App::PropertyString","Version","read only","",1).Version=version
+        obj.addProperty("App::PropertyString","Status","read only","",1)
+        obj.Proxy=self; self.Object=obj; obj.Status="Not yet generated"
+        self._startWatcher(varset.Name)
+    def __getstate__(self): return self.Type
+    def __setstate__(self,s):
+        if s: self.Type=s
+        self._varset=None; self._rebuilding=False
+        self._last_nl=self._last_mjr=self._last_mnr=self._last_h=None
+        self._last_mod=self._last_nt=None
+        self._last_pc=None
+        self._last_p1x=self._last_p1y=None
+        self._last_p2x=self._last_p2y=None
+        self._last_p3x=self._last_p3y=None
+        self._last_p4x=self._last_p4y=None
+        self._last_p5x=self._last_p5y=None
+        self._watcher=None; self._needs_rebuild=False
+    def onDocumentRestored(self,obj):
+        self.Object=obj; v=self._getVarSet()
+        if v:
+            self._last_nl=int(v.NumberOfLobes); self._last_mjr=float(v.MajorRadius.Value)
+            self._last_mnr=float(v.MinorRadius.Value); self._last_h=float(v.Height.Value)
+            self._last_mod=float(v.Module); self._last_nt=int(v.NumberOfTeeth)
+            self._last_pc = int(v.PointCount) if hasattr(v,'PointCount') else None
+            self._last_p1x = float(v.P1_X.Value) if hasattr(v,'P1_X') else None
+            self._last_p1y = float(v.P1_Y.Value) if hasattr(v,'P1_Y') else None
+            self._last_p2x = float(v.P2_X.Value) if hasattr(v,'P2_X') else None
+            self._last_p2y = float(v.P2_Y.Value) if hasattr(v,'P2_Y') else None
+            self._last_p3x = float(v.P3_X.Value) if hasattr(v,'P3_X') else None
+            self._last_p3y = float(v.P3_Y.Value) if hasattr(v,'P3_Y') else None
+            self._last_p4x = float(v.P4_X.Value) if hasattr(v,'P4_X') else None
+            self._last_p4y = float(v.P4_Y.Value) if hasattr(v,'P4_Y') else None
+            self._last_p5x = float(v.P5_X.Value) if hasattr(v,'P5_X') else None
+            self._last_p5y = float(v.P5_Y.Value) if hasattr(v,'P5_Y') else None
+            self._startWatcher(v.Name); obj.Status="Up to date"
+    def _startWatcher(self,vn):
+        self._stopWatcher(); self._watcher=_VarSetWatcher(self,vn,watched=frozenset((
+            "NumberOfLobes","MajorRadius","MinorRadius","Module","NumberOfTeeth",
+            "Height","BoreEnabled","KeywayEnabled","BoreDiameter","KeywayWidth","KeywayDepth",
+            "PointCount","P1_X","P1_Y","P2_X","P2_Y","P3_X","P3_Y","P4_X","P4_Y","P5_X","P5_Y")))
+        App.addDocumentObserver(self._watcher)
+    def _stopWatcher(self):
+        if self._watcher:
+            try: App.removeDocumentObserver(self._watcher)
+            except: pass
+            self._watcher=None
+    def _getVarSet(self):
+        if self._varset is None:
+            try: self._varset=self.Object.Document.getObject(self.Object.VarSetName)
+            except: pass
+        return self._varset
+    def execute(self,obj): pass
+    def _values_changed(self):
+        v=self._getVarSet()
+        if not v or self._last_nl is None: return v is not None
+        E=1e-9
+        if int(v.NumberOfLobes)!=self._last_nl: return True
+        if abs(float(v.MajorRadius.Value)-self._last_mjr)>E: return True
+        if abs(float(v.MinorRadius.Value)-self._last_mnr)>E: return True
+        if abs(float(v.Height.Value)-self._last_h)>E: return True
+        if abs(float(v.Module)-self._last_mod)>E: return True
+        if int(v.NumberOfTeeth)!=self._last_nt: return True
+        if hasattr(v,'PointCount') and int(v.PointCount)!=self._last_pc: return True
+        if hasattr(v,'P1_X') and abs(float(v.P1_X.Value)-self._last_p1x)>E: return True
+        if hasattr(v,'P1_Y') and abs(float(v.P1_Y.Value)-self._last_p1y)>E: return True
+        if hasattr(v,'P2_X') and abs(float(v.P2_X.Value)-self._last_p2x)>E: return True
+        if hasattr(v,'P2_Y') and abs(float(v.P2_Y.Value)-self._last_p2y)>E: return True
+        if hasattr(v,'P3_X') and abs(float(v.P3_X.Value)-self._last_p3x)>E: return True
+        if hasattr(v,'P3_Y') and abs(float(v.P3_Y.Value)-self._last_p3y)>E: return True
+        if hasattr(v,'P4_X') and abs(float(v.P4_X.Value)-self._last_p4x)>E: return True
+        if hasattr(v,'P4_Y') and abs(float(v.P4_Y.Value)-self._last_p4y)>E: return True
+        if hasattr(v,'P5_X') and abs(float(v.P5_X.Value)-self._last_p5x)>E: return True
+        if hasattr(v,'P5_Y') and abs(float(v.P5_Y.Value)-self._last_p5y)>E: return True
+        return False
+    def _set_needs_rebuild(self):
+        if self._rebuilding or not self._values_changed(): return
+        self._needs_rebuild=True
+        try: self.Object.Status="Regenerating..."
+        except: pass
+        QtCore.QTimer.singleShot(0,self._deferred_rebuild)
+    def _on_recompute_finished(self):
+        if not self._needs_rebuild or self._rebuilding: return
+        if not self._values_changed(): self._needs_rebuild=False; return
+        self._needs_rebuild=False; QtCore.QTimer.singleShot(0,self._deferred_rebuild)
+    def _deferred_rebuild(self):
+        if self._rebuilding or not self._values_changed(): return
+        self._rebuild()
+    def _rebuild(self):
+        self._rebuilding=True; vn=None
+        try:
+            v=self._getVarSet()
+            if not v: return
+            vn=v.Name; bn=str(self.Object.BodyName); d=self.Object.Document
+            self._last_nl=int(v.NumberOfLobes); self._last_mjr=float(v.MajorRadius.Value)
+            self._last_mnr=float(v.MinorRadius.Value); self._last_h=float(v.Height.Value)
+            self._last_mod=float(v.Module); self._last_nt=int(v.NumberOfTeeth)
+            self._last_pc = int(v.PointCount) if hasattr(v,'PointCount') else None
+            self._last_p1x = float(v.P1_X.Value) if hasattr(v,'P1_X') else None
+            self._last_p1y = float(v.P1_Y.Value) if hasattr(v,'P1_Y') else None
+            self._last_p2x = float(v.P2_X.Value) if hasattr(v,'P2_X') else None
+            self._last_p2y = float(v.P2_Y.Value) if hasattr(v,'P2_Y') else None
+            self._last_p3x = float(v.P3_X.Value) if hasattr(v,'P3_X') else None
+            self._last_p3y = float(v.P3_Y.Value) if hasattr(v,'P3_Y') else None
+            self._last_p4x = float(v.P4_X.Value) if hasattr(v,'P4_X') else None
+            self._last_p4y = float(v.P4_Y.Value) if hasattr(v,'P4_Y') else None
+            self._last_p5x = float(v.P5_X.Value) if hasattr(v,'P5_X') else None
+            self._last_p5y = float(v.P5_Y.Value) if hasattr(v,'P5_Y') else None
+            if self._last_nl<2 or self._last_mjr<=0 or self._last_mnr<=0 or self._last_h<=0:
+                self.Object.Status="Invalid params"; return
+            self._stopWatcher()
+            old=d.getObject(bn)
+            if old:
+                ch=list(old.Group)
+                for c in ch:
+                    for p in c.PropertiesList:
+                        try: c.setExpression(p,None)
+                        except: pass
+                for c in reversed(ch):
+                    try: d.removeObject(c.Name)
+                    except: pass
+                d.removeObject(bn)
+            self.Object.Status="Generating..."
+            if App.GuiUp: QtCore.QCoreApplication.processEvents()
+            params = {
+                "number_of_lobes":self._last_nl,"major_radius":self._last_mjr,
+                "minor_radius":self._last_mnr,"height":self._last_h,
+                "module":self._last_mod,"num_teeth":self._last_nt,
+                "pressure_angle":20.0,"profile_shift":0.0,
+                "bore_type":"none","bore_diameter":float(v.BoreDiameter.Value),
+                "keyway_width":float(v.KeywayWidth.Value),
+                "keyway_depth":float(v.KeywayDepth.Value),"body_name":bn,
+            }
+            use_control = self._last_pc is not None and self._last_pc > 0
+            if use_control:
+                lobe_centers = []
+                for i in range(self._last_pc):
+                    lobe_centers.append((
+                        getattr(self, f"_last_p{i+1}x", 0.0) or 0.0,
+                        getattr(self, f"_last_p{i+1}y", 0.0) or 0.0,
+                    ))
+                genericNonCircular.compositeNonCircular(d, {
+                    "module": self._last_mod,
+                    "num_teeth": self._last_nt,
+                    "pressure_angle": 20.0,
+                    "height": self._last_h,
+                    "body_name": bn,
+                    "lobe_centers": lobe_centers,
+                    "bore_type": "circular" if float(v.BoreDiameter.Value) > 0 else "none",
+                    "bore_diameter": float(v.BoreDiameter.Value),
+                    "keyway_width": float(v.KeywayWidth.Value),
+                    "keyway_depth": float(v.KeywayDepth.Value),
+                })
+                d.recompute()
+            self.Object.Status="Up to date"
+            if App.GuiUp: QtCore.QCoreApplication.processEvents()
+        except Exception as e:
+            import traceback; App.Console.PrintError(traceback.format_exc())
+            try:
+                p=d.getObject(bn)
+                if p:
+                    for c in list(p.Group):
+                        try: d.removeObject(c.Name)
+                        except: pass
+                    d.removeObject(bn)
+            except: pass
+            self.Object.Status="Error"
+        finally:
+            if vn: self._startWatcher(vn)
+            self._rebuilding=False
+    def force_Recompute(self): self._rebuild()
 
 
 class NonCircularGearCreateObject:
@@ -113,29 +674,19 @@ class NonCircularGearCreateObject:
         pass
 
     def Activated(self):
-        """Called when command is activated."""
-        if not App.ActiveDocument:
-            App.newDocument()
-        doc = App.ActiveDocument
-
-        # --- Generate Unique Body Name ---
-        base_name = "NonCircularGear"
-        unique_name = base_name
-        count = 1
-        while doc.getObject(unique_name):
-            unique_name = f"{base_name}{count:03d}"
-            count += 1
-
-        gear_obj = doc.addObject("Part::FeaturePython", "NonCircularGearParameters")
-        non_circular_gear = NonCircularGear(gear_obj)
-
-        # Assign unique name to the property so gearMath uses it
-        gear_obj.BodyName = unique_name
-
-        doc.recompute()
+        if not App.ActiveDocument: App.newDocument()
+        doc=App.ActiveDocument
+        base="NonCircularGear_values"; un=base; c=1
+        while doc.getObject(un): un=f"{base}{c:03d}"; c+=1
+        vs=createNonCircularGearVarSet(doc,un)
+        gn="Regenerate"; c=1
+        while doc.getObject(gn): gn=f"Regenerate{c:03d}"; c+=1
+        go=doc.addObject("Part::FeaturePython",gn)
+        NonCircularGearResult(go,vs)
+        ViewProviderGearResult(go.ViewObject,mainIcon)
+        go.Proxy.force_Recompute()
         FreeCADGui.SendMsgToActiveView("ViewFit")
         FreeCADGui.ActiveDocument.ActiveView.viewIsometric()
-        return non_circular_gear
 
     def IsActive(self):
         """Return True if command can be activated."""

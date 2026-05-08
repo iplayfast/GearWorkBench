@@ -21,8 +21,6 @@ import math
 from PySide import QtCore
 from genericGear import _VarSetWatcher, ViewProviderGearResult
 
-vec2 = App.Base.Vector2d
-
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, "icons")
 mainIcon = os.path.join(smWB_icons_path, "globoidWormGear.svg")
@@ -218,187 +216,141 @@ class GloboidWormGearV2Result:
             m=self._last_m; nt=self._last_nt; pa=self._last_pa
             wp_dia=self._last_wpd; s_dia=self._last_sd; s_len=self._last_sl
             wl=self._last_wl; rh=self._last_rh
-            gt=self._last_gt
 
-            wp_r=wp_dia/2.0   # worm pitch radius
-            gp_r=m*gt/2.0     # gear pitch radius
-            cd=gp_r+wp_r       # center distance
-            add=m; ded=m*1.25
-            outer_throat_r=wp_r+add
-            arc_r=cd-outer_throat_r
+            wp_r=wp_dia/2.0
+            wpr=wp_r  # worm pitch radius
+            wr=wp_r-m*1.25  # worm root radius
 
-            if arc_r<=0: self.Object.Status="Geometry error"; return
+            body=util.readyPart(d, bn)
 
-            max_wl=arc_r*2.0*0.98
-            eff_wl=wl
-            if eff_wl>max_wl: eff_wl=max_wl
-            half_angle_rad=math.asin(min(eff_wl/2.0/arc_r,1.0))
+            # 1. Thin shaft + thread base cylinder (one revolve profile)
+            total_len=wl+2*s_len
+            half=total_len/2.0
+            sk_shaft=util.createSketch(body,"ShaftProfile")
+            sk_shaft.MapMode="Deactivated"
+            p0=App.Vector(0,-half,0); p1=App.Vector(0,half,0)    # axis
+            p2=App.Vector(s_dia/2,half,0); p3=App.Vector(s_dia/2,wl/2,0)  # shaft OD
+            p4=App.Vector(wpr+m*1.25,wl/2,0)  # thread OD step outward
+            p5=App.Vector(wpr+m*1.25,-wl/2,0)  # thread OD step inward
+            p6=App.Vector(s_dia/2,-wl/2,0); p7=App.Vector(s_dia/2,-half,0)  # other side
 
-            body=util.readyPart(d,bn)
+            geo=[Part.LineSegment(p0,p1),Part.LineSegment(p1,p2),Part.LineSegment(p2,p3),
+                 Part.LineSegment(p3,p4),Part.LineSegment(p4,p5),Part.LineSegment(p5,p6),
+                 Part.LineSegment(p6,p7),Part.LineSegment(p7,p0)]
+            for g in geo: sk_shaft.addGeometry(g,False)
+            # Constraints: coincident chain
+            for i in range(8):
+                sk_shaft.addConstraint(Sketcher.Constraint("Coincident",i,2,(i+1)%8,1))
+            # Vertical/horizontal
+            sk_shaft.addConstraint(Sketcher.Constraint("Vertical",0))
+            sk_shaft.addConstraint(Sketcher.Constraint("Horizontal",1))
+            sk_shaft.addConstraint(Sketcher.Constraint("Vertical",2))
+            sk_shaft.addConstraint(Sketcher.Constraint("Horizontal",3))
+            sk_shaft.addConstraint(Sketcher.Constraint("Horizontal",5))
+            sk_shaft.addConstraint(Sketcher.Constraint("Vertical",6))
+            sk_shaft.addConstraint(Sketcher.Constraint("Horizontal",7))
+            # Dimensions
+            sk_shaft.addConstraint(Sketcher.Constraint("DistanceY",0,1,0,2,total_len))
+            sk_shaft.addConstraint(Sketcher.Constraint("DistanceX",1,1,1,2,s_dia/2))
+            sk_shaft.addConstraint(Sketcher.Constraint("DistanceY",2,1,2,2,wl))
+            sk_shaft.addConstraint(Sketcher.Constraint("DistanceX",3,1,3,2,wpr+m*1.25))
+            sk_shaft.addConstraint(Sketcher.Constraint("DistanceX",4,1,4,2,wpr+m*1.25))
+            sk_shaft.addConstraint(Sketcher.Constraint("Symmetric",0,1,0,2,-1,1))
 
-            # 1. Hourglass profile on XZ plane
-            half_cyl=eff_wl/2.0+s_len+2.0
-            sk_base=util.createSketch(body,"GloboidCylinder")
-            xz=None
-            if hasattr(body,'Origin') and body.Origin:
-                for f in body.Origin.OriginFeatures:
-                    if 'XZ' in f.Name or 'XZ' in f.Label: xz=f; break
-                if not xz and len(body.Origin.OriginFeatures)>1: xz=body.Origin.OriginFeatures[1]
-            if xz: sk_base.AttachmentSupport=[(xz,'')]; sk_base.MapMode='FlatFace'
-            else: sk_base.MapMode='Deactivated'; sk_base.Placement=App.Placement(
-                App.Vector(0,0,0),App.Rotation(App.Vector(1,0,0),90))
-
-            ha=half_angle_rad; sar=-ha; ear=ha
-            rect_outer_r=outer_throat_r
-            hc=half_cyl
-
-            arc_top_y=arc_r*math.sin(ear)
-            arc_top_x=-cd+arc_r*math.cos(ear)
-            arc_bot_y=arc_r*math.sin(sar)
-            arc_bot_x=-cd+arc_r*math.cos(sar)
-
-            idx_right=0; idx_top=1; idx_tl=2; idx_arc=3; idx_bl=4; idx_bot=5
-            geo=[]
-            geo.append(Part.LineSegment(App.Vector(0,-hc,0),App.Vector(0,hc,0)))
-            geo.append(Part.LineSegment(App.Vector(0,hc,0),
-                         App.Vector(-rect_outer_r,hc,0)))
-            geo.append(Part.LineSegment(App.Vector(-rect_outer_r,hc,0),
-                         App.Vector(arc_top_x,arc_top_y,0)))
-            circ=Part.Circle(App.Vector(-cd,0,0),App.Vector(0,0,1),arc_r)
-            geo.append(Part.ArcOfCircle(circ,sar,ear))
-            geo.append(Part.LineSegment(App.Vector(arc_bot_x,arc_bot_y,0),
-                         App.Vector(-rect_outer_r,-hc,0)))
-            geo.append(Part.LineSegment(App.Vector(-rect_outer_r,-hc,0),
-                         App.Vector(0,-hc,0)))
-            sk_base.addGeometry(geo,False)
-
-            sk_base.addConstraint(Sketcher.Constraint("Coincident",idx_right,2,idx_top,1))
-            sk_base.addConstraint(Sketcher.Constraint("Coincident",idx_top,2,idx_tl,1))
-            sk_base.addConstraint(Sketcher.Constraint("Coincident",idx_tl,2,idx_arc,2))
-            sk_base.addConstraint(Sketcher.Constraint("Coincident",idx_arc,1,idx_bl,1))
-            sk_base.addConstraint(Sketcher.Constraint("Coincident",idx_bl,2,idx_bot,1))
-            sk_base.addConstraint(Sketcher.Constraint("Coincident",idx_bot,2,idx_right,1))
-            sk_base.addConstraint(Sketcher.Constraint("Vertical",idx_right))
-            sk_base.addConstraint(Sketcher.Constraint("Horizontal",idx_top))
-            sk_base.addConstraint(Sketcher.Constraint("Vertical",idx_tl))
-            sk_base.addConstraint(Sketcher.Constraint("Vertical",idx_bl))
-            sk_base.addConstraint(Sketcher.Constraint("Horizontal",idx_bot))
-            sk_base.addConstraint(Sketcher.Constraint("PointOnObject",idx_arc,3,-1))
-            sk_base.addConstraint(Sketcher.Constraint("DistanceY",idx_right,1,idx_right,2,2.0*hc))
-            sk_base.addConstraint(Sketcher.Constraint("Symmetric",idx_right,1,idx_right,2,-1,1))
-            sk_base.addConstraint(Sketcher.Constraint("Radius",idx_arc,arc_r))
-            sk_base.addConstraint(Sketcher.Constraint("DistanceX",idx_arc,3,idx_right,1,cd))
-            sk_base.addConstraint(Sketcher.Constraint("DistanceY",idx_arc,1,idx_arc,2,eff_wl))
-            sk_base.addConstraint(Sketcher.Constraint("Vertical",idx_arc,1,idx_arc,2))
-
-            d.recompute()
-            if sk_base.Shape.isNull(): self.Object.Status="Sketch failed"; return
-
-            rev=body.newObject("PartDesign::Revolution","HourglassBody")
-            rev.Profile=sk_base
-            rev.ReferenceAxis=(sk_base,["V_Axis"])
+            # Revolve the profile
+            rev=body.newObject("PartDesign::Revolution","BaseCylinder")
+            rev.Profile=sk_shaft
+            rev.ReferenceAxis=(sk_shaft,["V_Axis"])
             rev.Angle=360
             body.Tip=rev
-            d.recompute()
 
-            # 2. Thread grooves via PartDesign::SubtractivePipe with toroidal
-            #    spiral spine.
-
-            lead=m*math.pi*nt
-            turns=eff_wl/lead
-            total_v=2.0*math.pi*turns
-            half_len=eff_wl/2.0
-            hu_spine=math.asin(min(half_len/gp_r,1.0))
-
-            gap_at_end=math.sqrt(max(gp_r**2-half_len**2,0))-math.sqrt(max(arc_r**2-half_len**2,0))
-            eff_add=max(add,gap_at_end+0.5)
-
+            # 2. Thread via AdditiveHelix
+            sk_thread=util.createSketch(body,"ThreadProfile")
+            sk_thread.MapMode="Deactivated"
+            # Trapezoidal thread profile (gap shape)
             tan_pa=math.tan(pa*math.pi/180)
-            fTop=m*(math.pi/2.0 - 2.0*tan_pa)
-            fBottom=fTop + 2.0*m*(eff_add+ded)*tan_pa
-
-            torus_spine=Part.Toroid()
-            torus_spine.MajorRadius=cd
-            torus_spine.MinorRadius=gp_r
-
-            us=math.pi-hu_spine; ue=math.pi+hu_spine
-            vs=math.pi-total_v/2.0; ve=math.pi+total_v/2.0
-            if not rh: vs,ve=-ve+2*math.pi,-vs+2*math.pi
-
-            line2d=Part.Geom2d.Line2dSegment(vec2(vs,us),vec2(ve,ue))
-            spiral_edge=line2d.toShape(torus_spine)
-            if spiral_edge.isNull(): self.Object.Status="Spiral edge null"; return
-            spiral_wire=Part.Wire([spiral_edge])
-
-            tmp_name=f"{bn}_TmpSpine"
-            old=d.getObject(tmp_name)
-            if old: d.removeObject(tmp_name)
-            tmp_obj=d.addObject("Part::Feature",tmp_name)
-            tmp_obj.Shape=spiral_wire; tmp_obj.Visibility=False
-            d.recompute()
-
-            binder=body.newObject("PartDesign::SubShapeBinder","ThreadSpineBinder")
-            binder.Support=[(tmp_obj,['Edge1'])]
-            binder.Relative=False
-            d.recompute()
-            d.removeObject(tmp_name)
-            d.recompute()
-
-            R_=cd; r_=gp_r; u0=us; v0=vs
-            cu=math.cos(u0); su=math.sin(u0)
-            cv=math.cos(v0); sv=math.sin(v0)
-            Rrc=R_+r_*cu
-            start_pt=App.Vector(Rrc*cv,Rrc*sv,r_*su)
-            Su=App.Vector(-r_*su*cv,-r_*su*sv,r_*cu)
-            Sv=App.Vector(-Rrc*sv,Rrc*cv,0.0)
-            T=(Su*(ue-us)+Sv*(ve-vs)).normalize()
-            N_surf=Su.cross(Sv).normalize()
-            B=T.cross(N_surf).normalize()
-            N=B.cross(T)
-
-            rot_a=App.Rotation(App.Vector(0,0,1),T)
-            Yi=rot_a.multVec(App.Vector(0,1,0))
-            ang=math.atan2(T.dot(Yi.cross(N)),Yi.dot(N))
-            rot=App.Rotation(T,ang)*rot_a
-
-            hw_n=fTop/2.0; hw_w=fBottom/2.0
-            gpts=[App.Vector(-hw_n,-ded,0),App.Vector(+hw_n,-ded,0),
-                  App.Vector(+hw_w,+eff_add,0),App.Vector(-hw_w,+eff_add,0)]
-            sk_groove=util.createSketch(body,"ThreadGrooveProfile")
-            sk_groove.MapMode="Deactivated"
-            sk_groove.Placement=App.Placement(start_pt,rot)
+            hw_pitch=m*math.pi/4
+            add=m; ded=m*1.25
+            h=add+ded  # total thread height
+            wr_root=hw_pitch-ded*tan_pa
+            wr_tip=hw_pitch+add*tan_pa
+            pts=[App.Vector(0,-wr_root,0),App.Vector(h,-wr_tip,0),
+                 App.Vector(h,wr_tip,0),App.Vector(0,wr_root,0)]
             for i in range(4):
-                sk_groove.addGeometry(Part.LineSegment(gpts[i],gpts[(i+1)%4]),False)
-            for i in range(4):
-                sk_groove.addConstraint(Sketcher.Constraint("Coincident",i,2,(i+1)%4,1))
-            sk_groove.addConstraint(Sketcher.Constraint("Symmetric",0,1,0,2,-2,1))
+                sk_thread.addGeometry(Part.LineSegment(pts[i],pts[(i+1)%4]),False)
+            sk_thread.Placement=App.Placement(App.Vector(wp_r,0,wl/2),App.Rotation(App.Vector(0,1,0),90))
+            # Note: placement positions the thread profile at the worm surface,
+            # oriented so the helix advances along the worm axis (Z)
 
             d.recompute()
 
-            spipe=body.newObject("PartDesign::SubtractivePipe","ThreadGroove")
-            spipe.Profile=sk_groove
-            spipe.Spine=(binder,['Edge1'])
-            if hasattr(spipe,'Transformation'): spipe.Transformation=1
-            body.Tip=spipe
-
-            if nt>1:
-                polar=util.createPolar(body,spipe,sk_groove,nt,"MultiStart")
-                polar.Originals=[spipe]
-                body.Tip=polar
+            thread_pitch=m*math.pi
+            helix=body.newObject("PartDesign::AdditiveHelix","WormThread")
+            helix.Profile=sk_thread
+            helix.Pitch=thread_pitch*nt
+            helix.Height=wl
+            helix.Reversed=rh
+            helix.LeftHanded=False
+            helix.ReferenceAxis=(sk_thread,["N_Axis"])
+            body.Tip=helix
 
             d.recompute()
 
-            # 3. Bore & keyway
-            body_len=eff_wl+2.0*s_len+4.0
+            # 3. Globoid waist cut (Groove)
+            gt=self._last_gt
+            gp_r=m*gt/2.0  # gear pitch radius
+            cd=gp_r+wp_r  # center distance
+            arc_r=gp_r*0.9
+            half_wl=wl/2
+            arc_top_y=arc_r*math.sin(math.asin(half_wl/arc_r))
+            # Waist cut sketch on XZ plane
+            xz=None
+            for f in body.Origin.OriginFeatures:
+                if 'XZ' in f.Name or 'XZ' in f.Label: xz=f; break
+            sk_groove=util.createSketch(body,"WaistGroove")
+            if xz:
+                sk_groove.AttachmentSupport=[(xz,'')]; sk_groove.MapMode="FlatFace"
+            else:
+                sk_groove.MapMode="Deactivated"
+                sk_groove.Placement=App.Placement(App.Vector(0,0,0),App.Rotation(App.Vector(1,0,0),90))
+            # Circular arc cutting the globoid waist
+            arc_center=App.Vector(-cd,0,0)
+            half_a=math.asin(half_wl/arc_r)
+            sa=-half_a; ea=half_a
+            circ=Part.Circle(arc_center,App.Vector(0,0,1),arc_r)
+            arc_g=Part.ArcOfCircle(circ,sa,ea)
+            sk_groove.addGeometry(arc_g,False)
+            # Close the cut profile — connect arc ends via the axis so the
+            # Groove can revolve properly.
+            arc_top=App.Vector(-cd+arc_r*math.cos(ea),arc_r*math.sin(ea),0)
+            arc_bot=App.Vector(-cd+arc_r*math.cos(sa),arc_r*math.sin(sa),0)
+            sk_groove.addGeometry(Part.LineSegment(arc_top,App.Vector(arc_top.x*0.05,arc_top.y,0)),False)
+            sk_groove.addGeometry(Part.LineSegment(App.Vector(arc_top.x*0.05,arc_top.y,0),App.Vector(arc_bot.x*0.05,arc_bot.y,0)),False)
+            sk_groove.addGeometry(Part.LineSegment(App.Vector(arc_bot.x*0.05,arc_bot.y,0),arc_bot),False)
+            # Connect the chain: arc top → line1 → line2 → arc bottom → arc top
+            sk_groove.addConstraint(Sketcher.Constraint("Coincident",1,1,0,2))  # line1 start → arc end
+            sk_groove.addConstraint(Sketcher.Constraint("Coincident",1,2,2,1))  # line1 end → line2 start
+            sk_groove.addConstraint(Sketcher.Constraint("Coincident",2,2,3,1))  # line2 end → line3 start
+            sk_groove.addConstraint(Sketcher.Constraint("Coincident",3,2,0,1))  # line3 end → arc start
+
+            groove=body.newObject("PartDesign::Groove","WaistGroove")
+            groove.Profile=sk_groove
+            groove.ReferenceAxis=(sk_groove,["V_Axis"])
+            groove.Angle=360
+            body.Tip=groove
+
+            d.recompute()
+
+            # 4. Bore & keyway
             bd=float(v.BoreDiameter.Value)
             if bool(v.BoreEnabled):
                 bore_sk=util.createSketch(body,"Bore")
                 ci=bore_sk.addGeometry(Part.Circle(App.Vector(0,0,0),App.Vector(0,0,1),bd/2),False)
                 bore_sk.addConstraint(Sketcher.Constraint("Coincident",ci,3,-1,1))
                 bore_sk.addConstraint(Sketcher.Constraint("Diameter",ci,bd))
-                bore_sk.Placement=App.Placement(App.Vector(0,0,body_len/2),App.Rotation())
+                bore_sk.Placement=App.Placement(App.Vector(0,0,half),App.Rotation())
                 bore_sk.MapMode="Deactivated"
-                bp=util.createPocket(body,bore_sk,body_len)
+                bp=util.createPocket(body,bore_sk,total_len)
                 bp.Reversed=True
                 body.Tip=bp
 
@@ -422,9 +374,9 @@ class GloboidWormGearV2Result:
                     c=kws.addConstraint(Sketcher.Constraint("DistanceX",kls[0],2,-1,1,kw/2))
                     c=kws.addConstraint(Sketcher.Constraint("DistanceY",kls[1],2,-1,1,tiny))
                     kws.setExpression(f"Constraints[{c}]",f"{bd/2+kd}")
-                    kws.Placement=App.Placement(App.Vector(0,0,body_len/2),App.Rotation())
+                    kws.Placement=App.Placement(App.Vector(0,0,half),App.Rotation())
                     kws.MapMode="Deactivated"
-                    kp=util.createPocket(body,kws,body_len)
+                    kp=util.createPocket(body,kws,total_len)
                     kp.Reversed=True
                     body.Tip=kp
 

@@ -15,6 +15,8 @@ import Part
 import Sketcher
 import os
 import math
+from genericGear import _VarSetWatcher, ViewProviderGearResult
+from PySide import QtCore
 
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, 'icons')
@@ -329,13 +331,579 @@ def generateMatingGear(doc, parameters, center_distance, worm_pitch_radius, worm
     sk_throat.Visibility = False
     gear_body.Tip = groove
 
-    # Alignment
+    # Alignment — position at center distance, wheel midline at worm mid-height.
+    # The WheelPhase parameter (in the VarSet) lets the user dial in the tooth
+    # mesh by rotating the wheel about its own axis.
     worm_length = parameters.get("length", 50.0)
-    r_align = App.Rotation(App.Vector(1, 0, 0), 90)
+    wheel_phase = parameters.get("wheel_phase", 0.0)
+    r_align = App.Rotation(App.Vector(1, 0, 0), 90) * App.Rotation(App.Vector(0, 0, 1), wheel_phase)
     gear_body.Placement = App.Placement(
         App.Vector(center_distance, height / 2.0, worm_length / 2.0),
         r_align
     )
+
+
+def createWormGearVarSet(doc, name):
+    """Create a VarSet for WormGear parameters."""
+    var_set = doc.addObject("App::VarSet", name)
+
+    var_set.addProperty(
+        "App::PropertyString", "Version", "read only",
+        QT_TRANSLATE_NOOP("App::Property", "Workbench version"), 1,
+    ).Version = "0.1"
+
+    var_set.addProperty(
+        "App::PropertyLength", "Module", "WormGear",
+        QT_TRANSLATE_NOOP("App::Property", "Gear module"),
+    ).Module = 1.0
+
+    var_set.addProperty(
+        "App::PropertyLength", "WormDiameter", "WormGear",
+        QT_TRANSLATE_NOOP("App::Property", "Root diameter of worm"),
+    ).WormDiameter = 20.0
+
+    var_set.addProperty(
+        "App::PropertyInteger", "NumberOfThreads", "WormGear",
+        QT_TRANSLATE_NOOP("App::Property", "Number of threads (starts)"),
+    ).NumberOfThreads = 1
+
+    var_set.addProperty(
+        "App::PropertyAngle", "PressureAngle", "WormGear",
+        QT_TRANSLATE_NOOP("App::Property", "Pressure angle (normally 20)"),
+    ).PressureAngle = 20.0
+
+    var_set.addProperty(
+        "App::PropertyLength", "Length", "WormGear",
+        QT_TRANSLATE_NOOP("App::Property", "Total length of worm cylinder"),
+    ).Length = 50.0
+
+    var_set.addProperty(
+        "App::PropertyLength", "HelixLength", "WormGear",
+        QT_TRANSLATE_NOOP("App::Property", "Length of threaded portion"),
+    ).HelixLength = 40.0
+
+    var_set.addProperty(
+        "App::PropertyBool", "CenterHelix", "WormGear",
+        QT_TRANSLATE_NOOP("App::Property", "Center helix along cylinder"),
+    ).CenterHelix = True
+
+    var_set.addProperty(
+        "App::PropertyBool", "RightHanded", "WormGear",
+        QT_TRANSLATE_NOOP("App::Property", "True = right-handed, False = left-handed"),
+    ).RightHanded = True
+
+    var_set.addProperty(
+        "App::PropertyBool", "CreateMatingGear", "MatingGear",
+        QT_TRANSLATE_NOOP("App::Property", "Create the mating worm wheel"),
+    ).CreateMatingGear = True
+
+    var_set.addProperty(
+        "App::PropertyInteger", "GearTeeth", "MatingGear",
+        QT_TRANSLATE_NOOP("App::Property", "Number of teeth on mating gear"),
+    ).GearTeeth = 30
+
+    var_set.addProperty(
+        "App::PropertyLength", "GearHeight", "MatingGear",
+        QT_TRANSLATE_NOOP("App::Property", "Height/thickness of mating gear"),
+    ).GearHeight = 10.0
+
+    var_set.addProperty(
+        "App::PropertyFloat", "Clearance", "MatingGear",
+        QT_TRANSLATE_NOOP("App::Property", "Clearance factor"),
+    ).Clearance = 0.1
+
+    var_set.addProperty(
+        "App::PropertyLength", "BoreDiameter", "Bore",
+        QT_TRANSLATE_NOOP("App::Property", "Diameter of center bore"),
+    ).BoreDiameter = 5.0
+
+    var_set.addProperty(
+        "App::PropertyLength", "KeywayWidth", "Bore",
+        QT_TRANSLATE_NOOP("App::Property", "Width of keyway (DIN 6885)"),
+    ).KeywayWidth = 2.0
+
+    var_set.addProperty(
+        "App::PropertyLength", "KeywayDepth", "Bore",
+        QT_TRANSLATE_NOOP("App::Property", "Depth of keyway"),
+    ).KeywayDepth = 1.0
+
+    var_set.addProperty(
+        "App::PropertyBool", "BoreEnabled", "Bore",
+        QT_TRANSLATE_NOOP("App::Property", "Enable bore hole"),
+    ).BoreEnabled = True
+
+    var_set.addProperty(
+        "App::PropertyBool", "KeywayEnabled", "Bore",
+        QT_TRANSLATE_NOOP("App::Property", "Enable keyway in bore"),
+    ).KeywayEnabled = False
+
+    # Mating gear bore/keyway
+    var_set.addProperty(
+        "App::PropertyBool", "MatingBoreEnabled", "MatingGear",
+        QT_TRANSLATE_NOOP("App::Property", "Enable bore in mating gear"),
+    ).MatingBoreEnabled = True
+
+    var_set.addProperty(
+        "App::PropertyLength", "MatingBoreDiameter", "MatingGear",
+        QT_TRANSLATE_NOOP("App::Property", "Bore diameter of mating gear"),
+    ).MatingBoreDiameter = 5.0
+
+    var_set.addProperty(
+        "App::PropertyBool", "MatingKeywayEnabled", "MatingGear",
+        QT_TRANSLATE_NOOP("App::Property", "Enable keyway in mating gear"),
+    ).MatingKeywayEnabled = False
+
+    var_set.addProperty(
+        "App::PropertyLength", "MatingKeywayWidth", "MatingGear",
+        QT_TRANSLATE_NOOP("App::Property", "Keyway width of mating gear"),
+    ).MatingKeywayWidth = 2.0
+
+    var_set.addProperty(
+        "App::PropertyLength", "MatingKeywayDepth", "MatingGear",
+        QT_TRANSLATE_NOOP("App::Property", "Keyway depth of mating gear"),
+    ).MatingKeywayDepth = 1.0
+
+    var_set.addProperty(
+        "App::PropertyAngle", "LeadAngle", "read only",
+        QT_TRANSLATE_NOOP("App::Property", "Lead angle of worm thread"), 1,
+    )
+    var_set.setExpression("LeadAngle",
+        "atan(Module * pi * NumberOfThreads / (WormDiameter * pi))")
+
+    # WheelPhase now lives on the Regenerate object, not the VarSet.
+
+    var_set.addProperty(
+        "App::PropertyLength", "CenterDistance", "read only",
+        QT_TRANSLATE_NOOP("App::Property", "Distance between worm and wheel axes"), 1,
+    )
+    var_set.setExpression("CenterDistance",
+        "WormDiameter / 2 + 1.25 * Module + Module * GearTeeth / 2")
+
+    var_set.addProperty(
+        "App::PropertyLength", "WheelPitchDiameter", "read only",
+        QT_TRANSLATE_NOOP("App::Property", "Pitch diameter of mating wheel"), 1,
+    )
+    var_set.setExpression("WheelPitchDiameter", "Module * GearTeeth")
+
+    return var_set
+
+
+class WormGearResult:
+    """FeaturePython for auto-regeneration of worm gear."""
+
+    def __init__(self, obj, varset):
+        self._varset = varset
+        self._rebuilding = False
+        self._last_m = None
+        self._last_wd = None
+        self._last_nt = None
+        self._last_pa = None
+        self._last_len = None
+        self._last_hl = None
+        self._last_ch = None
+        self._last_rh = None
+        self._last_cm = None
+        self._last_gt = None
+        self._last_gh = None
+        self._last_cl = None
+        self._last_mb = None
+        self._last_mbd = None
+        self._last_mk = None
+        self._last_mkw = None
+        self._last_mkd = None
+        self._watcher = None
+        self._needs_rebuild = False
+        self.Type = "WormGearResult"
+
+        obj.addProperty(
+            "App::PropertyString", "VarSetName", "Gear",
+            QT_TRANSLATE_NOOP("App::Property", "Name of parameter VarSet"), 1,
+        ).VarSetName = varset.Name
+
+        obj.addProperty(
+            "App::PropertyString", "BodyName", "Gear",
+            QT_TRANSLATE_NOOP("App::Property", "Name of generated body"),
+        ).BodyName = varset.Name.replace("_values", "_Body", 1)
+
+        obj.addProperty(
+            "App::PropertyString", "Version", "read only",
+            QT_TRANSLATE_NOOP("App::Property", "Workbench version"), 1,
+        ).Version = "0.1"
+
+        obj.addProperty(
+            "App::PropertyString", "Status", "read only",
+            QT_TRANSLATE_NOOP("App::Property", "Regeneration status"), 1,
+        )
+        obj.addProperty("App::PropertyAngle","WheelPhase","Gear",
+            QT_TRANSLATE_NOOP("App::Property","Wheel tooth phase offset (tweak for meshing)")).WheelPhase = 5.0
+
+        obj.Proxy = self
+        self.Object = obj
+        obj.Status = "Not yet generated"
+        self._startWatcher(varset.Name)
+
+    def __getstate__(self):
+        return self.Type
+
+    def __setstate__(self, state):
+        if state:
+            self.Type = state
+        self._varset = None
+        self._rebuilding = False
+        self._last_m = self._last_wd = self._last_nt = None
+        self._last_pa = self._last_len = self._last_hl = None
+        self._last_rh = self._last_cm = None
+        self._last_gt = self._last_gh = self._last_cl = None
+        self._last_mb = self._last_mbd = self._last_mk = None
+        self._last_mkw = self._last_mkd = None
+        self._watcher = None
+        self._needs_rebuild = False
+
+    def onDocumentRestored(self, obj):
+        self.Object = obj
+        v = self._getVarSet()
+        if v:
+            self._last_m = float(v.Module.Value)
+            self._last_wd = float(v.WormDiameter.Value)
+            self._last_nt = int(v.NumberOfThreads)
+            self._last_pa = float(v.PressureAngle.Value)
+            self._last_len = float(v.Length.Value)
+            self._last_hl = float(v.HelixLength.Value)
+            self._last_ch = bool(v.CenterHelix)
+            self._last_rh = bool(v.RightHanded)
+            self._last_cm = bool(v.CreateMatingGear)
+            self._last_gt = int(v.GearTeeth)
+            self._last_gh = float(v.GearHeight.Value)
+            self._last_cl = float(v.Clearance)
+            self._last_mb = bool(v.MatingBoreEnabled)
+            self._last_mbd = float(v.MatingBoreDiameter.Value)
+            self._last_mk = bool(v.MatingKeywayEnabled)
+            self._last_mkw = float(v.MatingKeywayWidth.Value)
+            self._last_mkd = float(v.MatingKeywayDepth.Value)
+            self._startWatcher(v.Name)
+            obj.Status = "Up to date"
+
+    def _startWatcher(self, varset_name):
+        self._stopWatcher()
+        self._watcher = _VarSetWatcher(
+            self, varset_name,
+            watched=frozenset(("Module", "WormDiameter", "NumberOfThreads",
+                               "PressureAngle", "Length", "HelixLength",
+                               "CenterHelix", "RightHanded", "CreateMatingGear",
+                               "GearTeeth", "GearHeight", "Clearance",
+                               "MatingBoreEnabled", "MatingBoreDiameter",
+                               "MatingKeywayEnabled", "MatingKeywayWidth",
+                               "MatingKeywayDepth")),
+        )
+        App.addDocumentObserver(self._watcher)
+
+    def _stopWatcher(self):
+        if self._watcher:
+            try:
+                App.removeDocumentObserver(self._watcher)
+            except Exception:
+                pass
+            self._watcher = None
+
+    def _getVarSet(self):
+        if self._varset is None:
+            try:
+                name = self.Object.VarSetName
+                self._varset = self.Object.Document.getObject(name)
+            except AttributeError:
+                pass
+        return self._varset
+
+    def execute(self, obj):
+        pass
+
+    def onChanged(self, fp, prop):
+        if prop == "WheelPhase" and not self._rebuilding:
+            try:
+                bn = str(self.Object.BodyName)
+                wb = fp.Document.getObject(f"{bn}_WormWheel")
+                if wb:
+                    wp = fp.WheelPhase.Value
+                    base = wb.Placement.Base
+                    r = App.Rotation(App.Vector(1,0,0),90) * App.Rotation(App.Vector(0,0,1), wp)
+                    wb.Placement = App.Placement(base, r)
+            except Exception:
+                pass
+
+    def _values_changed(self):
+        v = self._getVarSet()
+        if not v:
+            return False
+        if self._last_m is None:
+            return True
+        EPS = 1e-9
+        return (abs(float(v.Module.Value) - self._last_m) > EPS or
+                abs(float(v.WormDiameter.Value) - self._last_wd) > EPS or
+                int(v.NumberOfThreads) != self._last_nt or
+                abs(float(v.PressureAngle.Value) - self._last_pa) > EPS or
+                abs(float(v.Length.Value) - self._last_len) > EPS or
+                abs(float(v.HelixLength.Value) - self._last_hl) > EPS or
+                bool(v.CenterHelix) != self._last_ch or
+                bool(v.RightHanded) != self._last_rh or
+                bool(v.CreateMatingGear) != self._last_cm or
+                int(v.GearTeeth) != self._last_gt or
+                abs(float(v.GearHeight.Value) - self._last_gh) > EPS or
+                abs(float(v.Clearance) - self._last_cl) > EPS or
+                bool(v.MatingBoreEnabled) != self._last_mb or
+                abs(float(v.MatingBoreDiameter.Value) - self._last_mbd) > EPS or
+                bool(v.MatingKeywayEnabled) != self._last_mk or
+                abs(float(v.MatingKeywayWidth.Value) - self._last_mkw) > EPS or
+                abs(float(v.MatingKeywayDepth.Value) - self._last_mkd) > EPS)
+
+    def _set_needs_rebuild(self):
+        if self._rebuilding:
+            return
+        if not self._values_changed():
+            return
+        self._needs_rebuild = True
+        try:
+            self.Object.Status = "Regenerating..."
+        except Exception:
+            pass
+        QtCore.QTimer.singleShot(0, self._deferred_rebuild)
+
+    def _on_recompute_finished(self):
+        if not self._needs_rebuild or self._rebuilding:
+            return
+        if not self._values_changed():
+            self._needs_rebuild = False
+            return
+        self._needs_rebuild = False
+        QtCore.QTimer.singleShot(0, self._deferred_rebuild)
+
+    def _deferred_rebuild(self):
+        if self._rebuilding or not self._values_changed():
+            return
+        self._rebuild()
+
+    def _rebuild(self):
+        self._rebuilding = True
+        varset_name = None
+        try:
+            v = self._getVarSet()
+            if not v:
+                return
+            varset_name = v.Name
+            self._last_m = float(v.Module.Value)
+            self._last_wd = float(v.WormDiameter.Value)
+            self._last_nt = int(v.NumberOfThreads)
+            self._last_pa = float(v.PressureAngle.Value)
+            self._last_len = float(v.Length.Value)
+            self._last_hl = float(v.HelixLength.Value)
+            self._last_ch = bool(v.CenterHelix)
+            self._last_rh = bool(v.RightHanded)
+            self._last_cm = bool(v.CreateMatingGear)
+            self._last_gt = int(v.GearTeeth)
+            self._last_gh = float(v.GearHeight.Value)
+            self._last_cl = float(v.Clearance)
+            self._last_mb = bool(v.MatingBoreEnabled)
+            self._last_mbd = float(v.MatingBoreDiameter.Value)
+            self._last_mk = bool(v.MatingKeywayEnabled)
+            self._last_mkw = float(v.MatingKeywayWidth.Value)
+            self._last_mkd = float(v.MatingKeywayDepth.Value)
+
+            if self._last_m <= 0 or self._last_wd <= 0 or self._last_len <= 0:
+                self.Object.Status = "Invalid params"
+                return
+
+            body_name = str(self.Object.BodyName)
+            doc = self.Object.Document
+
+            self._stopWatcher()
+
+            old = doc.getObject(body_name)
+            if old:
+                children = list(old.Group)
+                for child in children:
+                    for prop in child.PropertiesList:
+                        try:
+                            child.setExpression(prop, None)
+                        except Exception:
+                            pass
+                for child in reversed(children):
+                    try:
+                        doc.removeObject(child.Name)
+                    except Exception:
+                        pass
+                doc.removeObject(body_name)
+
+            self.Object.Status = "Generating worm gear..."
+            if App.GuiUp:
+                QtCore.QCoreApplication.processEvents()
+
+            parameters = {
+                "module": self._last_m,
+                "worm_diameter": self._last_wd,
+                "num_threads": self._last_nt,
+                "pressure_angle": self._last_pa,
+                "length": self._last_len,
+                "helix_length": self._last_hl,
+                "center_helix": self._last_ch,
+                "right_handed": self._last_rh,
+                "bore_type": "none",
+                "bore_diameter": float(v.BoreDiameter.Value),
+                "keyway_width": float(v.KeywayWidth.Value),
+                "keyway_depth": float(v.KeywayDepth.Value),
+                "body_name": body_name,
+                "create_mating_gear": self._last_cm,
+                "gear_teeth": self._last_gt,
+                "gear_height": self._last_gh,
+                "clearance": self._last_cl,
+                "wheel_phase": 0.0,
+            }
+            generateWormGearPart(doc, parameters)
+            # Apply stored WheelPhase rotation to the wheel body
+            try:
+                wp = self.Object.WheelPhase.Value
+                if abs(wp) > 0.001:
+                    wb = doc.getObject(f"{body_name}_WormWheel")
+                    if wb:
+                        base = wb.Placement.Base
+                        r = App.Rotation(App.Vector(1,0,0),90) * App.Rotation(App.Vector(0,0,1), wp)
+                        wb.Placement = App.Placement(base, r)
+            except Exception:
+                pass
+
+            body_out = doc.getObject(body_name)
+            if body_out:
+                bore_sk = util.createSketch(body_out, "Bore")
+                bore_circle = bore_sk.addGeometry(
+                    Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1),
+                                float(v.BoreDiameter.Value) / 2.0), False)
+                bore_sk.addConstraint(Sketcher.Constraint("Coincident", bore_circle, 3, -1, 1))
+                cst = bore_sk.addConstraint(
+                    Sketcher.Constraint("Diameter", bore_circle, float(v.BoreDiameter.Value)))
+                bore_sk.setExpression(f"Constraints[{cst}]", f"<<{v.Name}>>.BoreDiameter")
+                bore_pocket = util.createPocket(body_out, bore_sk, 200.0, "Bore")
+                bore_pocket.Reversed = True
+                bore_pocket.setExpression("Length", "200mm")
+                bore_pocket.setExpression("Suppressed",
+                    f"<<{v.Name}>>.BoreEnabled ? False : True")
+
+                tiny = 0.01
+                kw_sk = util.createSketch(body_out, "Keyway")
+                pts = [App.Vector(-0.5, -0.5, 0), App.Vector(0.5, -0.5, 0),
+                       App.Vector(0.5, 0.5, 0), App.Vector(-0.5, 0.5, 0)]
+                kw_lines = []
+                for i in range(4):
+                    kw_lines.append(kw_sk.addGeometry(
+                        Part.LineSegment(pts[i], pts[(i + 1) % 4]), False))
+                for i in range(4):
+                    kw_sk.addConstraint(Sketcher.Constraint("Coincident",
+                        kw_lines[i], 2, kw_lines[(i + 1) % 4], 1))
+                kw_sk.addConstraint(Sketcher.Constraint("Horizontal", kw_lines[0]))
+                kw_sk.addConstraint(Sketcher.Constraint("Vertical", kw_lines[1]))
+                kw_sk.addConstraint(Sketcher.Constraint("Horizontal", kw_lines[2]))
+                kw_sk.addConstraint(Sketcher.Constraint("Vertical", kw_lines[3]))
+                cst = kw_sk.addConstraint(Sketcher.Constraint("DistanceX",
+                    kw_lines[0], 1, -1, 1, -tiny))
+                kw_sk.setExpression(f"Constraints[{cst}]",
+                    f"<<{v.Name}>>.KeywayWidth / -2.0")
+                cst = kw_sk.addConstraint(Sketcher.Constraint("DistanceY",
+                    kw_lines[0], 1, -1, 1, -tiny))
+                kw_sk.setExpression(f"Constraints[{cst}]",
+                    f"<<{v.Name}>>.BoreDiameter / 2.0 - <<{v.Name}>>.KeywayDepth")
+                cst = kw_sk.addConstraint(Sketcher.Constraint("DistanceX",
+                    kw_lines[0], 2, -1, 1, tiny))
+                kw_sk.setExpression(f"Constraints[{cst}]",
+                    f"<<{v.Name}>>.KeywayWidth / 2.0")
+                cst = kw_sk.addConstraint(Sketcher.Constraint("DistanceY",
+                    kw_lines[1], 2, -1, 1, tiny))
+                kw_sk.setExpression(f"Constraints[{cst}]",
+                    f"<<{v.Name}>>.BoreDiameter / 2.0 + <<{v.Name}>>.KeywayDepth")
+                kw_pocket = util.createPocket(body_out, kw_sk, 200.0, "Keyway")
+                kw_pocket.Reversed = True
+                kw_pocket.setExpression("Suppressed",
+                    f"<<{v.Name}>>.KeywayEnabled ? False : True")
+                body_out.Tip = kw_pocket
+
+            # Mating gear bore/keyway
+            if self._last_cm:
+                mate_name = f"{body_name}_WormWheel"
+                mate_body = doc.getObject(mate_name)
+                if mate_body:
+                    mbore_sk = util.createSketch(mate_body, "Bore")
+                    mbore_circle = mbore_sk.addGeometry(
+                        Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1),
+                                    float(v.MatingBoreDiameter.Value) / 2.0), False)
+                    mbore_sk.addConstraint(Sketcher.Constraint("Coincident", mbore_circle, 3, -1, 1))
+                    cst = mbore_sk.addConstraint(Sketcher.Constraint("Diameter",
+                        mbore_circle, float(v.MatingBoreDiameter.Value)))
+                    mbore_sk.setExpression(f"Constraints[{cst}]",
+                        f"<<{v.Name}>>.MatingBoreDiameter")
+                    mbore_pocket = util.createPocket(mate_body, mbore_sk, 200.0, "Bore")
+                    mbore_pocket.Reversed = True
+                    mbore_pocket.setExpression("Suppressed",
+                        f"<<{v.Name}>>.MatingBoreEnabled ? False : True")
+
+                    mkw_sk = util.createSketch(mate_body, "Keyway")
+                    pts2 = [App.Vector(-0.5, -0.5, 0), App.Vector(0.5, -0.5, 0),
+                            App.Vector(0.5, 0.5, 0), App.Vector(-0.5, 0.5, 0)]
+                    mkw_lines = []
+                    for i in range(4):
+                        mkw_lines.append(mkw_sk.addGeometry(
+                            Part.LineSegment(pts2[i], pts2[(i + 1) % 4]), False))
+                    for i in range(4):
+                        mkw_sk.addConstraint(Sketcher.Constraint("Coincident",
+                            mkw_lines[i], 2, mkw_lines[(i + 1) % 4], 1))
+                    mkw_sk.addConstraint(Sketcher.Constraint("Horizontal", mkw_lines[0]))
+                    mkw_sk.addConstraint(Sketcher.Constraint("Vertical", mkw_lines[1]))
+                    mkw_sk.addConstraint(Sketcher.Constraint("Horizontal", mkw_lines[2]))
+                    mkw_sk.addConstraint(Sketcher.Constraint("Vertical", mkw_lines[3]))
+                    cst = mkw_sk.addConstraint(Sketcher.Constraint("DistanceX",
+                        mkw_lines[0], 1, -1, 1, -tiny))
+                    mkw_sk.setExpression(f"Constraints[{cst}]",
+                        f"<<{v.Name}>>.MatingKeywayWidth / -2.0")
+                    cst = mkw_sk.addConstraint(Sketcher.Constraint("DistanceY",
+                        mkw_lines[0], 1, -1, 1, -tiny))
+                    mkw_sk.setExpression(f"Constraints[{cst}]",
+                        f"<<{v.Name}>>.MatingBoreDiameter / 2.0 - <<{v.Name}>>.MatingKeywayDepth")
+                    cst = mkw_sk.addConstraint(Sketcher.Constraint("DistanceX",
+                        mkw_lines[0], 2, -1, 1, tiny))
+                    mkw_sk.setExpression(f"Constraints[{cst}]",
+                        f"<<{v.Name}>>.MatingKeywayWidth / 2.0")
+                    cst = mkw_sk.addConstraint(Sketcher.Constraint("DistanceY",
+                        mkw_lines[1], 2, -1, 1, tiny))
+                    mkw_sk.setExpression(f"Constraints[{cst}]",
+                        f"<<{v.Name}>>.MatingBoreDiameter / 2.0 + <<{v.Name}>>.MatingKeywayDepth")
+                    mkw_pocket = util.createPocket(mate_body, mkw_sk, 200.0, "Keyway")
+                    mkw_pocket.Reversed = True
+                    mkw_pocket.setExpression("Suppressed",
+                        f"<<{v.Name}>>.MatingKeywayEnabled ? False : True")
+                    mate_body.Tip = mkw_pocket
+
+            doc.recompute()
+
+            self.Object.Status = "Up to date"
+            if App.GuiUp:
+                QtCore.QCoreApplication.processEvents()
+        except Exception as e:
+            import traceback
+            App.Console.PrintError(traceback.format_exc())
+            try:
+                partial = doc.getObject(body_name)
+                if partial:
+                    for child in list(partial.Group):
+                        try:
+                            doc.removeObject(child.Name)
+                        except Exception:
+                            pass
+                    doc.removeObject(body_name)
+            except Exception:
+                pass
+            self.Object.Status = "Error"
+        finally:
+            if varset_name:
+                self._startWatcher(varset_name)
+            self._rebuilding = False
+
+    def force_Recompute(self):
+        self._rebuild()
 
 
 class WormGearCreateObject():
@@ -343,25 +911,33 @@ class WormGearCreateObject():
         return {'Pixmap': mainIcon, 'MenuText': "&Create Worm Gear", 'ToolTip': "Create parametric worm gear"}
 
     def Activated(self):
-        if not App.ActiveDocument: App.newDocument()
+        if not App.ActiveDocument:
+            App.newDocument()
         doc = App.ActiveDocument
-        
-        base_name = "WormGear"
+
+        base_name = "WormGear_values"
         unique_name = base_name
         count = 1
         while doc.getObject(unique_name):
-            unique_name = f"{base_name}{count:03d}"
+            unique_name = f"WormGear_values{count:03d}"
             count += 1
-            
-        gear_obj = doc.addObject("Part::FeaturePython", "WormGearParameters")
-        gear = WormGear(gear_obj)
-        gear_obj.BodyName = unique_name
-        
-        doc.recompute()
-        FreeCADGui.SendMsgToActiveView("ViewFit")
-        return gear
 
-    def IsActive(self): return True
+        varset = createWormGearVarSet(doc, unique_name)
+
+        gen_name = "Regenerate"
+        count = 1
+        while doc.getObject(gen_name):
+            gen_name = f"Regenerate{count:03d}"
+            count += 1
+        gear_obj = doc.addObject("Part::FeaturePython", gen_name)
+        WormGearResult(gear_obj, varset)
+        ViewProviderGearResult(gear_obj.ViewObject, mainIcon)
+
+        gear_obj.Proxy.force_Recompute()
+        FreeCADGui.SendMsgToActiveView("ViewFit")
+
+    def IsActive(self):
+        return True
 
 class WormGear():
     def __init__(self, obj):

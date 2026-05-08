@@ -18,6 +18,7 @@ import os
 import math
 from PySide import QtCore
 import genericHypoid
+from genericGear import _VarSetWatcher, ViewProviderGearResult
 
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, "icons")
@@ -68,6 +69,230 @@ def generateHypoidGearPart(doc, parameters):
     return result
 
 
+def createHypoidGearVarSet(doc, name):
+    """Create a VarSet for HypoidGear parameters."""
+    var_set = doc.addObject("App::VarSet", name)
+    var_set.addProperty("App::PropertyString", "Version", "read only", "", 1).Version = version
+    var_set.addProperty("App::PropertyInteger", "NumberOfTeeth", "HypoidGear", "Number of teeth").NumberOfTeeth = 20
+    var_set.addProperty("App::PropertyLength", "Module", "HypoidGear", "Module").Module = 1.0
+    var_set.addProperty("App::PropertyAngle", "PressureAngle", "HypoidGear", "Pressure angle").PressureAngle = 20.0
+    var_set.addProperty("App::PropertyFloat", "ProfileShift", "HypoidGear", "Profile shift").ProfileShift = 0.0
+    var_set.addProperty("App::PropertyLength", "Offset", "HypoidGear", "Axis offset").Offset = 10.0
+    var_set.addProperty("App::PropertyAngle", "SpiralAngle", "HypoidGear", "Spiral angle").SpiralAngle = 35.0
+    var_set.addProperty("App::PropertyAngle", "PitchAngle", "HypoidGear", "Pitch cone angle").PitchAngle = 45.0
+    var_set.addProperty("App::PropertyLength", "FaceWidth", "HypoidGear", "Face width").FaceWidth = 18.0
+    var_set.addProperty("App::PropertyLength", "BoreDiameter", "Bore", "Bore diameter").BoreDiameter = 5.0
+    var_set.addProperty("App::PropertyLength", "KeywayWidth", "Bore", "Keyway width").KeywayWidth = 2.0
+    var_set.addProperty("App::PropertyLength", "KeywayDepth", "Bore", "Keyway depth").KeywayDepth = 1.0
+    var_set.addProperty("App::PropertyBool", "BoreEnabled", "Bore", "Enable bore").BoreEnabled = True
+    var_set.addProperty("App::PropertyBool", "KeywayEnabled", "Bore", "Enable keyway").KeywayEnabled = False
+    var_set.addProperty("App::PropertyLength", "PitchDiameter", "read only", "", 1)
+    var_set.setExpression("PitchDiameter", "Module * NumberOfTeeth")
+    var_set.addProperty("App::PropertyLength", "BaseDiameter", "read only", "", 1)
+    var_set.setExpression("BaseDiameter", "PitchDiameter * cos(PressureAngle)")
+    var_set.addProperty("App::PropertyLength", "OuterDiameter", "read only", "", 1)
+    var_set.setExpression("OuterDiameter", "PitchDiameter + 2 * Module * (1 + ProfileShift)")
+    var_set.addProperty("App::PropertyLength", "RootDiameter", "read only", "", 1)
+    var_set.setExpression("RootDiameter", "PitchDiameter - 2 * Module * (1.25 - ProfileShift)")
+    return var_set
+
+
+class HypoidGearResult:
+    """FeaturePython for auto-regeneration of hypoid gear."""
+
+    def __init__(self, obj, varset):
+        self._varset = varset
+        self._rebuilding = False
+        self._last_m = self._last_nt = self._last_pa = self._last_ps = None
+        self._last_of = self._last_sa = self._last_pt = self._last_fw = None
+        self._watcher = None
+        self._needs_rebuild = False
+        self.Type = "HypoidGearResult"
+        obj.addProperty("App::PropertyString", "VarSetName", "Gear", "", 1).VarSetName = varset.Name
+        obj.addProperty("App::PropertyString", "BodyName", "Gear", "Name of generated body").BodyName = varset.Name.replace("_values", "_Body", 1)
+        obj.addProperty("App::PropertyString", "Version", "read only", "", 1).Version = version
+        obj.addProperty("App::PropertyString", "Status", "read only", "", 1)
+        obj.Proxy = self
+        self.Object = obj
+        obj.Status = "Not yet generated"
+        self._startWatcher(varset.Name)
+
+    def __getstate__(self): return self.Type
+    def __setstate__(self, state):
+        if state: self.Type = state
+        self._varset = None; self._rebuilding = False
+        self._last_m = self._last_nt = self._last_pa = self._last_ps = None
+        self._last_of = self._last_sa = self._last_pt = self._last_fw = None
+        self._watcher = None; self._needs_rebuild = False
+
+    def onDocumentRestored(self, obj):
+        self.Object = obj; v = self._getVarSet()
+        if v:
+            for a in ["Module", "PressureAngle", "Offset", "SpiralAngle", "PitchAngle", "FaceWidth"]:
+                setattr(self, f"_last_{a[0].lower() + ('m' if a[0]=='M' else a[1:])}", float(getattr(v, a).Value))
+            self._last_nt = int(v.NumberOfTeeth)
+            self._startWatcher(v.Name); obj.Status = "Up to date"
+
+    def _abbrev(self, varname):
+        return {"Module":"m","NumberOfTeeth":"nt","PressureAngle":"pa","ProfileShift":"ps",
+                "Offset":"of","SpiralAngle":"sa","PitchAngle":"pt","FaceWidth":"fw",
+                "BoreDiameter":"bd","KeywayWidth":"kw","KeywayDepth":"kd",
+                "BoreEnabled":"be","KeywayEnabled":"ke"}.get(varname, varname[:2].lower())
+
+    def _startWatcher(self, vn):
+        self._stopWatcher()
+        self._watcher = _VarSetWatcher(self, vn, watched=frozenset((
+            "Module","NumberOfTeeth","PressureAngle","ProfileShift","Offset",
+            "SpiralAngle","PitchAngle","FaceWidth","BoreEnabled","KeywayEnabled",
+            "BoreDiameter","KeywayWidth","KeywayDepth")))
+        App.addDocumentObserver(self._watcher)
+
+    def _stopWatcher(self):
+        if self._watcher:
+            try: App.removeDocumentObserver(self._watcher)
+            except: pass
+            self._watcher = None
+
+    def _getVarSet(self):
+        if self._varset is None:
+            try: self._varset = self.Object.Document.getObject(self.Object.VarSetName)
+            except: pass
+        return self._varset
+
+    def execute(self, obj): pass
+
+    def _values_changed(self):
+        v = self._getVarSet()
+        if not v or self._last_m is None: return v is not None
+        EPS = 1e-9
+        return (abs(float(v.Module.Value)-self._last_m)>EPS or int(v.NumberOfTeeth)!=self._last_nt or
+                abs(float(v.PressureAngle.Value)-self._last_pa)>EPS or
+                abs(float(v.ProfileShift)-self._last_ps)>EPS or
+                abs(float(v.Offset.Value)-self._last_of)>EPS or
+                abs(float(v.SpiralAngle.Value)-self._last_sa)>EPS or
+                abs(float(v.PitchAngle.Value)-self._last_pt)>EPS or
+                abs(float(v.FaceWidth.Value)-self._last_fw)>EPS)
+
+    def _set_needs_rebuild(self):
+        if self._rebuilding or not self._values_changed(): return
+        self._needs_rebuild = True
+        try: self.Object.Status = "Regenerating..."
+        except: pass
+        QtCore.QTimer.singleShot(0, self._deferred_rebuild)
+
+    def _on_recompute_finished(self):
+        if not self._needs_rebuild or self._rebuilding: return
+        if not self._values_changed(): self._needs_rebuild = False; return
+        self._needs_rebuild = False
+        QtCore.QTimer.singleShot(0, self._deferred_rebuild)
+
+    def _deferred_rebuild(self):
+        if self._rebuilding or not self._values_changed(): return
+        self._rebuild()
+
+    def _rebuild(self):
+        self._rebuilding = True
+        varset_name = None
+        try:
+            v = self._getVarSet()
+            if not v: return
+            varset_name = v.Name
+            self._last_m = float(v.Module.Value)
+            self._last_nt = int(v.NumberOfTeeth)
+            self._last_pa = float(v.PressureAngle.Value)
+            self._last_ps = float(v.ProfileShift)
+            self._last_of = float(v.Offset.Value)
+            self._last_sa = float(v.SpiralAngle.Value)
+            self._last_pt = float(v.PitchAngle.Value)
+            self._last_fw = float(v.FaceWidth.Value)
+            if self._last_m <= 0 or self._last_nt < 3 or self._last_fw <= 0:
+                self.Object.Status = "Invalid params"; return
+            body_name = str(self.Object.BodyName)
+            doc = self.Object.Document
+            self._stopWatcher()
+            old = doc.getObject(body_name)
+            if old:
+                children = list(old.Group)
+                for c in children:
+                    for p in c.PropertiesList:
+                        try: c.setExpression(p, None)
+                        except: pass
+                for c in reversed(children):
+                    try: doc.removeObject(c.Name)
+                    except: pass
+                doc.removeObject(body_name)
+            self.Object.Status = "Generating gear geometry..."
+            if App.GuiUp: QtCore.QCoreApplication.processEvents()
+            genericHypoid.hypoidGear(doc, {
+                "module":self._last_m, "num_teeth":self._last_nt,
+                "pressure_angle":self._last_pa, "profile_shift":self._last_ps,
+                "offset":self._last_of, "spiral_angle":self._last_sa,
+                "pitch_angle":self._last_pt, "face_width":self._last_fw,
+                "bore_type":"none", "bore_diameter":float(v.BoreDiameter.Value),
+                "keyway_width":float(v.KeywayWidth.Value),
+                "keyway_depth":float(v.KeywayDepth.Value), "body_name":body_name,
+            }, gearMath.generateToothProfile)
+            # Flip so the small end faces the viewer
+            body_out = doc.getObject(body_name)
+            if body_out:
+                body_out.Placement = App.Placement(
+                    App.Vector(0,0,0), App.Rotation(App.Vector(1,0,0), 180))
+            body_out = doc.getObject(body_name)
+            if body_out:
+                sk = util.createSketch(body_out, "Bore")
+                c = sk.addGeometry(Part.Circle(App.Vector(0,0,0),App.Vector(0,0,1),float(v.BoreDiameter.Value)/2), False)
+                sk.addConstraint(Sketcher.Constraint("Coincident",c,3,-1,1))
+                ci = sk.addConstraint(Sketcher.Constraint("Diameter",c,float(v.BoreDiameter.Value)))
+                sk.setExpression(f"Constraints[{ci}]",f"<<{v.Name}>>.BoreDiameter")
+                pk = util.createPocket(body_out,sk,100.0,"Bore")
+                pk.Reversed = True
+                pk.setExpression("Suppressed",f"<<{v.Name}>>.BoreEnabled ? False : True")
+
+                tiny=0.01
+                kw=util.createSketch(body_out,"Keyway")
+                pts=[App.Vector(-0.5,-0.5,0),App.Vector(0.5,-0.5,0),App.Vector(0.5,0.5,0),App.Vector(-0.5,0.5,0)]
+                ls=[]
+                for i in range(4):
+                    ls.append(kw.addGeometry(Part.LineSegment(pts[i],pts[(i+1)%4]),False))
+                for i in range(4):
+                    kw.addConstraint(Sketcher.Constraint("Coincident",ls[i],2,ls[(i+1)%4],1))
+                kw.addConstraint(Sketcher.Constraint("Horizontal",ls[0]))
+                kw.addConstraint(Sketcher.Constraint("Vertical",ls[1]))
+                kw.addConstraint(Sketcher.Constraint("Horizontal",ls[2]))
+                kw.addConstraint(Sketcher.Constraint("Vertical",ls[3]))
+                c=kw.addConstraint(Sketcher.Constraint("DistanceX",ls[0],1,-1,1,-tiny))
+                kw.setExpression(f"Constraints[{c}]",f"<<{v.Name}>>.KeywayWidth / -2.0")
+                c=kw.addConstraint(Sketcher.Constraint("DistanceY",ls[0],1,-1,1,-tiny))
+                kw.setExpression(f"Constraints[{c}]",f"<<{v.Name}>>.BoreDiameter/2 - <<{v.Name}>>.KeywayDepth")
+                c=kw.addConstraint(Sketcher.Constraint("DistanceX",ls[0],2,-1,1,tiny))
+                kw.setExpression(f"Constraints[{c}]",f"<<{v.Name}>>.KeywayWidth / 2.0")
+                c=kw.addConstraint(Sketcher.Constraint("DistanceY",ls[1],2,-1,1,tiny))
+                kw.setExpression(f"Constraints[{c}]",f"<<{v.Name}>>.BoreDiameter/2 + <<{v.Name}>>.KeywayDepth")
+                kp=util.createPocket(body_out,kw,100.0,"Keyway")
+                kp.Reversed = True
+                kp.setExpression("Suppressed",f"<<{v.Name}>>.KeywayEnabled ? False : True")
+                body_out.Tip = kp
+                doc.recompute()
+            self.Object.Status = "Up to date"
+            if App.GuiUp: QtCore.QCoreApplication.processEvents()
+        except Exception as e:
+            import traceback; App.Console.PrintError(traceback.format_exc())
+            try:
+                p=doc.getObject(body_name)
+                if p:
+                    for c in list(p.Group):
+                        try: doc.removeObject(c.Name)
+                        except: pass
+                    doc.removeObject(body_name)
+            except: pass
+            self.Object.Status = "Error"
+        finally:
+            if varset_name: self._startWatcher(varset_name)
+            self._rebuilding = False
+
+    def force_Recompute(self): self._rebuild()
+
+
 class HypoidGearCreateObject:
     """Command to create a new hypoid gear object."""
 
@@ -75,40 +300,24 @@ class HypoidGearCreateObject:
         return {
             "Pixmap": mainIcon,
             "MenuText": "&Create Hypoid Gear",
-            "ToolTip": "Create parametric hypoid gear",
+            "ToolTip": "Create parametric hypoid gear (offset bevel gear)",
         }
 
-    def __init__(self):
-        pass
-
     def Activated(self):
-        """Called when command is activated."""
-        if not App.ActiveDocument:
-            App.newDocument()
+        if not App.ActiveDocument: App.newDocument()
         doc = App.ActiveDocument
-
-        # --- Generate Unique Body Name ---
-        base_name = "HypoidGear"
-        unique_name = base_name
-        count = 1
-        while doc.getObject(unique_name):
-            unique_name = f"{base_name}{count:03d}"
-            count += 1
-
-        gear_obj = doc.addObject("Part::FeaturePython", "HypoidGearParameters")
-        hypoid_gear = HypoidGear(gear_obj)
-
-        # Assign unique name to the property so gearMath uses it
-        gear_obj.BodyName = unique_name
-
-        doc.recompute()
+        base = "HypoidGear_values"; uname = base; c = 1
+        while doc.getObject(uname): uname = f"{base}{c:03d}"; c += 1
+        vs = createHypoidGearVarSet(doc, uname)
+        gn = "Regenerate"; c = 1
+        while doc.getObject(gn): gn = f"Regenerate{c:03d}"; c += 1
+        go = doc.addObject("Part::FeaturePython", gn)
+        HypoidGearResult(go, vs)
+        ViewProviderGearResult(go.ViewObject, mainIcon)
+        go.Proxy.force_Recompute()
         FreeCADGui.SendMsgToActiveView("ViewFit")
-        FreeCADGui.ActiveDocument.ActiveView.viewIsometric()
-        return hypoid_gear
 
-    def IsActive(self):
-        """Return True if command can be activated."""
-        return True
+    def IsActive(self): return True
 
     def Deactivated(self):
         """Called when workbench is deactivated."""
