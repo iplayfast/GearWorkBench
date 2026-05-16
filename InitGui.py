@@ -38,6 +38,7 @@ import hypoidGear  # Import hypoid gear module
 import screwGear  # Import screw gear module
 import nonCircularGear  # Import non-circular gear module
 import genevaWheel  # Import Geneva wheel (Maltese cross) module
+import gearStack  # Import gear stack module
 
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, "icons")
@@ -79,6 +80,7 @@ class GearWorkbenchWB(Workbench):
                 "GenevaWheelCreateObject",
                 # Tools
                 "GearPositioningCommand",
+                "GearStackCommand",
             ]
 
             # Verify command is available
