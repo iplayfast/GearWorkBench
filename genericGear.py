@@ -1079,7 +1079,10 @@ class _VarSetWatcher:
     def slotRecomputedDocument(self, doc):
         """Fires when FreeCAD finishes a recompute cycle (busy cursor ends)."""
         if self._doc_name and doc.Name == self._doc_name:
-            self._generator._on_recompute_finished()
+            try:
+                self._generator._on_recompute_finished()
+            except ReferenceError:
+                pass
 
 
 def createGearVarSet(doc, name):
@@ -1231,6 +1234,7 @@ class GearResult:
         self._last_pa = None
         self._last_ps = None
         self._last_bl = None
+        self._last_nt = None
         self._last_a1 = None
         self._last_a2 = None
         self._last_gt = None
@@ -1240,6 +1244,7 @@ class GearResult:
         self._gt_changed = False
         self._tp_changed = False
         self._watcher = None
+        self._debounce_timer = None
         self._needs_rebuild = False
         self.Type = "GearResult"
 
@@ -1301,7 +1306,8 @@ class GearResult:
         self._varset = None
         self._rebuilding = False
         self._last_m = self._last_pa = self._last_ps = None
-        self._last_bl = self._last_a1 = self._last_a2 = self._last_gt = None
+        self._last_bl = self._last_nt = None
+        self._last_a1 = self._last_a2 = self._last_gt = None
         self._last_tp = self._last_af = self._last_df = None
         self._gt_changed = self._tp_changed = False
         self._watcher = None
@@ -1315,6 +1321,7 @@ class GearResult:
             self._last_pa = float(v.PressureAngle.Value)
             self._last_ps = float(v.ProfileShift)
             self._last_bl = float(v.Backlash)
+            self._last_nt = int(v.NumberOfTeeth)
             self._last_a1 = float(v.Angle1.Value)
             self._last_a2 = float(v.Angle2.Value)
             self._last_gt = str(v.GearType)
@@ -1345,11 +1352,17 @@ class GearResult:
             self._watcher = None
 
     def _getVarSet(self):
+        # Validate cached reference is still alive
+        if self._varset is not None:
+            try:
+                _ = self._varset.Name  # raises ReferenceError if deleted
+            except ReferenceError:
+                self._varset = None
         if self._varset is None:
             try:
                 name = self.Object.VarSetName
                 self._varset = self.Object.Document.getObject(name)
-            except AttributeError:
+            except (AttributeError, ReferenceError):
                 pass
         return self._varset
 
@@ -1362,21 +1375,27 @@ class GearResult:
             return False
         if self._last_m is None:
             return True
-        EPS = 1e-9
-        m = float(v.Module.Value)
-        pa = float(v.PressureAngle.Value)
-        ps = float(v.ProfileShift)
-        bl = float(v.Backlash)
-        a1 = float(v.Angle1.Value)
-        a2 = float(v.Angle2.Value)
-        gt = str(v.GearType)
-        tp = str(v.ToothProfile)
-        af = float(v.AddendumFactor) if hasattr(v, "AddendumFactor") else self._last_af
-        df = float(v.DedendumFactor) if hasattr(v, "DedendumFactor") else self._last_df
+        try:
+            EPS = 1e-9
+            m = float(v.Module.Value)
+            pa = float(v.PressureAngle.Value)
+            ps = float(v.ProfileShift)
+            bl = float(v.Backlash)
+            nt = int(v.NumberOfTeeth)
+            a1 = float(v.Angle1.Value)
+            a2 = float(v.Angle2.Value)
+            gt = str(v.GearType)
+            tp = str(v.ToothProfile)
+            af = float(v.AddendumFactor) if hasattr(v, "AddendumFactor") else self._last_af
+            df = float(v.DedendumFactor) if hasattr(v, "DedendumFactor") else self._last_df
+        except ReferenceError:
+            self._varset = None
+            return False
         return (abs(m - self._last_m) > EPS or
                 abs(pa - self._last_pa) > EPS or
                 abs(ps - self._last_ps) > EPS or
                 abs(bl - self._last_bl) > EPS or
+                nt != self._last_nt or
                 abs(a1 - self._last_a1) > EPS or
                 abs(a2 - self._last_a2) > EPS or
                 gt != self._last_gt or
@@ -1390,16 +1409,20 @@ class GearResult:
         v = self._getVarSet()
         if not v:
             return
-        gt = str(v.GearType)
-        if gt != self._last_gt:
-            self._last_gt = gt
-            self._gt_changed = True
-            self._apply_gear_type_defaults(v)
-        tp = str(v.ToothProfile)
-        if tp != self._last_tp:
-            self._last_tp = tp
-            self._tp_changed = True
-            self._apply_gear_type_defaults(v)
+        try:
+            gt = str(v.GearType)
+            if gt != self._last_gt:
+                self._last_gt = gt
+                self._gt_changed = True
+                self._apply_gear_type_defaults(v)
+            tp = str(v.ToothProfile)
+            if tp != self._last_tp:
+                self._last_tp = tp
+                self._tp_changed = True
+                self._apply_gear_type_defaults(v)
+        except ReferenceError:
+            self._varset = None
+            return
         if not self._gt_changed and not self._tp_changed and not self._values_changed():
             return
         self._needs_rebuild = True
@@ -1407,7 +1430,17 @@ class GearResult:
             self.Object.Status = "Regenerating..."
         except Exception:
             pass
-        QtCore.QTimer.singleShot(0, self._deferred_rebuild)
+        self._restart_debounce()
+
+    def _restart_debounce(self):
+        """Restart the debounce timer. Each new change resets the delay."""
+        if self._debounce_timer is not None:
+            self._debounce_timer.stop()
+            self._debounce_timer.deleteLater()
+        self._debounce_timer = QtCore.QTimer()
+        self._debounce_timer.setSingleShot(True)
+        self._debounce_timer.timeout.connect(self._deferred_rebuild)
+        self._debounce_timer.start(600)
 
     def _on_recompute_finished(self):
         if not self._needs_rebuild:
@@ -1418,7 +1451,7 @@ class GearResult:
             self._needs_rebuild = False
             return
         self._needs_rebuild = False
-        QtCore.QTimer.singleShot(0, self._deferred_rebuild)
+        self._restart_debounce()
 
     def _deferred_rebuild(self):
         if self._rebuilding:
@@ -1441,6 +1474,7 @@ class GearResult:
             self._last_pa = float(v.PressureAngle.Value)
             self._last_ps = float(v.ProfileShift)
             self._last_bl = float(v.Backlash)
+            self._last_nt = int(v.NumberOfTeeth)
             self._last_a1 = float(v.Angle1.Value)
             self._last_a2 = float(v.Angle2.Value)
             self._last_gt = str(v.GearType)
@@ -1457,7 +1491,7 @@ class GearResult:
                 return
 
             effective_shift = self._last_ps - self._last_bl
-            num_teeth = int(v.NumberOfTeeth)
+            num_teeth = self._last_nt
             pitch_dia = self._last_m * num_teeth
             root_dia = pitch_dia - 2 * self._last_m * (1.25 - effective_shift)
 
@@ -1668,11 +1702,16 @@ class SpurGearResult:
 
     def _getVarSet(self):
         """Get VarSet, looking it up by name after file restore."""
+        if self._varset is not None:
+            try:
+                _ = self._varset.Name  # raises ReferenceError if deleted
+            except ReferenceError:
+                self._varset = None
         if self._varset is None:
             try:
                 name = self.Object.VarSetName
                 self._varset = self.Object.Document.getObject(name)
-            except AttributeError:
+            except (AttributeError, ReferenceError):
                 pass
         return self._varset
 
@@ -1691,12 +1730,16 @@ class SpurGearResult:
             return False
         if self._last_m is None:
             return True
-        EPS = 1e-9
-        m = float(v.Module.Value)
-        pa = float(v.PressureAngle.Value)
-        ps = float(v.ProfileShift)
-        bl = float(v.Backlash)
-        nt = int(v.NumberOfTeeth)
+        try:
+            EPS = 1e-9
+            m = float(v.Module.Value)
+            pa = float(v.PressureAngle.Value)
+            ps = float(v.ProfileShift)
+            bl = float(v.Backlash)
+            nt = int(v.NumberOfTeeth)
+        except ReferenceError:
+            self._varset = None
+            return False
         return (abs(m - self._last_m) > EPS or
                 abs(pa - self._last_pa) > EPS or
                 abs(ps - self._last_ps) > EPS or
@@ -1720,6 +1763,17 @@ class SpurGearResult:
             self.Object.Status = "Needs regeneration"
         except Exception:
             pass
+        self._restart_debounce()
+
+    def _restart_debounce(self):
+        """Restart the debounce timer. Each new change resets the delay."""
+        if self._debounce_timer is not None:
+            self._debounce_timer.stop()
+            self._debounce_timer.deleteLater()
+        self._debounce_timer = QtCore.QTimer()
+        self._debounce_timer.setSingleShot(True)
+        self._debounce_timer.timeout.connect(self._rebuild)
+        self._debounce_timer.start(600)
 
     def _on_recompute_finished(self):
         """Called by watcher when FreeCAD finishes a recompute cycle.
@@ -1727,8 +1781,7 @@ class SpurGearResult:
         We can't call _rebuild() directly here — we're still inside
         FreeCAD's recompute callback, and our rebuild calls doc.recompute()
         which triggers "Recursive calling of recompute" and leaves the
-        new body invisible.  Defer with singleShot(0) to exit the
-        callback first.
+        new body invisible.  Defer with debounce to exit the callback first.
         """
         if not self._needs_rebuild:
             return
@@ -1738,7 +1791,7 @@ class SpurGearResult:
             self._needs_rebuild = False
             return
         self._needs_rebuild = False
-        QtCore.QTimer.singleShot(0, self._rebuild)
+        self._restart_debounce()
 
     def _rebuild(self):
         """Rebuild the gear body."""
@@ -1966,11 +2019,16 @@ class HelixGearResult:
             self._watcher = None
 
     def _getVarSet(self):
+        if self._varset is not None:
+            try:
+                _ = self._varset.Name
+            except ReferenceError:
+                self._varset = None
         if self._varset is None:
             try:
                 name = self.Object.VarSetName
                 self._varset = self.Object.Document.getObject(name)
-            except AttributeError:
+            except (AttributeError, ReferenceError):
                 pass
         return self._varset
 
@@ -1983,13 +2041,17 @@ class HelixGearResult:
             return False
         if self._last_m is None:
             return True
-        EPS = 1e-9
-        m = float(v.Module.Value)
-        pa = float(v.PressureAngle.Value)
-        ps = float(v.ProfileShift)
-        bl = float(v.Backlash)
-        ha = float(v.HelixAngle.Value)
-        nt = int(v.NumberOfTeeth)
+        try:
+            EPS = 1e-9
+            m = float(v.Module.Value)
+            pa = float(v.PressureAngle.Value)
+            ps = float(v.ProfileShift)
+            bl = float(v.Backlash)
+            ha = float(v.HelixAngle.Value)
+            nt = int(v.NumberOfTeeth)
+        except ReferenceError:
+            self._varset = None
+            return False
         return (abs(m - self._last_m) > EPS or
                 abs(pa - self._last_pa) > EPS or
                 abs(ps - self._last_ps) > EPS or
@@ -2007,6 +2069,17 @@ class HelixGearResult:
             self.Object.Status = "Needs regeneration"
         except Exception:
             pass
+        self._restart_debounce()
+
+    def _restart_debounce(self):
+        """Restart the debounce timer. Each new change resets the delay."""
+        if self._debounce_timer is not None:
+            self._debounce_timer.stop()
+            self._debounce_timer.deleteLater()
+        self._debounce_timer = QtCore.QTimer()
+        self._debounce_timer.setSingleShot(True)
+        self._debounce_timer.timeout.connect(self._rebuild)
+        self._debounce_timer.start(600)
 
     def _on_recompute_finished(self):
         if not self._needs_rebuild:
@@ -2017,7 +2090,7 @@ class HelixGearResult:
             self._needs_rebuild = False
             return
         self._needs_rebuild = False
-        QtCore.QTimer.singleShot(0, self._rebuild)
+        self._restart_debounce()
 
     def _rebuild(self):
         self._rebuilding = True
@@ -2234,11 +2307,16 @@ class HerringboneGearResult:
             self._watcher = None
 
     def _getVarSet(self):
+        if self._varset is not None:
+            try:
+                _ = self._varset.Name
+            except ReferenceError:
+                self._varset = None
         if self._varset is None:
             try:
                 name = self.Object.VarSetName
                 self._varset = self.Object.Document.getObject(name)
-            except AttributeError:
+            except (AttributeError, ReferenceError):
                 pass
         return self._varset
 
@@ -2251,14 +2329,18 @@ class HerringboneGearResult:
             return False
         if self._last_m is None:
             return True
-        EPS = 1e-9
-        m = float(v.Module.Value)
-        pa = float(v.PressureAngle.Value)
-        ps = float(v.ProfileShift)
-        bl = float(v.Backlash)
-        a1 = float(v.Angle1.Value)
-        a2 = float(v.Angle2.Value)
-        nt = int(v.NumberOfTeeth)
+        try:
+            EPS = 1e-9
+            m = float(v.Module.Value)
+            pa = float(v.PressureAngle.Value)
+            ps = float(v.ProfileShift)
+            bl = float(v.Backlash)
+            a1 = float(v.Angle1.Value)
+            a2 = float(v.Angle2.Value)
+            nt = int(v.NumberOfTeeth)
+        except ReferenceError:
+            self._varset = None
+            return False
         return (abs(m - self._last_m) > EPS or
                 abs(pa - self._last_pa) > EPS or
                 abs(ps - self._last_ps) > EPS or
@@ -2275,6 +2357,17 @@ class HerringboneGearResult:
             self.Object.Status = "Needs regeneration"
         except Exception:
             pass
+        self._restart_debounce()
+
+    def _restart_debounce(self):
+        """Restart the debounce timer. Each new change resets the delay."""
+        if self._debounce_timer is not None:
+            self._debounce_timer.stop()
+            self._debounce_timer.deleteLater()
+        self._debounce_timer = QtCore.QTimer()
+        self._debounce_timer.setSingleShot(True)
+        self._debounce_timer.timeout.connect(self._rebuild)
+        self._debounce_timer.start(600)
 
     def _on_recompute_finished(self):
         if not self._needs_rebuild:
@@ -2285,7 +2378,7 @@ class HerringboneGearResult:
             self._needs_rebuild = False
             return
         self._needs_rebuild = False
-        QtCore.QTimer.singleShot(0, self._rebuild)
+        self._restart_debounce()
 
     def _rebuild(self):
         self._rebuilding = True

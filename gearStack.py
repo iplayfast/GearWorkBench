@@ -182,6 +182,10 @@ class GearStackCommand:
             obj.Gears = bodies
             obj.Gaps = [0.0] * (len(bodies) - 1)
 
+            # Hide source Bodies so only the stack is visible
+            for body in bodies:
+                body.ViewObject.Visibility = False
+
             doc.commitTransaction()
             doc.recompute()
             FreeCADGui.SendMsgToActiveView("ViewFit")
