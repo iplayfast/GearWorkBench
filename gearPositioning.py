@@ -1,7 +1,8 @@
 """Gear Positioning Tool for GearWorkbench
 
-This module provides a dialog-based tool to position two gears beside each other
-for proper meshing.
+Positions two gears at the correct center distance for meshing.
+User selects exactly 2 PartDesign::Body objects, then clicks Position Gears.
+Handles spur/helical (planar), bevel, rack, and mixed gear pairs.
 
 Copyright 2025, Chris Bruner
 License LGPL V2.1
@@ -11,1165 +12,516 @@ import os
 import math
 import FreeCAD as App
 import FreeCADGui
-import Part
-import Sketcher
-import util
 from PySide import QtCore, QtGui
-from typing import List, Dict, Optional
 
 smWBpath = os.path.dirname(os.path.abspath(__file__))
 smWB_icons_path = os.path.join(smWBpath, "icons")
 
 
-class GearPositionDialog(QtGui.QDialog):
-    """Dialog for selecting and positioning two gears."""
-
-    def __init__(self, gears: List[Dict], parent=None):
-        super().__init__(parent)
-        self.gears = gears
-        self.preview_body = None
-        self.preview_objects = []
-        self.original_gear2_positions = {}
-        self.preview_counter = 0
-        self.preview_prefix = "Preview"
-        self.setupUI()
-        self.setAttribute(QtCore.Qt.WA_DeleteOnClose)
-
-    def getGearSpecs(self, gear_info: Dict) -> Dict:
-        """Get gear specifications from parameter object.
-
-        Args:
-            gear_info: Dictionary containing gear information
-
-        Returns:
-            Dictionary with module, pressure_angle, helix_angle, and gear_type
-        """
-        # Use the module-level function
-        return getGearSpecs(gear_info)
-
-    def areGearsCompatible(self, gear1_info: Dict, gear2_info: Dict) -> bool:
-        """Check if two gears are compatible for meshing.
-
-        Now simplified to only check if modules match. This allows users to
-        experiment with different gear type combinations and decide if they work.
-
-        Args:
-            gear1_info: First gear information
-            gear2_info: Second gear information
-
-        Returns:
-            True if gears have matching module, False otherwise
-        """
-        specs1 = self.getGearSpecs(gear1_info)
-        specs2 = self.getGearSpecs(gear2_info)
-
-        module_diff = abs(specs1["module"] - specs2["module"])
-        module_compatible = module_diff < 0.001
-
-        # Only require matching module - let user decide if the combination works
-        return module_compatible
-
-    def moveAndFinalize(self):
-        """Move gear 1 to final position and delete preview."""
-        idx1 = self.gear1_combo.currentIndex()
-        idx2_data = self.gear2_combo.itemData(self.gear2_combo.currentIndex())
-
-        if idx1 < 0 or idx2_data is None:
-            App.Console.PrintError("Invalid gear selection\n")
-            return
-
-        gear1_info = self.gears[idx1]
-        gear2_info = self.gears[idx2_data]
-
-        # Re-fetch bodies from document to ensure they're valid
-        doc = App.ActiveDocument
-        if not doc:
-            App.Console.PrintError("No active document\n")
-            return
-
-        gear1_param = gear1_info["param_obj"]
-        gear2_param = gear2_info["param_obj"]
-
-        gear1_body_name = gear1_param.BodyName if hasattr(gear1_param, "BodyName") else None
-        gear2_body_name = gear2_param.BodyName if hasattr(gear2_param, "BodyName") else None
-
-        if not gear1_body_name or not gear2_body_name:
-            App.Console.PrintError("Cannot determine gear body names\n")
-            return
-
-        gear1_body = doc.getObject(gear1_body_name)
-        gear2_body = doc.getObject(gear2_body_name)
-
-        gear1_valid = gear1_body is not None
-        if gear1_valid:
-            try:
-                gear1_valid = gear1_body.isValid()
-            except Exception:
-                gear1_valid = False
-
-        gear2_valid = gear2_body is not None
-        if gear2_valid:
-            try:
-                gear2_valid = gear2_body.isValid()
-            except Exception:
-                gear2_valid = False
-
-        if not gear1_valid:
-            App.Console.PrintError(f"Gear 1 body '{gear1_body_name}' not valid\n")
-            return
-
-        if not gear2_valid:
-            App.Console.PrintError(f"Gear 2 body '{gear2_body_name}' not valid\n")
-            return
-
-        rotation_angle = self.angle_spinbox.value()
-
-        # Check if there's a preview to use
-        if self.preview_objects and App.ActiveDocument:
-            # Get the latest preview object
-            latest_preview_name = self.preview_objects[-1]
-            preview_obj = doc.getObject(latest_preview_name)
-
-            preview_valid = preview_obj is not None
-            if preview_valid:
-                try:
-                    preview_valid = preview_obj.isValid()
-                except Exception:
-                    preview_valid = False
-
-            if preview_valid:
-                # Use the preview's placement
-                gear1_body.Placement = preview_obj.Placement
-            else:
-                # No valid preview, recalculate position from angle
-                self._calculateAndApplyPosition(gear1_info, gear2_info, rotation_angle, gear1_body, gear2_body)
-        else:
-            # No preview exists, recalculate position from angle
-            self._calculateAndApplyPosition(gear1_info, gear2_info, rotation_angle, gear1_body, gear2_body)
-
-        # Update gear 1 parameter object properties (gear 1 moved, gear 2 is reference)
-        if hasattr(gear1_param, "OriginX"):
-            gear1_param.OriginX = gear1_body.Placement.Base.x
-        if hasattr(gear1_param, "OriginY"):
-            gear1_param.OriginY = gear1_body.Placement.Base.y
-        if hasattr(gear1_param, "OriginZ"):
-            gear1_param.OriginZ = gear1_body.Placement.Base.z
-        if hasattr(gear1_param, "Angle"):
-            gear1_param.Angle = rotation_angle
-
-        gear1_param.Document.recompute()
-
-        # Clean up all previews
-        self.cleanupPreview()
-
-        App.Console.PrintMessage(
-            f"Moved '{gear1_body.Name}' to final position at {rotation_angle:.1f}° around '{gear2_body.Name}'\n"
-        )
-
-    def _calculateAndApplyPosition(self, gear1_info, gear2_info, rotation_angle, gear1_body, gear2_body):
-        """Calculate and apply position for gear1 around gear2 (reference)."""
-        import math
-
-        # Validate that bodies still exist
-        if not gear1_body or not hasattr(gear1_body, "Placement"):
-            App.Console.PrintError("Error: Gear 1 body no longer exists\n")
-            return
-        if not gear2_body or not hasattr(gear2_body, "Placement"):
-            App.Console.PrintError("Error: Gear 2 body no longer exists\n")
-            return
-
-        # Gear 2 is center/reference (fixed), Gear 1 moves around it
-        center_origin = gear2_body.Placement.Base
-
-        # Get gear specs for center distance calculation
-        gear1_specs = self.getGearSpecs(gear1_info)
-        gear2_specs = self.getGearSpecs(gear2_info)
-
-        # Calculate center distance
-        center_distance = calculateCenterDistance(gear1_info, gear2_info, gear1_specs, gear2_specs)
-
-        # Calculate new position
-        angle_rad = rotation_angle * math.pi / 180.0
-
-        dx = center_distance * math.cos(angle_rad)
-        dy = center_distance * math.sin(angle_rad)
-
-        new_x = center_origin.x + dx
-        new_y = center_origin.y + dy
-        new_z = center_origin.z
-
-        # Directly set rotation to angle spinbox value (no complex calculation)
-        new_placement = App.Placement(
-            App.Vector(new_x, new_y, new_z),
-            App.Rotation(App.Vector(0, 0, 1), rotation_angle),
-        )
-
-        # Apply to gear1 (the moving gear)
-        gear1_body.Placement = new_placement
-
-    def getCompatibleGears(self, selected_gear_idx: int) -> List[int]:
-        """Get list of compatible gear indices.
-
-        Args:
-            selected_gear_idx: Index of first selected gear
-
-        Returns:
-            List of compatible gear indices (excluding selected gear)
-        """
-        if selected_gear_idx < 0 or selected_gear_idx >= len(self.gears):
-            return []
-
-        selected_gear = self.gears[selected_gear_idx]
-        compatible_indices = []
-
-        for idx, gear in enumerate(self.gears):
-            if idx != selected_gear_idx and self.areGearsCompatible(
-                selected_gear, gear
-            ):
-                compatible_indices.append(idx)
-
-        return compatible_indices
-
-    def updateSecondGearOptions(self):
-        """Update second gear dropdown based on first gear selection."""
-        gear1_idx = self.gear1_combo.currentIndex()
-
-        self.gear2_combo.clear()
-
-        compatible_indices = self.getCompatibleGears(gear1_idx)
-
-        if not compatible_indices:
-            self.gear2_combo.addItem("No compatible gears")
-            self.gear2_combo.setEnabled(False)
-            self.center_distance_label.setText("Center Distance: N/A")
-            self.position_btn.setEnabled(False)
-
-            gear1_specs = self.getGearSpecs(self.gears[gear1_idx])
-            type1 = gear1_specs["gear_type"].capitalize()
-
-            message = f"⚠ No compatible gears found. Gear type: {type1}\n"
-            message += "Compatible gears must have:\n"
-            message += f"- Same module ({gear1_specs['module']:.3f} mm)\n"
-            message += f"- Same pressure angle ({gear1_specs['pressure_angle']:.1f}°)\n"
-
-            if type1 == "Spur":
-                message += "- Same gear type (only with spur gears)"
-            elif type1 == "Helical":
-                message += "- Same gear type (only with helical gears)"
-            elif type1 == "Herringbone":
-                message += "- Same gear type (only with herringbone gears)"
-
-            self.compatibility_label.setText(message)
-        else:
-            for idx in compatible_indices:
-                self.gear2_combo.addItem(self.gears[idx]["label"], idx)
-
-            self.gear2_combo.setEnabled(True)
-            self.position_btn.setEnabled(True)
-
-            gear1_specs = self.getGearSpecs(self.gears[gear1_idx])
-            type1 = gear1_specs["gear_type"].capitalize()
-
-            self.compatibility_label.setText(
-                f"✓ {len(compatible_indices)} compatible {type1} gear(s) found"
-            )
-
-            if len(compatible_indices) > 0:
-                self.gear2_combo.setCurrentIndex(0)
-                self.updateDistance()
-
-    def setupUI(self):
-        """Setup dialog UI."""
-        self.setWindowTitle("Gear Positioning Tool")
-        self.setMinimumWidth(500)
-        self.setMinimumHeight(350)
-        self.setModal(True)
-
-        layout = QtGui.QVBoxLayout()
-
-        title_label = QtGui.QLabel("Position first gear beside second gear")
-        title_label.setStyleSheet(
-            "font-weight: bold; font-size: 14px; margin-bottom: 10px;"
-        )
-        layout.addWidget(title_label)
-
-        gear_label = QtGui.QLabel(f"Found {len(self.gears)} gears in document")
-        layout.addWidget(gear_label)
-
-        layout.addSpacing(20)
-
-        gear_names = [g["label"] for g in self.gears]
-
-        layout.addWidget(QtGui.QLabel("First Gear (to be moved):"))
-        self.gear1_combo = QtGui.QComboBox()
-        self.gear1_combo.addItems(gear_names)
-        layout.addWidget(self.gear1_combo)
-
-        layout.addSpacing(10)
-
-        layout.addWidget(QtGui.QLabel("Second Gear (reference):"))
-        self.gear2_combo = QtGui.QComboBox()
-        layout.addWidget(self.gear2_combo)
-
-        self.compatibility_label = QtGui.QLabel("")
-        self.compatibility_label.setStyleSheet(
-            "color: #e67e22; font-style: italic; font-size: 11px;"
-        )
-        layout.addWidget(self.compatibility_label)
-
-        layout.addSpacing(10)
-
-        options_group = QtGui.QGroupBox("Positioning Options")
-        options_layout = QtGui.QVBoxLayout()
-
-        self.center_distance_label = QtGui.QLabel("Center Distance: 0.00 mm")
-        self.center_distance_label.setStyleSheet("font-weight: bold; color: #0066cc;")
-        options_layout.addWidget(self.center_distance_label)
-
-        angle_label = QtGui.QLabel("Position at angle (degrees):")
-        self.angle_spinbox = QtGui.QDoubleSpinBox()
-        self.angle_spinbox.setRange(0, 360)
-        self.angle_spinbox.setValue(0.0)
-        self.angle_spinbox.setSuffix("°")
-        options_layout.addWidget(angle_label)
-        options_layout.addWidget(self.angle_spinbox)
-
-        options_group.setLayout(options_layout)
-        layout.addWidget(options_group)
-
-        preview_group = QtGui.QGroupBox("Preview (rotated gear)")
-        preview_layout = QtGui.QVBoxLayout()
-
-        self.preview_label = QtGui.QLabel(
-            "Semi-transparent copy of gear 2 shows where it would be positioned"
-        )
-        self.preview_label.setStyleSheet("font-size: 11px; color: #666;")
-        preview_layout.addWidget(self.preview_label)
-
-        layout.addSpacing(10)
-
-        info_label = QtGui.QLabel(
-            "Gears must have matching module and pressure angle to mesh correctly"
-        )
-        info_label.setStyleSheet("color: #666; font-size: 11px;")
-        layout.addWidget(info_label)
-
-        layout.addStretch()
-
-        button_layout = QtGui.QHBoxLayout()
-
-        self.position_btn = QtGui.QPushButton("Position Gears")
-        self.position_btn.setStyleSheet(
-            "background-color: #4CAF50; color: white; font-weight: bold; padding: 8px;"
-        )
-        self.position_btn.clicked.connect(self.positionFirstGear)
-        button_layout.addWidget(self.position_btn)
-
-        self.done_btn = QtGui.QPushButton("Done")
-        self.done_btn.setStyleSheet(
-            "background-color: #007ACC; color: white; font-weight: bold; padding: 8px;"
-        )
-        self.done_btn.clicked.connect(self.moveAndFinalize)
-        button_layout.addWidget(self.done_btn)
-
-        scaffold_btn = QtGui.QPushButton("Create Scaffolding")
-        scaffold_btn.setStyleSheet(
-            "background-color: #4CAF50; color: white; font-weight: bold; padding: 8px;"
-        )
-        scaffold_btn.clicked.connect(self.createScaffolding)
-        button_layout.addWidget(scaffold_btn)
-
-        cancel_btn = QtGui.QPushButton("Cancel")
-        cancel_btn.clicked.connect(self.reject)
-        button_layout.addWidget(cancel_btn)
-
-        layout.addLayout(button_layout)
-
-        self.setLayout(layout)
-
-        self.gear1_combo.currentIndexChanged.connect(self.updateSecondGearOptions)
-        self.gear2_combo.currentIndexChanged.connect(self.updateDistance)
-        self.angle_spinbox.valueChanged.connect(self.updateRotationPreview)
-
-        self.updateSecondGearOptions()
-
-    def updateDistance(self):
-        """Update calculated center distance based on selected gears."""
-        idx1 = self.gear1_combo.currentIndex()
-        idx2_data = self.gear2_combo.itemData(self.gear2_combo.currentIndex())
-
-        if idx1 >= 0 and idx2_data is not None:
-            gear1 = self.gears[idx1]
-            gear2 = self.gears[idx2_data]
-
-            # Get gear specs for internal gear detection
-            gear1_specs = self.getGearSpecs(gear1)
-            gear2_specs = self.getGearSpecs(gear2)
-
-            try:
-                center_distance = calculateCenterDistance(gear1, gear2, gear1_specs, gear2_specs)
-                self.center_distance_label.setText(
-                    f"Center Distance: {center_distance:.3f} mm"
-                )
-            except Exception as e:
-                self.center_distance_label.setText(
-                    f"Center Distance: Error - {str(e)}"
-                )
-
-    def positionFirstGear(self):
-        """Position first gear beside second gear at specified angle."""
-        idx1 = self.gear1_combo.currentIndex()
-        idx2_data = self.gear2_combo.itemData(self.gear2_combo.currentIndex())
-        angle = self.angle_spinbox.value()
-
-        if idx1 >= 0 and idx2_data is not None:
-            gear1_info = self.gears[idx1]
-            gear2_info = self.gears[idx2_data]
-
-            try:
-                positionGearBeside(
-                    gear1_info["param_obj"],
-                    gear1_info,
-                    gear2_info["param_obj"],
-                    gear2_info,
-                    angle,
-                )
-            except Exception as e:
-                App.Console.PrintError(f"Error moving gear: {e}\n")
-                QtGui.QMessageBox.critical(
-                    None, "Positioning Error", f"Failed to position gears:\n{str(e)}"
-                )
-
-    def updateRotationPreview(self):
-        """Update preview gear showing where gear 1 would be positioned."""
-        idx1 = self.gear1_combo.currentIndex()
-        idx2_data = self.gear2_combo.itemData(self.gear2_combo.currentIndex())
-        rotation_angle = self.angle_spinbox.value()
-
-        self.cleanupPreview()
-
-        if idx1 >= 0 and idx2_data is not None:
-            try:
-                gear1_info = self.gears[idx1]
-                gear2_info = self.gears[idx2_data]
-
-                # Gear 2 is center/reference (fixed), Gear 1 moves around it
-                center_body_name = gear2_info["param_obj"].BodyName
-                center_body = gear2_info["param_obj"].Document.getObject(
-                    center_body_name
-                )
-
-                # Refresh gear1_body reference from document (cached reference may be stale if BodyName changed)
-                gear1_body_name = gear1_info["label"]
-                gear1_body = App.ActiveDocument.getObject(gear1_body_name)
-
-                gear1_valid = gear1_body is not None
-                if gear1_valid:
-                    try:
-                        gear1_valid = gear1_body.isValid()
-                    except Exception:
-                        gear1_valid = False
-
-                if center_body and gear1_valid:
-                    center_origin = center_body.Placement.Base
-                    gear1_body_name = gear1_body.Name
-
-                    if gear1_body_name not in self.original_gear2_positions:
-                        self.original_gear2_positions[gear1_body_name] = (
-                            gear1_body.Placement.Base
-                        )
-
-                    # Always calculate center distance using gear specs for internal gear support
-                    gear1_specs = self.getGearSpecs(gear1_info)
-                    gear2_specs = self.getGearSpecs(gear2_info)
-                    distance = calculateCenterDistance(gear1_info, gear2_info, gear1_specs, gear2_specs)
-
-                    angle_rad = rotation_angle * math.pi / 180.0
-
-                    dx = distance * math.cos(angle_rad)
-                    dy = distance * math.sin(angle_rad)
-
-                    new_x = center_origin.x + dx
-                    new_y = center_origin.y + dy
-                    new_z = center_origin.z
-
-                    # Directly set rotation to angle spinbox value (no complex calculation)
-                    new_placement = App.Placement(
-                        App.Vector(new_x, new_y, new_z),
-                        App.Rotation(App.Vector(0, 0, 1), rotation_angle),
-                    )
-
-                    self.preview_counter += 1
-                    preview_name = f"{self.preview_prefix}_{self.preview_counter}"
-
-                    preview_body = App.ActiveDocument.addObject(
-                        "Part::Feature", preview_name
-                    )
-
-                    try:
-                        preview_body.Shape = gear1_body.Shape.copy()
-                        preview_body.Placement = new_placement
-
-                        if preview_body.ViewObject:
-                            preview_body.ViewObject.Transparency = 50
-                            preview_body.ViewObject.Visibility = True
-                    except Exception as shape_error:
-                        App.Console.PrintError(f"Error copying gear shape: {shape_error}\n")
-
-                    self.preview_objects.append(preview_name)
-
-                    App.ActiveDocument.recompute()
-                else:
-                    App.Console.PrintError("Center body or gear 1 body not valid\n")
-            except Exception as e:
-                App.Console.PrintError(f"Error creating preview: {e}\n")
-
-    def cleanupPreview(self):
-        """Remove all preview objects created by this dialog."""
-        if not App.ActiveDocument:
-            return
-
-        for obj_name in self.preview_objects[:]:
-            try:
-                obj = App.ActiveDocument.getObject(obj_name)
-                obj_valid = obj is not None
-                if obj_valid:
-                    try:
-                        obj_valid = obj.isValid()
-                    except Exception:
-                        obj_valid = False
-
-                if obj_valid:
-                    App.ActiveDocument.removeObject(obj.Name)
-            except Exception as e:
-                App.Console.PrintError(
-                    f"Error removing preview object {obj_name}: {e}\n"
-                )
-
-        self.preview_objects = []
-
-    def rotateSecondGear(self):
-        """Rotate second gear around first gear (preview only)."""
-        self.updateRotationPreview()
-
-    def moveSecondGear(self):
-        """Actually move second gear to rotated position."""
-        idx1 = self.gear1_combo.currentIndex()
-        idx2_data = self.gear2_combo.itemData(self.gear2_combo.currentIndex())
-        rotation_angle = self.angle_spinbox.value()
-
-        if idx1 >= 0 and idx2_data is not None:
-            gear1_info = self.gears[idx1]
-            gear2_info = self.gears[idx2_data]
-
-            try:
-                self.cleanupPreview()
-
-                gear2_body = gear2_info["body_obj"]
-                center_body = gear1_info["body_obj"]
-
-                center_origin = center_body.Placement.Base
-                gear2_body_name = gear2_body.Name
-
-                original_gear2_origin = self.original_gear2_positions.get(
-                    gear2_body_name
-                )
-
-                if not original_gear2_origin:
-                    self.original_gear2_positions[gear2_body_name] = (
-                        gear2_body.Placement.Base
-                    )
-                    original_gear2_origin = self.original_gear2_positions[
-                        gear2_body_name
-                    ]
-
-                # Calculate center distance using gear specs for internal gear support
-                gear1_specs = self.getGearSpecs(gear1_info)
-                gear2_specs = self.getGearSpecs(gear2_info)
-                center_distance = calculateCenterDistance(gear1_info, gear2_info, gear1_specs, gear2_specs)
-
-                angle_rad = rotation_angle * math.pi / 180.0
-
-                dx = center_distance * math.cos(angle_rad)
-                dy = center_distance * math.sin(angle_rad)
-
-                new_x = center_origin.x + dx
-                new_y = center_origin.y + dy
-                new_z = center_origin.z
-
-                current_rotation = gear2_body.Placement.Rotation
-                current_angle = math.degrees(
-                    math.atan2(
-                        current_rotation.Axis.y
-                        * math.sin(math.radians(current_rotation.Angle)),
-                        current_rotation.Axis.x
-                        * math.sin(math.radians(current_rotation.Angle)),
-                    )
-                )
-
-                new_rotation_angle = current_angle + rotation_angle
-
-                new_placement = App.Placement(
-                    App.Vector(new_x, new_y, new_z),
-                    App.Rotation(App.Vector(0, 0, 1), new_rotation_angle),
-                )
-
-                gear2_body.Placement = new_placement
-
-                gear2_param = gear2_info["param_obj"]
-                gear2_param.OriginX = new_x
-                gear2_param.OriginY = new_y
-                gear2_param.OriginZ = new_z
-                gear2_param.Angle = new_rotation_angle
-
-                gear2_param.Document.recompute()
-                App.Console.PrintMessage(
-                    f"Moved '{gear2_param.BodyName}' by {rotation_angle:.1f}° around '{gear1_info['param_obj'].BodyName}'\n"
-                )
-            except Exception as e:
-                App.Console.PrintError(f"Error moving gear: {e}\n")
-                QtGui.QMessageBox.critical(
-                    None, "Move Error", f"Failed to move gear:\n{str(e)}"
-                )
-
-    def findExistingScaffold(self, gear_position, tolerance=1.0):
-        """Find existing scaffold that contains an axle at the given position.
-
-        Args:
-            gear_position: App.Vector position to check
-            tolerance: Distance tolerance in mm
-
-        Returns:
-            Tuple of (scaffold_body, axle_positions_list) or (None, None)
-        """
-        doc = App.ActiveDocument
-        if not doc:
-            return None, None
-
-        # Find all scaffold bodies
-        for obj in doc.Objects:
-            if obj.Name.startswith("GearScaffolding") and hasattr(obj, "Group"):
-                # This is a scaffold body, check its axles
-                axle_positions = []
-                for feature in obj.Group:
-                    if feature.Name.startswith("Axle") and hasattr(feature, "Placement"):
-                        axle_pos = feature.Placement.Base
-                        axle_positions.append(axle_pos)
-
-                        # Check if this axle is at the gear position
-                        distance = (App.Vector(axle_pos.x, axle_pos.y, 0) -
-                                  App.Vector(gear_position.x, gear_position.y, 0)).Length
-                        if distance < tolerance:
-                            return obj, axle_positions
-
-        return None, None
-
-    def createScaffolding(self):
-        """Create scaffolding with axles extending down from gears and oval surrounding them."""
-        idx1 = self.gear1_combo.currentIndex()
-        idx2_data = self.gear2_combo.itemData(self.gear2_combo.currentIndex())
-
-        if idx1 < 0 or idx2_data is None:
-            QtGui.QMessageBox.warning(
-                None, "Invalid Selection", "Please select two different gears."
-            )
-            return
-
-        gear1_info = self.gears[idx1]
-        gear2_info = self.gears[idx2_data]
-
-        try:
-            doc = App.ActiveDocument
-            if not doc:
-                QtGui.QMessageBox.warning(
-                    None, "No Document", "Please create or open a FreeCAD document first."
-                )
-                return
-
-            # Re-fetch bodies from document by name
-            gear1_param = gear1_info["param_obj"]
-            gear2_param = gear2_info["param_obj"]
-
-            gear1_body_name = gear1_param.BodyName if hasattr(gear1_param, "BodyName") else None
-            gear2_body_name = gear2_param.BodyName if hasattr(gear2_param, "BodyName") else None
-
-            if not gear1_body_name or not gear2_body_name:
-                App.Console.PrintError("Cannot determine gear body names\n")
-                return
-
-            gear1_body = doc.getObject(gear1_body_name)
-            gear2_body = doc.getObject(gear2_body_name)
-
-            if not gear1_body or not gear2_body:
-                App.Console.PrintError("Cannot find gear bodies\n")
-                return
-
-            # Get gear positions
-            p1 = gear1_body.Placement.Base
-            p2 = gear2_body.Placement.Base
-
-            App.Console.PrintMessage(f"Gear 1 at: ({p1.x:.2f}, {p1.y:.2f}, {p1.z:.2f})\n")
-            App.Console.PrintMessage(f"Gear 2 at: ({p2.x:.2f}, {p2.y:.2f}, {p2.z:.2f})\n")
-
-            # Get gear specs to detect internal gears
-            gear1_specs = self.getGearSpecs(gear1_info)
-            gear2_specs = self.getGearSpecs(gear2_info)
-
-            # Get or create shared scaffold body
-            scaffold_body_name = "GearScaffolding"
-            scaffold_body = doc.getObject(scaffold_body_name)
-            if not scaffold_body:
-                # Create new scaffold body if it doesn't exist
-                scaffold_body = doc.addObject('PartDesign::Body', scaffold_body_name)
-                doc.recompute()
-                App.Console.PrintMessage(f"Created new scaffold body '{scaffold_body_name}'\n")
-            else:
-                App.Console.PrintMessage(f"Reusing existing scaffold body '{scaffold_body_name}'\n")
-
-            # Constants
-            axle_radius = 5.0
-            axle_height = 30.0
-            shell_wall_thickness = 5.0
-
-            # Generate unique axle names based on gear body names
-            axle1_name = f"Axle_{gear1_body_name}"
-            axle2_name = f"Axle_{gear2_body_name}"
-
-            # --- CREATE AXLE 1 SKETCH AND PAD ---
-            axle1_sketch = util.createSketch(scaffold_body, f"{axle1_name}_Sketch")
-            axle1_position = App.Vector(p1.x, p1.y, p1.z - axle_height)
-            axle1_sketch.Placement = App.Placement(axle1_position, App.Rotation(0, 0, 0))
-
-            if gear1_specs["is_internal"]:
-                outer_radius = gear1_info.get("pitch_diameter", 0.0) / 2.0
-                inner_radius = outer_radius + 2.0
-                outer_shell_radius = inner_radius + shell_wall_thickness
-
-                circle_outer = axle1_sketch.addGeometry(
-                    Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), outer_shell_radius),
-                    False
-                )
-                axle1_sketch.addConstraint(Sketcher.Constraint("Coincident", circle_outer, 3, -1, 1))
-
-                circle_inner = axle1_sketch.addGeometry(
-                    Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), inner_radius),
-                    False
-                )
-                axle1_sketch.addConstraint(Sketcher.Constraint("Coincident", circle_inner, 3, -1, 1))
-            else:
-                circle = axle1_sketch.addGeometry(
-                    Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), axle_radius),
-                    False
-                )
-                axle1_sketch.addConstraint(Sketcher.Constraint("Coincident", circle, 3, -1, 1))
-
-            axle1_pad = util.createPad(scaffold_body, axle1_sketch, axle_height, axle1_name)
-            axle1_sketch.Visibility = False
-
-            App.Console.PrintMessage(f"Created {axle1_name} at ({axle1_position.x:.2f}, {axle1_position.y:.2f}, {axle1_position.z:.2f})\n")
-
-            # --- CREATE AXLE 2 SKETCH AND PAD ---
-            axle2_sketch = util.createSketch(scaffold_body, f"{axle2_name}_Sketch")
-            axle2_position = App.Vector(p2.x, p2.y, p2.z - axle_height)
-            axle2_sketch.Placement = App.Placement(axle2_position, App.Rotation(0, 0, 0))
-
-            if gear2_specs["is_internal"]:
-                outer_radius = gear2_info.get("pitch_diameter", 0.0) / 2.0
-                inner_radius = outer_radius + 2.0
-                outer_shell_radius = inner_radius + shell_wall_thickness
-
-                circle_outer = axle2_sketch.addGeometry(
-                    Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), outer_shell_radius),
-                    False
-                )
-                axle2_sketch.addConstraint(Sketcher.Constraint("Coincident", circle_outer, 3, -1, 1))
-
-                circle_inner = axle2_sketch.addGeometry(
-                    Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), inner_radius),
-                    False
-                )
-                axle2_sketch.addConstraint(Sketcher.Constraint("Coincident", circle_inner, 3, -1, 1))
-            else:
-                circle = axle2_sketch.addGeometry(
-                    Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), axle_radius),
-                    False
-                )
-                axle2_sketch.addConstraint(Sketcher.Constraint("Coincident", circle, 3, -1, 1))
-
-            axle2_pad = util.createPad(scaffold_body, axle2_sketch, axle_height, axle2_name)
-            axle2_sketch.Visibility = False
-
-            App.Console.PrintMessage(f"Created {axle2_name} at ({axle2_position.x:.2f}, {axle2_position.y:.2f}, {axle2_position.z:.2f})\n")
-
-            # Set appearance
-            if axle1_pad.ViewObject:
-                axle1_pad.ViewObject.Transparency = 0
-                axle1_pad.ViewObject.ShapeColor = (1.0, 0.0, 0.0)
-            if axle2_pad.ViewObject:
-                axle2_pad.ViewObject.Transparency = 0
-                axle2_pad.ViewObject.ShapeColor = (0.0, 0.0, 1.0)
-
-            doc.recompute()
-
-            # Verify all objects are in the scaffold
-            App.Console.PrintMessage(f"\nScaffold '{scaffold_body_name}' contains:\n")
-            for obj in scaffold_body.Group:
-                visibility = "VISIBLE" if (obj.ViewObject and obj.ViewObject.Visibility) else "HIDDEN"
-                has_shape = "HAS SHAPE" if (hasattr(obj, "Shape") and obj.Shape and not obj.Shape.isNull()) else "NO SHAPE"
-                App.Console.PrintMessage(f"  - {obj.Name}: {visibility}, {has_shape}\n")
-                if hasattr(obj, "Placement"):
-                    App.Console.PrintMessage(f"      Placement: {obj.Placement.Base}\n")
-
-            App.Console.PrintMessage(f"\nAdded axles to scaffold '{scaffold_body_name}'\n")
-            App.Console.PrintMessage(f"  {axle1_name}: RED at {gear1_body_name}\n")
-            App.Console.PrintMessage(f"  {axle2_name}: BLUE at {gear2_body_name}\n")
-
-            if App.GuiUp:
-                try:
-                    FreeCADGui.SendMsgToActiveView("ViewFit")
-                except Exception:
-                    pass
-
-        except Exception as e:
-            App.Console.PrintError(f"Error creating scaffolding: {e}\n")
-            import traceback
-            App.Console.PrintError(traceback.format_exc())
-            QtGui.QMessageBox.critical(
-                None, "Scaffolding Error", f"Failed to create scaffolding:\n{str(e)}"
-            )
-
-    def closeEvent(self, event):
-        """Handle dialog close event - cleanup preview objects."""
-        self.cleanupPreview()
-        super().closeEvent(event)
-
-
-def rotateGearAround(gear_to_rotate_param, center_gear_param, angle_deg: float):
-    """Rotate gear around another gear at specified angle.
-
-    Args:
-        gear_to_rotate_param: Parameter object of gear to rotate
-        center_gear_param: Parameter object of center gear (stays in place)
-        angle_deg: Angle in degrees to rotate around center gear
-    """
-    import math
-
-    center_body_name = (
-        center_gear_param.BodyName if hasattr(center_gear_param, "BodyName") else None
-    )
-    center_body = None
-    if center_body_name:
-        center_body = center_gear_param.Document.getObject(center_body_name)
-
-    if not center_body:
-        raise Exception("Center gear body not found")
-
-    center_origin = center_body.Placement.Base
-
-    rotate_body_name = (
-        gear_to_rotate_param.BodyName
-        if hasattr(gear_to_rotate_param, "BodyName")
-        else None
-    )
-    rotate_body = None
-    if rotate_body_name:
-        rotate_body = gear_to_rotate_param.Document.getObject(rotate_body_name)
-
-    if not rotate_body:
-        raise Exception("Gear to rotate body not found")
-
-    current_distance = rotate_body.Placement.Base.sub(center_origin)
-
-    distance = (current_distance.x**2 + current_distance.y**2) ** 0.5
-
-    angle_rad = angle_deg * math.pi / 180.0
-
-    dx = distance * math.cos(angle_rad)
-    dy = distance * math.sin(angle_rad)
-
-    new_x = center_origin.x + dx
-    new_y = center_origin.y + dy
-    new_z = center_origin.z
-
-    current_rotation = rotate_body.Placement.Rotation
-    current_angle = math.degrees(
-        math.atan2(
-            current_rotation.Axis.y * math.sin(math.radians(current_rotation.Angle)),
-            current_rotation.Axis.x * math.sin(math.radians(current_rotation.Angle)),
-        )
-    )
-
-    new_rotation_angle = current_angle + angle_deg
-
-    new_placement = App.Placement(
-        App.Vector(new_x, new_y, new_z),
-        App.Rotation(App.Vector(0, 0, 1), new_rotation_angle),
-    )
-
-    rotate_body.Placement = new_placement
-
-    gear_to_rotate_param.OriginX = new_x
-    gear_to_rotate_param.OriginY = new_y
-    gear_to_rotate_param.OriginZ = new_z
-    gear_to_rotate_param.Angle = new_rotation_angle
-
-    gear_to_rotate_param.Document.recompute()
-    App.Console.PrintMessage(
-        f"Rotated '{rotate_body_name}' around '{center_body_name}' by {angle_deg:.1f}°\n"
-    )
-
-
-def getGearSpecs(gear_info: Dict) -> Dict:
-    """Get gear specifications from gear info dict.
-
-    Args:
-        gear_info: Dictionary containing gear information (must have 'param_obj' and 'name')
-
-    Returns:
-        Dictionary with module, pressure_angle, helix_angle, gear_type, and is_internal
-    """
-    param_obj = gear_info["param_obj"]
-    specs = {
-        "module": 0.0,
-        "pressure_angle": 0.0,
-        "helix_angle": 0.0,
-        "gear_type": "unknown",
-        "is_internal": False,
-    }
-
-    try:
-        if hasattr(param_obj, "Module"):
-            specs["module"] = float(
-                param_obj.Module.Value
-                if hasattr(param_obj.Module, "Value")
-                else param_obj.Module
-            )
-        if hasattr(param_obj, "PressureAngle"):
-            specs["pressure_angle"] = float(
-                param_obj.PressureAngle.Value
-                if hasattr(param_obj.PressureAngle, "Value")
-                else param_obj.PressureAngle
-            )
-
-        obj_name = gear_info["name"]
-
-        # Check for internal gears first
-        if "Internal" in obj_name:
-            specs["is_internal"] = True
-            if "Spur" in obj_name:
-                specs["gear_type"] = "spur"
-                specs["helix_angle"] = 0.0
-            elif "Herringbone" in obj_name:
-                specs["gear_type"] = "herringbone"
-                if hasattr(param_obj, "HelixAngle"):
-                    specs["helix_angle"] = float(
-                        param_obj.HelixAngle.Value
-                        if hasattr(param_obj.HelixAngle, "Value")
-                        else param_obj.HelixAngle
-                    )
-            elif "Helix" in obj_name:
-                specs["gear_type"] = "helical"
-                if hasattr(param_obj, "HelixAngle"):
-                    specs["helix_angle"] = float(
-                        param_obj.HelixAngle.Value
-                        if hasattr(param_obj.HelixAngle, "Value")
-                        else param_obj.HelixAngle
-                    )
-        # External gears
-        elif "GenericSpur" in obj_name:
-            specs["gear_type"] = "spur"
-            specs["helix_angle"] = 0.0
-        elif "GenericHerringbone" in obj_name:
-            specs["gear_type"] = "herringbone"
-            if hasattr(param_obj, "Angle1"):
-                specs["helix_angle"] = float(
-                    param_obj.Angle1.Value
-                    if hasattr(param_obj.Angle1, "Value")
-                    else param_obj.Angle1
-                )
-        elif "GenericHelix" in obj_name:
-            specs["gear_type"] = "helical"
-            if hasattr(param_obj, "HelixAngle"):
-                specs["helix_angle"] = float(
-                    param_obj.HelixAngle.Value
-                    if hasattr(param_obj.HelixAngle, "Value")
-                    else param_obj.HelixAngle
-                )
-    except Exception:
-        pass
-
-    return specs
-
-
-def findGearsInDocument(doc) -> List[Dict]:
-    """Find all gear parameter objects in document and map to their bodies.
-
-    Args:
-        doc: FreeCAD document object
-
-    Returns:
-        List of dictionaries with gear information
-    """
-    gears = []
-
+# ---------------------------------------------------------------------------
+# Utility functions
+# ---------------------------------------------------------------------------
+
+def findVarSetForBody(doc, body):
+    """Find the VarSet linked to a Body via a Regenerate/Result FeaturePython object."""
     for obj in doc.Objects:
-        obj_name = obj.Name
-
-        if "Parameters" in obj_name and hasattr(obj, "BodyName"):
-            try:
-                body_name = str(obj.BodyName)
-                body_obj = doc.getObject(body_name)
-
-                if (
-                    body_obj
-                    and hasattr(body_obj, "TypeId")
-                    and "Body" in body_obj.TypeId
-                ):
-                    gear_info = {
-                        "param_obj": obj,
-                        "body_obj": body_obj,
-                        "name": obj_name,
-                        "label": body_name,
-                        "pitch_diameter": 0.0,
-                    }
-
-                    try:
-                        if hasattr(obj, "PitchDiameter"):
-                            gear_info["pitch_diameter"] = obj.PitchDiameter.Value
-                        elif hasattr(obj, "Module") and hasattr(obj, "NumberOfTeeth"):
-                            module = (
-                                obj.Module.Value
-                                if hasattr(obj.Module, "Value")
-                                else obj.Module
-                            )
-                            num_teeth = obj.NumberOfTeeth
-                            gear_info["pitch_diameter"] = float(module) * int(num_teeth)
-                    except Exception:
-                        pass
-
-                    gears.append(gear_info)
-            except Exception:
-                pass
-
-    return gears
+        if (hasattr(obj, "BodyName") and hasattr(obj, "VarSetName")
+                and str(obj.BodyName) == body.Name):
+            vs = doc.getObject(str(obj.VarSetName))
+            if vs is not None:
+                return vs
+    return None
 
 
-def calculateCenterDistance(gear1_params: Dict, gear2_params: Dict, gear1_specs: Dict = None, gear2_specs: Dict = None) -> float:
-    """Calculate center distance between two gears.
+def isBevelGear(varset):
+    """Determine if a VarSet represents a bevel gear."""
+    if varset is None:
+        return False
+    return hasattr(varset, "PitchAngle")
 
-    Args:
-        gear1_params: First gear parameters dict
-        gear2_params: Second gear parameters dict
-        gear1_specs: First gear specifications (with is_internal flag)
-        gear2_specs: Second gear specifications (with is_internal flag)
 
-    Returns:
-        Center distance in mm
+def isInternalGear(varset):
+    """Determine if a VarSet represents an internal gear."""
+    if varset is None:
+        return False
+    return "InternalGear" in varset.Name
+
+
+def isRackGear(varset):
+    """Determine if a VarSet represents a rack gear."""
+    if varset is None:
+        return False
+    return "RackGear" in varset.Name or "Rack" in varset.Name
+
+
+def getGearInfo(doc, body):
+    """Get gear info for a body.
+
+    Returns dict with keys:
+        pd: pitch diameter (float, mm; 0 for rack gears)
+        is_internal: bool
+        is_bevel: bool
+        is_rack: bool
+        pitch_angle: float (degrees, only meaningful for bevel gears; 0 for spur)
+        cone_dist: float (mm, only for bevel gears; 0 for others)
+        height: float (mm, gear thickness along axis)
+        module: float (mm, tooth module)
+    Returns None if no gear found.
     """
-    pitch1 = gear1_params.get("pitch_diameter", 0.0)
-    pitch2 = gear2_params.get("pitch_diameter", 0.0)
-
-    # Check if either gear is internal
-    is_internal1 = gear1_specs.get("is_internal", False) if gear1_specs else False
-    is_internal2 = gear2_specs.get("is_internal", False) if gear2_specs else False
-
-    # Calculate based on gear types
-    if is_internal1 and is_internal2:
-        # Internal + Internal doesn't make physical sense
-        raise Exception("Cannot mesh two internal gears together")
-    elif is_internal1 and not is_internal2:
-        # Internal + External: center distance = (pitch_internal - pitch_external) / 2
-        return (pitch1 - pitch2) / 2.0
-    elif not is_internal1 and is_internal2:
-        # External + Internal: center distance = (pitch_internal - pitch_external) / 2
-        return (pitch2 - pitch1) / 2.0
+    vs = findVarSetForBody(doc, body)
+    if vs is None:
+        return None
+    # Rack gears have no PitchDiameter — use 0 so center_dist = PD_pinion/2
+    if not hasattr(vs, "PitchDiameter"):
+        if hasattr(vs, "Module") and hasattr(vs, "NumberOfTeeth"):
+            return {
+                "pd": 0.0,
+                "is_internal": False,
+                "is_bevel": False,
+                "is_rack": True,
+                "pitch_angle": 0.0,
+                "cone_dist": 0.0,
+                "height": float(vs.Height.Value) if hasattr(vs, "Height") else 10.0,
+                "module": float(vs.Module.Value) if hasattr(vs, "Module") else 1.0,
+            }
+        return None
+    info = {
+        "pd": float(vs.PitchDiameter),
+        "is_internal": isInternalGear(vs),
+        "is_bevel": isBevelGear(vs),
+        "is_rack": isRackGear(vs),
+        "pitch_angle": 0.0,
+        "cone_dist": 0.0,
+        "height": 0.0,
+        "module": float(vs.Module.Value) if hasattr(vs, "Module") else 1.0,
+    }
+    if info["is_bevel"]:
+        info["pitch_angle"] = float(vs.PitchAngle.Value)
+        sin_a = math.sin(math.radians(info["pitch_angle"]))
+        if sin_a > 0.001:
+            info["cone_dist"] = info["pd"] / (2.0 * sin_a)
+        if hasattr(vs, "FaceWidth"):
+            info["height"] = float(vs.FaceWidth.Value)
     else:
-        # External + External: center distance = (pitch1 + pitch2) / 2
-        return (pitch1 + pitch2) / 2.0
+        if hasattr(vs, "Height"):
+            info["height"] = float(vs.Height.Value)
+    return info
 
 
-def positionGearBeside(
-    gear1_param_obj, gear1_params, gear2_param_obj, gear2_params, angle_deg: float = 0.0
-):
-    """Position gear1 beside gear2 for proper meshing.
+# ---------------------------------------------------------------------------
+# Gear Position Dialog — handles all gear type combinations
+# ---------------------------------------------------------------------------
 
-    Args:
-        gear1_param_obj: First gear parameter object (to be updated)
-        gear1_params: First gear parameters dict
-        gear2_param_obj: Second gear parameter object (reference)
-        gear2_params: Second gear parameters dict
-        angle_deg: Angle in degrees to position gear1 (0 = to right)
+class GearPositionDialog(QtGui.QDialog):
+    """Unified dialog for positioning two gears.
+
+    Handles:
+    - Spur/helical + spur/helical: planar positioning at center distance
+    - Bevel + bevel: apex-coincident positioning at shaft angle
+    - Bevel + spur (mixed): parallel axes, bevel shifted to align teeth heights
+    - Rack + pinion: linear translation along rack
     """
-    import math
 
-    pitch1 = gear1_params.get("pitch_diameter", 0.0)
-    pitch2 = gear2_params.get("pitch_diameter", 0.0)
+    def __init__(self, doc, body1, body2, info1, info2, parent=None):
+        super().__init__(parent)
+        self.doc = doc
+        self.body1 = body1  # fixed (reference)
+        self.body2 = body2  # moving
+        self.info1 = info1
+        self.info2 = info2
+        # Save original placements so swap doesn't cascade positions
+        self._orig_placement1 = App.Placement(body1.Placement)
+        self._orig_placement2 = App.Placement(body2.Placement)
+        self.setAttribute(QtCore.Qt.WA_DeleteOnClose)
+        self._setupUI()
 
-    # Get gear specs to determine if internal
-    gear1_specs = getGearSpecs(gear1_params)
-    gear2_specs = getGearSpecs(gear2_params)
+    @property
+    def _mode(self):
+        """Determine positioning mode based on gear types."""
+        if self.info1.get("is_rack") or self.info2.get("is_rack"):
+            return "rack"
+        if self.info1["is_bevel"] and self.info2["is_bevel"]:
+            return "bevel_bevel"
+        elif self.info1["is_bevel"] or self.info2["is_bevel"]:
+            return "mixed"
+        else:
+            return "planar"
 
-    # Use the calculateCenterDistance method for proper center distance calculation
-    center_distance = calculateCenterDistance(gear1_params, gear2_params, gear1_specs, gear2_specs)
+    def _setupUI(self):
+        self.setWindowTitle("Position Gears")
+        self.setMinimumWidth(340)
+        layout = QtGui.QVBoxLayout(self)
 
-    angle_rad = angle_deg * math.pi / 180.0
+        # Gear info
+        info_group = QtGui.QGroupBox("Gears")
+        info_layout = QtGui.QFormLayout(info_group)
+        self.fixed_label = QtGui.QLabel(self._gear_text(self.body1, self.info1))
+        self.moving_label = QtGui.QLabel(self._gear_text(self.body2, self.info2))
+        info_layout.addRow("Fixed:", self.fixed_label)
+        info_layout.addRow("Moving:", self.moving_label)
 
-    dx = center_distance * math.cos(angle_rad)
-    dy = center_distance * math.sin(angle_rad)
+        swap_btn = QtGui.QPushButton("Swap")
+        swap_btn.clicked.connect(self._swap)
+        info_layout.addRow("", swap_btn)
+        layout.addWidget(info_group)
 
-    gear2_body_name = (
-        gear2_param_obj.BodyName if hasattr(gear2_param_obj, "BodyName") else None
-    )
-    gear2_body = None
-    if gear2_body_name:
-        gear2_body = gear2_param_obj.Document.getObject(gear2_body_name)
+        # Info labels depending on mode
+        info2_layout = QtGui.QFormLayout()
+        if self._mode == "bevel_bevel":
+            shaft_angle = self.info1["pitch_angle"] + self.info2["pitch_angle"]
+            self.info_label = QtGui.QLabel(f"{shaft_angle:.2f}\u00b0")
+            info2_layout.addRow("Shaft angle:", self.info_label)
+        else:
+            cd = self._compute_center_distance()
+            self.info_label = QtGui.QLabel(f"{cd:.4f} mm")
+            info2_layout.addRow("Center distance:", self.info_label)
+        layout.addLayout(info2_layout)
 
-    gear2_origin = App.Vector(0, 0, 0)
-    gear2_angle = 0.0
+        # Angle (orbit around fixed gear, or slide along rack)
+        angle_layout = QtGui.QFormLayout()
+        self.angle_spin = QtGui.QDoubleSpinBox()
+        self.angle_spin.setRange(0.0, 360.0)
+        self.angle_spin.setDecimals(2)
+        self.angle_spin.setSingleStep(5.0)
+        self.angle_spin.setSuffix("\u00b0")
+        self.angle_spin.setValue(0.0)
+        self.angle_spin.valueChanged.connect(self._apply)
+        if self._mode == "rack":
+            angle_layout.addRow("Slide:", self.angle_spin)
+        else:
+            angle_layout.addRow("Angle:", self.angle_spin)
+        layout.addLayout(angle_layout)
 
-    if gear2_body:
-        gear2_placement = gear2_body.Placement
-        gear2_origin = gear2_placement.Base
-        rotation = gear2_placement.Rotation
-        gear2_angle = math.degrees(
-            math.atan2(
-                rotation.Axis.y * math.sin(math.radians(rotation.Angle)),
-                rotation.Axis.x * math.sin(math.radians(rotation.Angle)),
-            )
+        # Phase (rotate moving gear around its own axis to mesh teeth)
+        phase_layout = QtGui.QFormLayout()
+        self.phase_spin = QtGui.QDoubleSpinBox()
+        self.phase_spin.setRange(-180.0, 180.0)
+        self.phase_spin.setDecimals(2)
+        self.phase_spin.setSingleStep(0.5)
+        self.phase_spin.setSuffix("\u00b0")
+        self.phase_spin.setValue(0.0)
+        self.phase_spin.valueChanged.connect(self._apply)
+        phase_layout.addRow("Phase:", self.phase_spin)
+        layout.addLayout(phase_layout)
+
+        # Close button
+        btn_layout = QtGui.QHBoxLayout()
+        close_btn = QtGui.QPushButton("Close")
+        close_btn.clicked.connect(self.close)
+        btn_layout.addStretch()
+        btn_layout.addWidget(close_btn)
+        layout.addLayout(btn_layout)
+
+        # Apply initial positioning immediately
+        self._apply()
+
+    def _gear_text(self, body, info):
+        if info.get("is_rack"):
+            return f"{body.Label}  (Rack)"
+        txt = f"{body.Label}  (PD: {info['pd']:.3f} mm"
+        if info["is_bevel"]:
+            txt += f", \u03b4: {info['pitch_angle']:.1f}\u00b0"
+        txt += ")"
+        return txt
+
+    def _compute_center_distance(self):
+        """Compute center distance for display in the info label."""
+        pd1 = self.info1["pd"]
+        pd2 = self.info2["pd"]
+        if self.info1["is_internal"] or self.info2["is_internal"]:
+            return abs(pd1 - pd2) / 2.0
+        return (pd1 + pd2) / 2.0
+
+    def _swap(self):
+        """Swap fixed and moving gears, restoring fixed gear to its original position."""
+        # Restore both gears to their original placements before swapping roles
+        self.body1.Placement = self._orig_placement1
+        self.body2.Placement = self._orig_placement2
+        # Swap roles
+        self.body1, self.body2 = self.body2, self.body1
+        self.info1, self.info2 = self.info2, self.info1
+        self._orig_placement1, self._orig_placement2 = self._orig_placement2, self._orig_placement1
+        # Update UI
+        self.fixed_label.setText(self._gear_text(self.body1, self.info1))
+        self.moving_label.setText(self._gear_text(self.body2, self.info2))
+        if self._mode == "bevel_bevel":
+            shaft_angle = self.info1["pitch_angle"] + self.info2["pitch_angle"]
+            self.info_label.setText(f"{shaft_angle:.2f}\u00b0")
+        else:
+            cd = self._compute_center_distance()
+            self.info_label.setText(f"{cd:.4f} mm")
+        self._apply()
+
+    def _apply(self):
+        """Position the moving gear based on gear type combination."""
+        mode = self._mode
+        if mode == "rack":
+            self._apply_rack()
+        elif mode == "planar":
+            self._apply_planar()
+        elif mode == "bevel_bevel":
+            self._apply_bevel_bevel()
+        else:
+            self._apply_mixed()
+
+    def _apply_planar(self):
+        """Position two planar gears (spur, helical, herringbone, internal)."""
+        angle_rad = math.radians(self.angle_spin.value())
+        center_dist = self._compute_center_distance()
+
+        fixed_base = self.body1.Placement.Base
+        dx = center_dist * math.cos(angle_rad)
+        dy = center_dist * math.sin(angle_rad)
+        new_base = App.Vector(
+            fixed_base.x + dx,
+            fixed_base.y + dy,
+            fixed_base.z,
         )
 
-    new_origin_x = gear2_origin.x + dx
-    new_origin_y = gear2_origin.y + dy
-    new_origin_z = gear2_origin.z
+        phase_deg = self.phase_spin.value()
+        rotation = App.Rotation(App.Vector(0, 0, 1), phase_deg)
+        self.body2.Placement = App.Placement(new_base, rotation)
 
-    gear1_body = gear1_params.get("body_obj")
+    def _apply_rack(self):
+        """Position a pinion gear rolling along a rack gear.
 
-    if gear1_body:
-        current_placement = gear1_body.Placement
-        new_rotation_angle = angle_deg + gear2_angle
+        Rack geometry: teeth along X-axis, pointing in -Y direction.
+        Pitch line at Y=0 in rack body local coords.
+        360 degrees of slide = one full pinion revolution = pi * PD travel.
+        """
+        slide_deg = self.angle_spin.value()
+        phase_deg = self.phase_spin.value()
 
-        new_placement = App.Placement(
-            App.Vector(new_origin_x, new_origin_y, new_origin_z),
-            App.Rotation(App.Vector(0, 0, 1), new_rotation_angle),
+        # Determine which is rack and which is pinion
+        if self.info1.get("is_rack"):
+            # Rack is fixed (body1), pinion moves (body2)
+            pd_pinion = self.info2["pd"]
+            if pd_pinion <= 0:
+                pd_pinion = 20.0
+            travel = slide_deg / 360.0 * math.pi * pd_pinion
+
+            R_rack = self.body1.Placement.Rotation
+            rack_base = self.body1.Placement.Base
+
+            # Pinion at Y = -PD/2 from rack pitch line (on the teeth side)
+            offset_local = App.Vector(travel, -pd_pinion / 2.0, 0)
+            offset_world = R_rack.multVec(offset_local)
+            new_base = rack_base + offset_world
+
+            # Rolling: positive travel (move in +X) → CCW rotation (positive angle)
+            roll_deg = slide_deg + phase_deg
+            rotation = App.Rotation(App.Vector(0, 0, 1), roll_deg)
+            self.body2.Placement = App.Placement(new_base, rotation)
+        else:
+            # Pinion is fixed (body1), rack moves (body2)
+            # Use the ORIGINAL placement as the stable reference frame,
+            # since body1's rotation gets modified each slider update.
+            pd_pinion = self.info1["pd"]
+            if pd_pinion <= 0:
+                pd_pinion = 20.0
+            travel = slide_deg / 360.0 * math.pi * pd_pinion
+
+            pinion_base = self._orig_placement1.Base
+            R_frame = self._orig_placement1.Rotation
+
+            # Rack slides along X in pinion's original frame, offset by pd/2 in Y
+            offset_local = App.Vector(-travel, pd_pinion / 2.0, 0)
+            offset_world = R_frame.multVec(offset_local)
+            new_base = pinion_base + offset_world
+
+            # Rack doesn't rotate, stays aligned with pinion's original frame
+            self.body2.Placement = App.Placement(new_base, R_frame)
+
+            # Rotate pinion in place to show meshing
+            roll_deg = slide_deg + phase_deg
+            pinion_rot = R_frame.multiply(App.Rotation(App.Vector(0, 0, 1), roll_deg))
+            self.body1.Placement = App.Placement(pinion_base, pinion_rot)
+
+    def _apply_bevel_bevel(self):
+        """Position two bevel gears so their inner circle edges touch at one point.
+
+        Both bevel gear bodies have apex at their local origin, flipped 180 deg
+        around X. The inner sketch (CoreCircle_Inner) is at local Z = cone_dist_inner
+        with radius ~ cdi * sin(pitch_angle).
+
+        Orientation: R_fixed * orbit * tilt * phase (unchanged).
+        Position: translate gear2 so the edge of its inner circle just touches
+        the edge of gear1's inner circle — one contact point, no intersection.
+        """
+        shaft_angle = self.info1["pitch_angle"] + self.info2["pitch_angle"]
+        orbit_deg = self.angle_spin.value()
+        phase_deg = self.phase_spin.value()
+
+        # Fixed gear's orientation (includes its creation flip)
+        R_fixed = self.body1.Placement.Rotation
+
+        orbit = App.Rotation(App.Vector(0, 0, 1), orbit_deg)
+        tilt = App.Rotation(App.Vector(0, 1, 0), shaft_angle)
+        phase = App.Rotation(App.Vector(0, 0, 1), phase_deg)
+
+        # Rotation: R_fixed * orbit * tilt * phase
+        rotation = R_fixed.multiply(orbit).multiply(tilt).multiply(phase)
+
+        # --- Compute the touching point between inner circle edges ---
+        cone_dist1 = self.info1["cone_dist"]
+        cone_dist2 = self.info2["cone_dist"]
+        face_width1 = self.info1["height"]
+        face_width2 = self.info2["height"]
+        pa1_rad = math.radians(self.info1["pitch_angle"])
+        pa2_rad = math.radians(self.info2["pitch_angle"])
+
+        cdi1 = cone_dist1 - face_width1
+        cdi2 = cone_dist2 - face_width2
+
+        # Inner circle radii (pitch radius at inner cross-section)
+        r_inner1 = cdi1 * math.sin(pa1_rad)
+        r_inner2 = cdi2 * math.sin(pa2_rad)
+
+        # Cone axis directions (local +Z transformed to world by each body's rotation)
+        N1 = R_fixed.multVec(App.Vector(0, 0, 1))
+        N2 = rotation.multVec(App.Vector(0, 0, 1))
+
+        # Inner circle centers (in world, relative to body base at apex)
+        fixed_base = self.body1.Placement.Base
+        C1 = fixed_base + R_fixed.multVec(App.Vector(0, 0, cdi1))
+
+        # Direction on circle 1's plane toward gear2: project gear2's axis onto circle1's plane
+        d1 = N2 - N1 * (N2.dot(N1))
+        if d1.Length > 1e-9:
+            d1.normalize()
+        else:
+            d1 = App.Vector(1, 0, 0)
+
+        # Direction on circle 2's plane toward gear1: project gear1's axis onto circle2's plane
+        d2 = N1 - N2 * (N1.dot(N2))
+        if d2.Length > 1e-9:
+            d2.normalize()
+        else:
+            d2 = App.Vector(0, 0, 1)
+
+        # Touch point: edge of circle 1 toward gear2
+        P1 = C1 + d1 * r_inner1
+
+        # Offset from gear2's base to its touching edge point
+        # = circle2 center offset + radius in direction toward gear1
+        P2_from_base = rotation.multVec(App.Vector(0, 0, cdi2)) + d2 * r_inner2
+
+        # Solve: P1 = new_base + P2_from_base
+        new_base = P1 - P2_from_base
+
+        self.body2.Placement = App.Placement(new_base, rotation)
+
+    def _apply_mixed(self):
+        """Position a bevel gear meshing with a spur/helical gear.
+
+        The bevel is tilted by its pitch_angle so its outer tooth face
+        is approximately parallel to the spur's teeth. This allows the
+        teeth to face each other for meshing.
+        """
+        orbit_deg = self.angle_spin.value()
+        phase_deg = self.phase_spin.value()
+
+        # Determine which is bevel and which is spur
+        if self.info2["is_bevel"]:
+            self._apply_mixed_bevel_moves(orbit_deg, phase_deg)
+        else:
+            self._apply_mixed_spur_moves(orbit_deg, phase_deg)
+
+    def _apply_mixed_bevel_moves(self, orbit_deg, phase_deg):
+        """Position bevel gear (moving) relative to spur gear (fixed).
+
+        Tilt the bevel by its pitch_angle so the tooth faces are
+        approximately parallel to the spur teeth. Position at center
+        distance with Z offset to align teeth heights.
+        """
+        bevel_info = self.info2
+        spur_info = self.info1
+        cone_dist = bevel_info["cone_dist"]
+        pitch_angle = bevel_info["pitch_angle"]
+        face_width = bevel_info["height"]
+        pd_bevel = bevel_info["pd"]
+        pd_spur = spur_info["pd"]
+        spur_height = spur_info["height"]
+        center_dist = (pd_bevel + pd_spur) / 2.0
+
+        # Fixed (spur) gear's position
+        fixed_base = self.body1.Placement.Base
+
+        # Orbit: position around spur in the XY plane
+        orbit_rad = math.radians(orbit_deg)
+        dx = center_dist * math.cos(orbit_rad)
+        dy = center_dist * math.sin(orbit_rad)
+
+        # Z offset: bring bevel teeth to spur mid-height
+        # After tilting and flipping, the teeth center is approximately at
+        # Z = -cone_dist * cos(pitch_angle) from the bevel apex.
+        # Place bevel so its teeth align with spur's mid-height.
+        pitch_rad = math.radians(pitch_angle)
+        z_teeth = cone_dist * math.cos(pitch_rad)
+        z_offset = spur_height / 2.0 - z_teeth
+
+        new_base = App.Vector(
+            fixed_base.x + dx,
+            fixed_base.y + dy,
+            fixed_base.z + z_offset,
         )
 
-        gear1_body.Placement = new_placement
+        # Bevel rotation: creation flip + tilt by pitch_angle + phase
+        flip = App.Rotation(App.Vector(1, 0, 0), 180)
+        tilt = App.Rotation(App.Vector(0, 1, 0), pitch_angle)
+        phase = App.Rotation(App.Vector(0, 0, 1), phase_deg)
+        rotation = flip.multiply(tilt).multiply(phase)
 
-        # Update parameter object properties if they exist
-        if hasattr(gear1_param_obj, "OriginX"):
-            gear1_param_obj.OriginX = new_origin_x
-        if hasattr(gear1_param_obj, "OriginY"):
-            gear1_param_obj.OriginY = new_origin_y
-        if hasattr(gear1_param_obj, "OriginZ"):
-            gear1_param_obj.OriginZ = new_origin_z
-        if hasattr(gear1_param_obj, "Angle"):
-            gear1_param_obj.Angle = new_rotation_angle
+        self.body2.Placement = App.Placement(new_base, rotation)
 
-        gear1_param_obj.Document.recompute()
-        App.Console.PrintMessage(
-            f"Positioned '{gear1_param_obj.BodyName}' beside '{gear2_param_obj.BodyName}' at center distance {center_distance:.3f} mm\n"
+    def _apply_mixed_spur_moves(self, orbit_deg, phase_deg):
+        """Position spur gear (moving) relative to bevel gear (fixed).
+
+        The bevel is fixed (already tilted via its Placement). Position
+        the spur at center distance from the bevel, at the height where
+        the bevel's outer teeth are.
+        """
+        bevel_info = self.info1
+        spur_info = self.info2
+        cone_dist = bevel_info["cone_dist"]
+        pitch_angle = bevel_info["pitch_angle"]
+        pd_bevel = bevel_info["pd"]
+        pd_spur = spur_info["pd"]
+        spur_height = spur_info["height"]
+        center_dist = (pd_bevel + pd_spur) / 2.0
+
+        # Fixed (bevel) gear's position and orientation
+        R_fixed = self.body1.Placement.Rotation
+        fixed_base = self.body1.Placement.Base
+
+        # The bevel's outer tooth ring is at local (0, 0, cone_dist).
+        # In world, that's at fixed_base + R_fixed * (0, 0, cone_dist).
+        # The spur should be centered at that height.
+        tooth_point_world = R_fixed.multVec(App.Vector(0, 0, cone_dist))
+
+        # Radial offset: orbit around the bevel's axis
+        orbit_rad = math.radians(orbit_deg)
+        # Use the bevel's local XY plane for the orbit
+        offset_local = App.Vector(
+            center_dist * math.cos(orbit_rad),
+            center_dist * math.sin(orbit_rad),
+            0,
         )
+        offset_world = R_fixed.multVec(offset_local)
 
+        # Spur base: at the bevel tooth level, offset radially
+        new_base = fixed_base + tooth_point_world + offset_world
+        # Adjust so spur mid-height aligns with bevel teeth
+        new_base.z -= spur_height / 2.0
+
+        # Spur gear: just phase rotation
+        phase = App.Rotation(App.Vector(0, 0, 1), phase_deg)
+        self.body2.Placement = App.Placement(new_base, phase)
+
+
+# ---------------------------------------------------------------------------
+# Command
+# ---------------------------------------------------------------------------
 
 class GearPositioningCommand:
     """Command to position two gears beside each other."""
@@ -1178,79 +530,48 @@ class GearPositioningCommand:
         return {
             "Pixmap": os.path.join(smWB_icons_path, "positionGears.svg"),
             "MenuText": "&Position Gears",
-            "ToolTip": "Position two gears beside each other for proper meshing",
+            "ToolTip": "Position two gears beside each other for proper meshing.\nSelect exactly 2 Bodies first.",
         }
 
-    def __init__(self):
-        pass
+    def IsActive(self):
+        sel = FreeCADGui.Selection.getSelection()
+        if len(sel) != 2:
+            return False
+        return all(hasattr(obj, "TypeId") and obj.TypeId == "PartDesign::Body" for obj in sel)
 
     def Activated(self):
-        """Called when command is activated."""
         doc = App.ActiveDocument
-
         if not doc:
-            QtGui.QMessageBox.warning(
-                None, "No Document", "Please create or open a FreeCAD document first."
-            )
             return
 
-        gears = findGearsInDocument(doc)
-
-        if len(gears) < 2:
+        sel = FreeCADGui.Selection.getSelection()
+        if len(sel) != 2:
             QtGui.QMessageBox.warning(
-                None,
-                "Not Enough Gears",
-                f"Found {len(gears)} gear(s). Need at least 2 gears to position them.\n"
-                "Please create at least 2 gears using the GearWorkbench tools.",
-            )
+                None, "Selection Error",
+                "Please select exactly 2 PartDesign::Body objects.")
             return
 
-        dialog = GearPositionDialog(gears, FreeCADGui.getMainWindow())
+        body1, body2 = sel[0], sel[1]
 
-        if dialog.exec_() == QtGui.QDialog.Accepted:
-            idx1 = dialog.gear1_combo.currentIndex()
-            idx2_data = dialog.gear2_combo.itemData(dialog.gear2_combo.currentIndex())
-            angle = dialog.angle_spinbox.value()
+        info1 = getGearInfo(doc, body1)
+        info2 = getGearInfo(doc, body2)
 
-            if idx1 >= 0 and idx2_data is not None:
-                gear1_info = gears[idx1]
-                gear2_info = gears[idx2_data]
+        if info1 is None:
+            QtGui.QMessageBox.warning(
+                None, "Gear Not Found",
+                f"Could not find gear parameters for '{body1.Label}'.\n"
+                "No Regenerate object links this Body to a VarSet with PitchDiameter.")
+            return
+        if info2 is None:
+            QtGui.QMessageBox.warning(
+                None, "Gear Not Found",
+                f"Could not find gear parameters for '{body2.Label}'.\n"
+                "No Regenerate object links this Body to a VarSet with PitchDiameter.")
+            return
 
-                try:
-                    positionGearBeside(
-                        gear1_info["param_obj"],
-                        gear1_info,
-                        gear2_info["param_obj"],
-                        gear2_info,
-                        angle,
-                    )
-                except Exception as e:
-                    QtGui.QMessageBox.critical(
-                        None,
-                        "Positioning Error",
-                        f"Failed to position gears:\n{str(e)}",
-                    )
-                    App.Console.PrintError(f"Gear positioning error: {e}\n")
-            else:
-                QtGui.QMessageBox.warning(
-                    None, "Invalid Selection", "Please select two different gears."
-                )
-
-    def IsActive(self):
-        """Return True if command can be activated."""
-        return App.ActiveDocument is not None
-
-    def Deactivated(self):
-        """Called when workbench is deactivated."""
-        pass
-
-    def execute(self, obj):
-        """Execute the feature."""
-        pass
+        dlg = GearPositionDialog(doc, body1, body2, info1, info2,
+                                 parent=FreeCADGui.getMainWindow())
+        dlg.show()
 
 
-# Register command with FreeCAD
-try:
-    FreeCADGui.addCommand("GearPositioningCommand", GearPositioningCommand())
-except Exception as e:
-    App.Console.PrintError(f"Failed to register gear positioning command: {e}\n")
+FreeCADGui.addCommand("GearPositioningCommand", GearPositioningCommand())
