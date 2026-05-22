@@ -174,7 +174,9 @@ class ScrewGearResult:
             if self._last_m<=0 or self._last_nt<3 or self._last_fw<=0: self.Object.Status="Invalid params"; return
             self._stopWatcher()
             old=d.getObject(bn)
+            saved_placement=None
             if old:
+                saved_placement=App.Placement(old.Placement)
                 ch=list(old.Group)
                 for c in ch:
                     for p in c.PropertiesList:
@@ -223,6 +225,9 @@ class ScrewGearResult:
                 kp=util.createPocket(bo,kw,100.0,"Keyway"); kp.Reversed=True
                 kp.setExpression("Suppressed",f"<<{v.Name}>>.KeywayEnabled ? False : True")
                 bo.Tip=kp; d.recompute()
+            if saved_placement:
+                bo=d.getObject(bn)
+                if bo: bo.Placement=saved_placement
             self.Object.Status="Up to date"
             if App.GuiUp: QtCore.QCoreApplication.processEvents()
         except Exception as e:

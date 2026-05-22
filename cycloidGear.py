@@ -401,8 +401,10 @@ class CycloidGearResult:
 
             self._stopWatcher()
 
+            saved_placement = None
             old = doc.getObject(body_name)
             if old:
+                saved_placement = App.Placement(old.Placement)
                 children = list(old.Group)
                 for child in children:
                     for prop in child.PropertiesList:
@@ -429,6 +431,10 @@ class CycloidGearResult:
             }
             genericGear.herringboneGear(doc, parameters, 0.0, 0.0,
                                         generateCycloidToothProfile)
+            if saved_placement is not None:
+                new_body = doc.getObject(body_name)
+                if new_body:
+                    new_body.Placement = saved_placement
             self.Object.Status = "Up to date"
         except Exception as e:
             import traceback

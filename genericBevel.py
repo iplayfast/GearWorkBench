@@ -72,8 +72,11 @@ def bevelGear(doc, parameters, profile_func):
     module_inner = module * scale_factor
 
     # Placement Z-coordinates (Apex at Origin 0,0,0)
-    z_outer = cone_dist
-    z_inner = cone_dist_inner
+    # cone_dist is the slant distance along the cone surface;
+    # the axial (Z) projection is cone_dist * cos(pitch_angle).
+    cos_delta = math.cos(pitch_angle * util.DEG_TO_RAD)
+    z_outer = cone_dist * cos_delta
+    z_inner = cone_dist_inner * cos_delta
 
     # --- 2. Create Core Body (Root Cone) ---
     dedendum = module * gearMath.DEDENDUM_FACTOR

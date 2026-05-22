@@ -598,8 +598,10 @@ class NonCircularGearResult:
             if self._last_nl<2 or self._last_mjr<=0 or self._last_mnr<=0 or self._last_h<=0:
                 self.Object.Status="Invalid params"; return
             self._stopWatcher()
+            saved_placement=None
             old=d.getObject(bn)
             if old:
+                saved_placement=App.Placement(old.Placement)
                 ch=list(old.Group)
                 for c in ch:
                     for p in c.PropertiesList:
@@ -641,6 +643,9 @@ class NonCircularGearResult:
                     "keyway_depth": float(v.KeywayDepth.Value),
                 })
                 d.recompute()
+            if saved_placement:
+                nb=d.getObject(bn)
+                if nb: nb.Placement=saved_placement
             self.Object.Status="Up to date"
             if App.GuiUp: QtCore.QCoreApplication.processEvents()
         except Exception as e:

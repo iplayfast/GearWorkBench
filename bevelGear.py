@@ -310,7 +310,9 @@ class BevelGearResult:
             self._stopWatcher()
 
             old = doc.getObject(body_name)
+            saved_placement = None
             if old:
+                saved_placement = App.Placement(old.Placement)
                 children = list(old.Group)
                 for child in children:
                     for prop in child.PropertiesList:
@@ -345,19 +347,24 @@ class BevelGearResult:
             genericBevel.bevelGear(doc, parameters,
                                    gearMath.generateToothProfile)
 
-            # Flip so the small end (inner sketch) faces the viewer
             body_out = doc.getObject(body_name)
             if body_out:
-                body_out.Placement = App.Placement(
-                    App.Vector(0, 0, 0),
-                    App.Rotation(App.Vector(1, 0, 0), 180),
-                )
+                if saved_placement:
+                    body_out.Placement = saved_placement
+                else:
+                    # Default: flip so the small end (inner sketch) faces the viewer
+                    body_out.Placement = App.Placement(
+                        App.Vector(0, 0, 0),
+                        App.Rotation(App.Vector(1, 0, 0), 180),
+                    )
 
             # Always create bore and keyway sketches (suppressed when disabled)
             sin_delta = math.sin(math.radians(self._last_pt))
             if sin_delta < 0.001:
                 sin_delta = 0.001
             cone_dist = (self._last_m * self._last_nt / 2.0) / sin_delta
+            cos_delta = math.cos(math.radians(self._last_pt))
+            z_outer = cone_dist * cos_delta
 
             # Bore sketch + pocket (suppressed via <<v>>.BoreEnabled)
             bore_sk = util.createSketch(body_out, "Bore")
@@ -370,10 +377,10 @@ class BevelGearResult:
                 Sketcher.Constraint("Diameter", bore_circle, float(v.BoreDiameter.Value)))
             bore_sk.setExpression(f"Constraints[{cst}]", f"<<{v.Name}>>.BoreDiameter")
             bore_sk.Placement = App.Placement(
-                App.Vector(0, 0, cone_dist), App.Rotation(0, 0, 0))
+                App.Vector(0, 0, z_outer), App.Rotation(0, 0, 0))
             bore_sk.MapMode = "Deactivated"
-            bore_pocket = util.createPocket(body_out, bore_sk, cone_dist + 10.0, "Bore")
-            bore_pocket.setExpression("Length", f"<<{v.Name}>>.ConeDistance + 10mm")
+            bore_pocket = util.createPocket(body_out, bore_sk, z_outer + 10.0, "Bore")
+            bore_pocket.setExpression("Length", f"<<{v.Name}>>.ConeDistance * cos(<<{v.Name}>>.PitchAngle) + 10mm")
             bore_pocket.setExpression("Suppressed", f"<<{v.Name}>>.BoreEnabled ? False : True")
 
             # Keyway sketch + pocket (suppressed via <<v>>.KeywayEnabled)
@@ -407,9 +414,9 @@ class BevelGearResult:
             kw_sk.setExpression(f"Constraints[{cst}]",
                 f"<<{v.Name}>>.BoreDiameter / 2.0 + <<{v.Name}>>.KeywayDepth")
             kw_sk.Placement = App.Placement(
-                App.Vector(0, 0, cone_dist), App.Rotation(0, 0, 0))
+                App.Vector(0, 0, z_outer), App.Rotation(0, 0, 0))
             kw_sk.MapMode = "Deactivated"
-            kw_pocket = util.createPocket(body_out, kw_sk, cone_dist + 10.0, "Keyway")
+            kw_pocket = util.createPocket(body_out, kw_sk, z_outer + 10.0, "Keyway")
             kw_pocket.setExpression("Suppressed", f"<<{v.Name}>>.KeywayEnabled ? False : True")
             body_out.Tip = kw_pocket
             doc.recompute()

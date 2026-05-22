@@ -162,8 +162,9 @@ def internalHerringboneGear(
     dw = mt * num_teeth
 
     # CALCULATE DIAMETERS
-    # Tip Radius (Inner Hole): where the teeth END.
-    ra_internal = dw / 2.0 - mt * (gearMath.ADDENDUM_FACTOR + profile_shift)
+    # Tip Radius (Inner Hole): enlarged by backlash so the cutter (which
+    # includes backlash in its profile shift) always cuts through cleanly.
+    ra_internal = dw / 2.0 - mt * (gearMath.ADDENDUM_FACTOR + profile_shift) + backlash
 
     # Root Radius (Bottom of the cut): where the teeth START.
     rf_internal = dw / 2.0 + mt * (gearMath.DEDENDUM_FACTOR - profile_shift)
@@ -238,8 +239,6 @@ def _createTwoSketchInternalGear(
         ring_sketch.setExpression(f"Constraints[{cst_inner}]", f"<<{vn}>>.InnerDiameter")
         ring_sketch.setExpression(f"Constraints[{cst_outer}]", f"<<{vn}>>.OuterDiameter")
 
-    # Show progress in FreeCAD Report View
-    App.Console.PrintMessage("Internal gear: Created ring base...\n")
     if App.GuiUp:
         QtCore.QCoreApplication.processEvents()
 
@@ -265,15 +264,10 @@ def _createTwoSketchInternalGear(
     tooth_cut.Ruled = True
     tooth_cut.Refine = False
 
-    # Show progress in FreeCAD Report View
-    App.Console.PrintMessage("Internal gear: Created tooth gap cut...\n")
     if App.GuiUp:
         QtCore.QCoreApplication.processEvents()
 
     # 4. Pattern the CUT operation (not the ring)
-    App.Console.PrintMessage(f"Internal gear: Creating polar pattern for {num_teeth} teeth (this may take a while)...\n")
-    if App.GuiUp:
-        QtCore.QCoreApplication.processEvents()
     gear_teeth = body.newObject("PartDesign::PolarPattern", "Teeth")
     origin = body.Origin
     z_axis = origin.OriginFeatures[2]
@@ -283,11 +277,6 @@ def _createTwoSketchInternalGear(
     gear_teeth.Originals = [tooth_cut]
     if vn:
         gear_teeth.setExpression("Occurrences", f"<<{vn}>>.NumberOfTeeth")
-
-    # Show progress in FreeCAD Report View
-    App.Console.PrintMessage("Internal gear: Polar pattern created, finalizing...\n")
-    if App.GuiUp:
-        QtCore.QCoreApplication.processEvents()
 
     # Cleanup
     ring_sketch.Visibility = False
@@ -299,9 +288,6 @@ def _createTwoSketchInternalGear(
     body.Tip = gear_teeth
 
     doc.recompute()
-
-    # Show completion in FreeCAD Report View
-    App.Console.PrintMessage(f"✓ Internal gear with {num_teeth} teeth created successfully!\n")
     if App.GuiUp:
         QtCore.QCoreApplication.processEvents()
         try:
@@ -399,8 +385,6 @@ def _createThreeSketchInternalGear(
         ring_sketch.setExpression(f"Constraints[{cst_inner}]", f"<<{vn}>>.InnerDiameter")
         ring_sketch.setExpression(f"Constraints[{cst_outer}]", f"<<{vn}>>.OuterDiameter")
 
-    # Show progress in FreeCAD Report View
-    App.Console.PrintMessage("Internal herringbone: Created ring base...\n")
     if App.GuiUp:
         QtCore.QCoreApplication.processEvents()
 
@@ -441,15 +425,10 @@ def _createThreeSketchInternalGear(
     cut_upper.Ruled = True
     cut_upper.Refine = False
 
-    # Show progress in FreeCAD Report View
-    App.Console.PrintMessage("Internal herringbone: Created tooth gap cuts...\n")
     if App.GuiUp:
         QtCore.QCoreApplication.processEvents()
 
     # 4. Pattern BOTH CUT operations together (faster than separate patterns)
-    App.Console.PrintMessage(f"Internal herringbone: Creating polar pattern for {num_teeth} teeth (this may take a while)...\n")
-    if App.GuiUp:
-        QtCore.QCoreApplication.processEvents()
     gear_teeth = body.newObject("PartDesign::PolarPattern", "Teeth")
     origin = body.Origin
     z_axis = origin.OriginFeatures[2]
@@ -459,11 +438,6 @@ def _createThreeSketchInternalGear(
     gear_teeth.Originals = [cut_lower, cut_upper]
     if parameters.get("varset_name"):
         gear_teeth.setExpression("Occurrences", f"<<{parameters['varset_name']}>>.NumberOfTeeth")
-
-    # Show progress in FreeCAD Report View
-    App.Console.PrintMessage("Internal herringbone: Polar pattern created, finalizing...\n")
-    if App.GuiUp:
-        QtCore.QCoreApplication.processEvents()
 
     # Cleanup
     ring_sketch.Visibility = False
@@ -477,9 +451,6 @@ def _createThreeSketchInternalGear(
     body.Tip = gear_teeth
 
     doc.recompute()
-
-    # Show completion in FreeCAD Report View
-    App.Console.PrintMessage(f"✓ Internal herringbone gear with {num_teeth} teeth created successfully!\n")
     if App.GuiUp:
         QtCore.QCoreApplication.processEvents()
         try:
@@ -690,7 +661,7 @@ def createInternalHelixGearVarSet(doc, name):
     ).ProfileShift = H["profile_shift"]
 
     var_set.addProperty(
-        "App::PropertyFloat", "Backlash", "InternalHelicalGear",
+        "App::PropertyLength", "Backlash", "InternalHelicalGear",
         QT_TRANSLATE_NOOP("App::Property", "Backlash clearance"),
     ).Backlash = 0.15
 
@@ -712,7 +683,7 @@ def createInternalHelixGearVarSet(doc, name):
         QT_TRANSLATE_NOOP("App::Property", "Inner tip diameter"), 1,
     )
     var_set.setExpression("InnerDiameter",
-        "PitchDiameter - 2 * Module / cos(HelixAngle) * (1 + ProfileShift)")
+        "PitchDiameter - 2 * Module / cos(HelixAngle) * (1 + ProfileShift) + 2 * Backlash")
 
     var_set.addProperty(
         "App::PropertyLength", "OuterDiameter", "read only",
@@ -775,7 +746,7 @@ def createInternalHerringboneGearVarSet(doc, name):
     ).ProfileShift = H["profile_shift"]
 
     var_set.addProperty(
-        "App::PropertyFloat", "Backlash", "InternalHerringboneGear",
+        "App::PropertyLength", "Backlash", "InternalHerringboneGear",
         QT_TRANSLATE_NOOP("App::Property", "Backlash clearance"),
     ).Backlash = 0.15
 
@@ -796,7 +767,7 @@ def createInternalHerringboneGearVarSet(doc, name):
         QT_TRANSLATE_NOOP("App::Property", "Inner tip diameter"), 1,
     )
     var_set.setExpression("InnerDiameter",
-        "PitchDiameter - 2 * Module / cos(Angle1) * (1 + ProfileShift)")
+        "PitchDiameter - 2 * Module / cos(Angle1) * (1 + ProfileShift) + 2 * Backlash")
 
     var_set.addProperty(
         "App::PropertyLength", "OuterDiameter", "read only",
@@ -1086,7 +1057,7 @@ def createInternalGearVarSet(doc, name):
     ).ProfileShift = H["profile_shift"]
 
     var_set.addProperty(
-        "App::PropertyFloat", "Backlash", "Gear",
+        "App::PropertyLength", "Backlash", "Gear",
         QT_TRANSLATE_NOOP("App::Property", "Backlash clearance"),
     ).Backlash = 0.15
 
@@ -1118,7 +1089,7 @@ def createInternalGearVarSet(doc, name):
         QT_TRANSLATE_NOOP("App::Property", "Inner tip diameter"), 1,
     )
     var_set.setExpression("InnerDiameter",
-        "PitchDiameter - 2 * Module / cos(Angle1) * (1 + ProfileShift)")
+        "PitchDiameter - 2 * Module / cos(Angle1) * (1 + ProfileShift) + 2 * Backlash")
 
     var_set.addProperty(
         "App::PropertyLength", "OuterDiameter", "read only",
@@ -1318,8 +1289,12 @@ class InternalGearResult:
         v = self._getVarSet()
         if not v:
             return
+        try:
+            gt = str(v.GearType)
+        except ReferenceError:
+            self._varset = None
+            return
         changed = False
-        gt = str(v.GearType)
         if gt != self._last_gt:
             self._last_gt = gt
             self._gt_changed = True
@@ -1402,8 +1377,10 @@ class InternalGearResult:
             if App.GuiUp:
                 QtCore.QCoreApplication.processEvents()
 
+            saved_placement = None
             old = doc.getObject(body_name)
             if old:
+                saved_placement = App.Placement(old.Placement)
                 children = list(old.Group)
                 for child in children:
                     for prop in child.PropertiesList:
@@ -1445,6 +1422,10 @@ class InternalGearResult:
                 parameters["addendum_factor"] = self._last_af
                 parameters["dedendum_factor"] = self._last_df
             internalHerringboneGear(doc, parameters, self._last_a1, self._last_a2, profile_func)
+            if saved_placement:
+                body_out = doc.getObject(body_name)
+                if body_out:
+                    body_out.Placement = saved_placement
             self.Object.Status = "Up to date"
             if App.GuiUp:
                 QtCore.QCoreApplication.processEvents()
@@ -1647,8 +1628,10 @@ class InternalSpurGearResult:
 
             self._stopWatcher()
 
+            saved_placement = None
             old = doc.getObject(body_name)
             if old:
+                saved_placement = App.Placement(old.Placement)
                 children = list(old.Group)
                 for child in children:
                     for prop in child.PropertiesList:
@@ -1675,6 +1658,10 @@ class InternalSpurGearResult:
                 "varset_name": v.Name,
             }
             internalSpurGear(doc, parameters)
+            if saved_placement:
+                body_out = doc.getObject(body_name)
+                if body_out:
+                    body_out.Placement = saved_placement
             self.Object.Status = "Up to date"
         except Exception as e:
             import traceback
@@ -1888,8 +1875,10 @@ class InternalHelixGearResult:
 
             self._stopWatcher()
 
+            saved_placement = None
             old = doc.getObject(body_name)
             if old:
+                saved_placement = App.Placement(old.Placement)
                 children = list(old.Group)
                 for child in children:
                     for prop in child.PropertiesList:
@@ -1916,6 +1905,10 @@ class InternalHelixGearResult:
                 "varset_name": v.Name,
             }
             internalHelixGear(doc, parameters, self._last_ha)
+            if saved_placement:
+                body_out = doc.getObject(body_name)
+                if body_out:
+                    body_out.Placement = saved_placement
             self.Object.Status = "Up to date"
         except Exception as e:
             import traceback
@@ -2682,8 +2675,10 @@ class InternalHerringboneGearResult:
 
             self._stopWatcher()
 
+            saved_placement = None
             old = doc.getObject(body_name)
             if old:
+                saved_placement = App.Placement(old.Placement)
                 children = list(old.Group)
                 for child in children:
                     for prop in child.PropertiesList:
@@ -2710,6 +2705,10 @@ class InternalHerringboneGearResult:
                 "varset_name": v.Name,
             }
             internalHerringboneGear(doc, parameters, self._last_a1, self._last_a2)
+            if saved_placement:
+                body_out = doc.getObject(body_name)
+                if body_out:
+                    body_out.Placement = saved_placement
             self.Object.Status = "Up to date"
         except Exception as e:
             import traceback

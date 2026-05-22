@@ -1514,7 +1514,9 @@ class GearResult:
                 QtCore.QCoreApplication.processEvents()
 
             old = doc.getObject(body_name)
+            saved_placement = None
             if old:
+                saved_placement = App.Placement(old.Placement)
                 children = list(old.Group)
                 for child in children:
                     for prop in child.PropertiesList:
@@ -1561,6 +1563,10 @@ class GearResult:
                 parameters["addendum_factor"] = self._last_af
                 parameters["dedendum_factor"] = self._last_df
             herringboneGear(doc, parameters, self._last_a1, self._last_a2, profile_func)
+            if saved_placement:
+                body_out = doc.getObject(body_name)
+                if body_out:
+                    body_out.Placement = saved_placement
             self.Object.Status = "Up to date"
             if App.GuiUp:
                 QtCore.QCoreApplication.processEvents()
@@ -1844,7 +1850,9 @@ class SpurGearResult:
             self._stopWatcher()
 
             old = doc.getObject(body_name)
+            saved_placement = None
             if old:
+                saved_placement = App.Placement(old.Placement)
                 children = list(old.Group)
 
                 # 1. Clear all expressions on children
@@ -1884,6 +1892,10 @@ class SpurGearResult:
                 "origin_x": 0.0, "origin_y": 0.0, "origin_z": 0.0, "angle": 0.0,
             }
             spurGear(doc, parameters)
+            if saved_placement:
+                body_out = doc.getObject(body_name)
+                if body_out:
+                    body_out.Placement = saved_placement
             self.Object.Status = "Up to date"
         except Exception as e:
             import traceback
@@ -2137,7 +2149,9 @@ class HelixGearResult:
             self._stopWatcher()
 
             old = doc.getObject(body_name)
+            saved_placement = None
             if old:
+                saved_placement = App.Placement(old.Placement)
                 children = list(old.Group)
 
                 for child in children:
@@ -2172,6 +2186,10 @@ class HelixGearResult:
                 "origin_x": 0.0, "origin_y": 0.0, "origin_z": 0.0, "angle": 0.0,
             }
             helixGear(doc, parameters, self._last_ha)
+            if saved_placement:
+                body_out = doc.getObject(body_name)
+                if body_out:
+                    body_out.Placement = saved_placement
             self.Object.Status = "Up to date"
         except Exception as e:
             import traceback
@@ -2426,7 +2444,9 @@ class HerringboneGearResult:
             self._stopWatcher()
 
             old = doc.getObject(body_name)
+            saved_placement = None
             if old:
+                saved_placement = App.Placement(old.Placement)
                 children = list(old.Group)
 
                 for child in children:
@@ -2461,6 +2481,10 @@ class HerringboneGearResult:
                 "origin_x": 0.0, "origin_y": 0.0, "origin_z": 0.0, "angle": 0.0,
             }
             herringboneGear(doc, parameters, self._last_a1, self._last_a2)
+            if saved_placement:
+                body_out = doc.getObject(body_name)
+                if body_out:
+                    body_out.Placement = saved_placement
             self.Object.Status = "Up to date"
         except Exception as e:
             import traceback

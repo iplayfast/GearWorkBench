@@ -372,10 +372,12 @@ class GenevaWheelResult:
             self._last_h=float(v.Height.Value)
             if self._last_ns<3 or self._last_cr<=0 or self._last_h<=0:
                 self.Object.Status="Invalid params"; return
+            saved_placements={}
             for bn in [self.Object.CrankBodyName, self.Object.WheelBodyName]:
                 self._stopWatcher()
                 old=d.getObject(bn)
                 if old:
+                    saved_placements[bn]=App.Placement(old.Placement)
                     ch=list(old.Group)
                     for c in ch:
                         for p in c.PropertiesList:
@@ -408,6 +410,22 @@ class GenevaWheelResult:
                     pk=util.createPocket(bo,sk,100.0,"Bore"); pk.Reversed=True
                     pk.setExpression("Suppressed",f"<<{v.Name}>>.{boren} ? False : True")
                     bo.Tip=pk
+            # Restore crank placement; position wheel relative to crank
+            # using the NEW center distance (c changes when num_slots changes)
+            crank_bn = str(self.Object.CrankBodyName)
+            wheel_bn = str(self.Object.WheelBodyName)
+            crank_body = d.getObject(crank_bn)
+            wheel_body = d.getObject(wheel_bn)
+            geo = calculateGenevaGeometry({
+                "num_slots": self._last_ns, "crank_radius": self._last_cr,
+                "pin_radius": self._last_pr, "tolerance": self._last_tol,
+            })
+            if crank_body and crank_bn in saved_placements:
+                crank_body.Placement = saved_placements[crank_bn]
+            if wheel_body:
+                crank_pl = crank_body.Placement if crank_body else App.Placement()
+                wheel_offset = App.Placement(App.Vector(-geo["c"], 0, 0), App.Rotation())
+                wheel_body.Placement = crank_pl.multiply(wheel_offset)
             d.recompute()
             self.Object.Status="Up to date"
             if App.GuiUp: QtCore.QCoreApplication.processEvents()
@@ -613,9 +631,28 @@ class GenevaWheel:
     def recompute(self):
         if self.Dirty:
             try:
-                generateGenevaWheelPart(App.ActiveDocument, self.GetParameters())
+                doc = App.ActiveDocument
+                params = self.GetParameters()
+                crank_bn = params["crank_body_name"]
+                # Save crank placement before rebuild
+                old_crank = doc.getObject(crank_bn)
+                saved_crank_pl = App.Placement(old_crank.Placement) if old_crank else None
+
+                generateGenevaWheelPart(doc, params)
                 self.Dirty = False
-                App.ActiveDocument.recompute()
+
+                # Restore crank; position wheel relative to crank with new c
+                crank_body = doc.getObject(crank_bn)
+                wheel_body = doc.getObject(params["wheel_body_name"])
+                if crank_body and saved_crank_pl:
+                    crank_body.Placement = saved_crank_pl
+                if wheel_body:
+                    crank_pl = crank_body.Placement if crank_body else App.Placement()
+                    geo = calculateGenevaGeometry(params)
+                    wheel_offset = App.Placement(App.Vector(-geo["c"], 0, 0), App.Rotation())
+                    wheel_body.Placement = crank_pl.multiply(wheel_offset)
+
+                doc.recompute()
             except Exception as e:
                 App.Console.PrintError(f"Geneva Wheel Error: {e}\n")
                 import traceback

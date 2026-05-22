@@ -66,7 +66,9 @@ class GearStack:
             for gear in gears:
                 if not hasattr(gear, "Shape") or gear.Shape.isNull():
                     continue
-                shapes.append(gear.Shape.copy())
+                shape = gear.Shape.copy()
+                shape.Placement = gear.Placement
+                shapes.append(shape)
         else:
             gaps = obj.Gaps if obj.Gaps else []
             # Pad gaps with zeros if too short
@@ -88,9 +90,12 @@ class GearStack:
                 if not hasattr(gear, "Shape") or gear.Shape.isNull():
                     continue
 
-                # Copy the shape and move it to the stack position
+                # Copy the shape and place at the stack position
                 shape = gear.Shape.copy()
-                pos = origin + axis * offset
+                # Account for shape's own Z offset (e.g. BoundBox.ZMin != 0)
+                bbox = shape.BoundBox
+                z_correction = -bbox.ZMin
+                pos = origin + axis * (offset + z_correction)
                 shape.Placement = App.Placement(pos, App.Rotation())
 
                 shapes.append(shape)

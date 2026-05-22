@@ -39,6 +39,7 @@ import screwGear  # Import screw gear module
 import nonCircularGear  # Import non-circular gear module
 import genevaWheel  # Import Geneva wheel (Maltese cross) module
 import gearStack  # Import gear stack module
+import gearLog  # Action logger for test documentation
 
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, "icons")

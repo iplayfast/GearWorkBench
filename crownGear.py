@@ -288,7 +288,9 @@ class CrownGearResult:
             self._stopWatcher()
 
             old = doc.getObject(body_name)
+            saved_placement = None
             if old:
+                saved_placement = App.Placement(old.Placement)
                 children = list(old.Group)
                 for child in children:
                     for prop in child.PropertiesList:
@@ -373,6 +375,8 @@ class CrownGearResult:
             kw_pocket = util.createPocket(body_out, kw_sk, 100.0, "Keyway")
             kw_pocket.setExpression("Suppressed", f"<<{v.Name}>>.KeywayEnabled ? False : True")
             body_out.Tip = kw_pocket
+            if saved_placement:
+                body_out.Placement = saved_placement
             doc.recompute()
 
             self.Object.Status = "Up to date"

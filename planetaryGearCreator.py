@@ -94,7 +94,7 @@ def calculateSunTeeth(planet: int, ring: int) -> int:
 
 
 def _nearby_values(current: int, step: int, count: int = 2,
-                    min_val: int = 6, max_val: int = 200) -> str:
+                    min_val: int = 6, max_val: int = 1000) -> str:
     """Build a label string showing nearby valid values around *current*.
     
     Example for current=20, step=3:  "17, 20, 23"  (with current marked).
@@ -195,8 +195,14 @@ def validatePlanetarySystem(sun: int, planet: int, ring: int, num_planets: int,
 
 
 def calculatePlanetaryPositions(sun_teeth: int, planet_teeth: int, ring_teeth: int,
-                                 num_planets: int, module: float, helix_angle: float = 0.0) -> Dict:
+                                 num_planets: int, module: float, helix_angle: float = 0.0,
+                                 flip_sun: bool = False) -> Dict:
     """Calculate positions for all gears in planetary system.
+
+    Each planet rotation is computed to satisfy the discrete sun mesh condition
+    (tooth-into-gap at the contact point).  The ring phase is then derived from
+    planet 0's tooth phase at the ring contact.  The assembly condition
+    (Ns+Nr) % P == 0 guarantees that all planets mesh with the ring.
 
     Args:
         sun_teeth: Number of sun gear teeth
@@ -205,6 +211,7 @@ def calculatePlanetaryPositions(sun_teeth: int, planet_teeth: int, ring_teeth: i
         num_planets: Number of planet gears
         module: Gear module (normal module for helical)
         helix_angle: Helix angle in degrees (0 for spur)
+        flip_sun: True if the sun gear is flipped 180° about X axis
 
     Returns:
         Dictionary with:
@@ -224,32 +231,57 @@ def calculatePlanetaryPositions(sun_teeth: int, planet_teeth: int, ring_teeth: i
     planet_pitch_dia = mt * planet_teeth
     center_distance = (sun_pitch_dia + planet_pitch_dia) / 2.0
 
-    # Sun at origin
     sun_position = (0.0, 0.0, 0.0, 0.0)
 
-    # Planets evenly spaced around sun
     planet_positions = []
     angle_step = 360.0 / num_planets
-    for i in range(num_planets):
-        angle_deg = i * angle_step
-        angle_rad = math.radians(angle_deg)
+    tooth_pitch = 360.0 / planet_teeth
+    ring_pitch = 360.0 / ring_teeth
 
-        # Position planet at calculated distance
+    for i in range(num_planets):
+        theta = i * angle_step
+        angle_rad = math.radians(theta)
+
         x = center_distance * math.cos(angle_rad)
         y = center_distance * math.sin(angle_rad)
         z = 0.0
 
-        # Calculate rotation for proper tooth meshing
-        # For external gears meshing, the planet rotates proportional to the gear ratio
-        # as it moves around the sun
-        planet_angle = -angle_deg * (sun_teeth / planet_teeth)
+        # Sun tooth fractional position at contact angle theta.
+        # Unflipped sun: teeth at 90° + m * sun_pitch
+        # Flipped sun:   teeth at -90° + m * sun_pitch  (180° X flip)
+        if flip_sun:
+            frac_sun = ((theta + 90.0) * sun_teeth / 360.0) % 1.0
+        else:
+            frac_sun = ((theta - 90.0) * sun_teeth / 360.0) % 1.0
 
-        planet_positions.append((x, y, z, planet_angle))
+        # Sun mesh condition: at the contact point the planet must present a
+        # gap to the sun tooth.  Planet teeth are at local angle 90° + m*tp;
+        # the sun-facing direction from the planet center is (theta + 180°).
+        #   frac_planet_toward_sun = ((theta+90 - alpha) / tp) mod 1
+        # For mesh: frac_sun + frac_planet_toward_sun ≡ 0.5  (mod 1)
+        #
+        # Solving: alpha = theta + 90 - (k + 0.5 - frac_sun) * tp
+        # Choose integer k closest to the continuous rolling reference.
+        target = -theta * sun_teeth / planet_teeth  # continuous reference
+        k_exact = (theta + 90.0 - target) / tooth_pitch - 0.5 + frac_sun
+        k = round(k_exact)
+        alpha = theta + 90.0 - (k + 0.5 - frac_sun) * tooth_pitch
 
-    # Ring at origin with no rotation
-    # The ring will automatically mesh with planets when they mesh with sun
-    # due to the planetary constraint: Ring = Sun + 2*Planet
-    ring_position = (0.0, 0.0, 0.0, 0.0)
+        planet_positions.append((x, y, z, alpha))
+
+    # Derive ring_phase from planet 0's tooth phase at the ring contact.
+    # Planet 0 is on the +X axis; the ring contact direction is 0° from both
+    # the planet center and the origin.  The planet's fractional tooth phase
+    # at the contact is:
+    alpha_0 = planet_positions[0][3]
+    frac_planet_ring = ((-alpha_0 - 90.0) / tooth_pitch) % 1.0
+
+    # The ring gap phase at angle 0° must match:
+    #   ((0 - 90 - ring_phase) / ring_pitch) mod 1 = frac_planet_ring
+    # Solve: ring_phase = -90 - frac_planet_ring * ring_pitch  (mod ring_pitch)
+    raw = -90.0 - frac_planet_ring * ring_pitch
+    ring_phase = raw - round(raw / ring_pitch) * ring_pitch
+    ring_position = (0.0, 0.0, 0.0, ring_phase)
 
     return {
         "sun_position": sun_position,
@@ -263,7 +295,7 @@ def calculatePlanetaryPositions(sun_teeth: int, planet_teeth: int, ring_teeth: i
 # Gear Creation Function
 # ============================================================================
 
-def _makeGear(doc, gear_type, is_internal, name, params, positions, icon, idx=None):
+def _makeGear(doc, gear_type, is_internal, name, params, positions, icon, idx=None, flip=False):
     """Create a single gear using the unified VarSet + Result pattern."""
     create_var = createInternalGearVarSet if is_internal else createGearVarSet
     result_cls = InternalGearResult if is_internal else GearResult
@@ -283,8 +315,8 @@ def _makeGear(doc, gear_type, is_internal, name, params, positions, icon, idx=No
     varset.PressureAngle = params["pressure_angle"]
     varset.ProfileShift = params["profile_shift"]
     varset.Backlash = params["backlash"]
-    varset.Angle1 = params.get("angle1", 0.0)
-    varset.Angle2 = params.get("angle2", 0.0)
+    varset.Angle1 = params.get("angle1") or 0.0
+    varset.Angle2 = params.get("angle2") or 0.0
     if params.get("tooth_profile") == "Cycloidal":
         varset.AddendumFactor = params.get("addendum_factor", 1.4)
         varset.DedendumFactor = params.get("dedendum_factor", 1.6)
@@ -311,10 +343,16 @@ def _makeGear(doc, gear_type, is_internal, name, params, positions, icon, idx=No
         body = doc.getObject(gear_obj.BodyName)
         if body:
             tx, ty, tz, angle = positions
-            body.Placement = App.Placement(
-                App.Vector(tx, ty, tz),
-                App.Rotation(App.Vector(0, 0, 1), angle),
-            )
+            base = App.Vector(tx, ty, tz)
+            rotation = App.Rotation(App.Vector(0, 0, 1), angle)
+            if flip:
+                # 180° X flip to reverse herringbone direction.
+                # Offset Z so gear center stays at the same point
+                # (gear extends z=0..+h, flip makes it z=0..-h).
+                height = params["height"]
+                base = base + rotation.multVec(App.Vector(0, 0, height))
+                rotation = rotation.multiply(App.Rotation(App.Vector(1, 0, 0), 180))
+            body.Placement = App.Placement(base, rotation)
 
     return {"gear": gear_obj, "varset": varset}
 
@@ -353,7 +391,8 @@ def createPlanetarySystem(doc, gear_type: str, sun_teeth: int, planet_teeth: int
     int_f = os.path.join(smWB_icons_path, int_icon[gear_type])
 
     positions = calculatePlanetaryPositions(sun_teeth, planet_teeth, ring_teeth,
-                                           num_planets, module, helix_angle)
+                                           num_planets, module, helix_angle,
+                                           flip_sun=True)
 
     planet_helix = -helix_angle if helix_angle != 0.0 else 0.0
     planet_a2 = -angle2 if angle2 is not None else None
@@ -364,8 +403,7 @@ def createPlanetarySystem(doc, gear_type: str, sun_teeth: int, planet_teeth: int
              "backlash": backlash, "tooth_profile": tooth_profile,
              "angle1": helix_angle, "angle2": angle2}
     sun_r = _makeGear(doc, gear_type, False, "SunGear", sun_p,
-                      (0.0, 0.0, 0.0, 0.0), ext_f)
-    App.Console.PrintMessage(f"Created sun gear with {sun_teeth} teeth\n")
+                      (0.0, 0.0, 0.0, 0.0), ext_f, flip=True)
 
     # ---- planets ----
     planet_objs = []
@@ -376,7 +414,6 @@ def createPlanetarySystem(doc, gear_type: str, sun_teeth: int, planet_teeth: int
               "angle1": planet_helix, "angle2": planet_a2}
         pr = _makeGear(doc, gear_type, False, f"Planet{i+1}Gear", pp, pos, ext_f)
         planet_objs.append(pr)
-        App.Console.PrintMessage(f"Created planet {i+1} ({planet_teeth}t) at ({pos[0]:.1f},{pos[1]:.1f})\n")
 
     # ---- ring ----
     ring_p = {"teeth": ring_teeth, "module": module, "height": height,
@@ -384,10 +421,10 @@ def createPlanetarySystem(doc, gear_type: str, sun_teeth: int, planet_teeth: int
               "backlash": backlash, "rim": 3.0, "tooth_profile": tooth_profile,
               "angle1": helix_angle, "angle2": angle2}
     ring_r = _makeGear(doc, gear_type, True, "RingGear", ring_p,
-                       (0.0, 0.0, 0.0, 0.0), int_f)
-    App.Console.PrintMessage(f"Created ring gear with {ring_teeth} teeth\n")
-    App.Console.PrintMessage(f"Planetary system complete: {num_planets} planets, "
-                             f"center distance = {positions['center_distance']:.2f}mm\n")
+                       positions["ring_position"], int_f)
+    App.Console.PrintMessage(f"Planetary system: {num_planets} planets, "
+                             f"sun={sun_teeth}t, planet={planet_teeth}t, ring={ring_teeth}t, "
+                             f"center distance={positions['center_distance']:.2f}mm\n")
 
     return {"sun": sun_r, "planets": planet_objs, "ring": ring_r}
 
@@ -448,7 +485,7 @@ if GUI_AVAILABLE:
             planets_layout = QtGui.QHBoxLayout()
             planets_layout.addWidget(QtGui.QLabel("Number of Planets:"))
             self.num_planets_spin = QtGui.QSpinBox()
-            self.num_planets_spin.setRange(2, 6)
+            self.num_planets_spin.setRange(2, 100)
             self.num_planets_spin.setValue(3)
             planets_layout.addWidget(self.num_planets_spin)
             planets_layout.addStretch()
@@ -472,7 +509,7 @@ if GUI_AVAILABLE:
             sun_layout = QtGui.QHBoxLayout()
             sun_layout.addWidget(QtGui.QLabel("  Sun Teeth:"))
             self.sun_teeth_spin = QtGui.QSpinBox()
-            self.sun_teeth_spin.setRange(6, 200)
+            self.sun_teeth_spin.setRange(6, 1000)
             self.sun_teeth_spin.setValue(20)
             sun_layout.addWidget(self.sun_teeth_spin)
             self.sun_teeth_label = QtGui.QLabel("")
@@ -485,7 +522,7 @@ if GUI_AVAILABLE:
             planet_layout = QtGui.QHBoxLayout()
             planet_layout.addWidget(QtGui.QLabel("  Planet Teeth:"))
             self.planet_teeth_spin = QtGui.QSpinBox()
-            self.planet_teeth_spin.setRange(6, 200)
+            self.planet_teeth_spin.setRange(6, 1000)
             self.planet_teeth_spin.setValue(15)
             planet_layout.addWidget(self.planet_teeth_spin)
             self.planet_teeth_label = QtGui.QLabel("")
@@ -498,7 +535,7 @@ if GUI_AVAILABLE:
             ring_layout = QtGui.QHBoxLayout()
             ring_layout.addWidget(QtGui.QLabel("  Ring Teeth:"))
             self.ring_teeth_spin = QtGui.QSpinBox()
-            self.ring_teeth_spin.setRange(20, 400)
+            self.ring_teeth_spin.setRange(20, 2000)
             self.ring_teeth_spin.setValue(50)
             ring_layout.addWidget(self.ring_teeth_spin)
             self.ring_teeth_label = QtGui.QLabel("50 (calculated)")
@@ -617,7 +654,7 @@ if GUI_AVAILABLE:
             self.sun_teeth_spin.valueChanged.connect(self.recalculateAndValidate)
             self.planet_teeth_spin.valueChanged.connect(self.recalculateAndValidate)
             self.ring_teeth_spin.valueChanged.connect(self.recalculateAndValidate)
-            self.num_planets_spin.valueChanged.connect(self.recalculateAndValidate)
+            self.num_planets_spin.valueChanged.connect(self.onNumPlanetsChanged)
             self.module_spin.valueChanged.connect(self.recalculateAndValidate)
             self.helix_angle_spin.valueChanged.connect(self.recalculateAndValidate)
 
@@ -655,6 +692,73 @@ if GUI_AVAILABLE:
 
             self.recalculateAndValidate()
 
+        def onNumPlanetsChanged(self):
+            """Adjust tooth counts to satisfy assembly condition for new planet count."""
+            P = self.num_planets_spin.value()
+            sun = self.sun_teeth_spin.value()
+            planet = self.planet_teeth_spin.value()
+
+            # Block signals while adjusting to avoid recursive recalculation
+            self.sun_teeth_spin.blockSignals(True)
+            self.planet_teeth_spin.blockSignals(True)
+
+            if self.lock_sun_planet_radio.isChecked():
+                # Ring is calculated; adjust sun to nearest valid value
+                # Assembly: (sun + ring) % P == 0, ring = sun + 2*planet
+                # So (2*sun + 2*planet) % P == 0 → (sun + planet) % (P/gcd(2,P)) ...
+                # Simpler: (sun + ring) = 2*(sun + planet), need 2*(sun+planet) % P == 0
+                needed = sun + planet
+                remainder = (2 * needed) % P
+                if remainder != 0:
+                    # Try adjusting sun up or down to fix it
+                    # Need 2*(sun + planet) ≡ 0 (mod P)
+                    # If P is even: (sun+planet) ≡ 0 (mod P/2)
+                    # If P is odd: 2*(sun+planet) ≡ 0 (mod P) → (sun+planet) ≡ 0 (mod P)
+                    half = P // math.gcd(2, P)
+                    rem = needed % half
+                    adj_down = rem
+                    adj_up = half - rem
+                    new_sun = sun - adj_down if adj_down <= adj_up else sun + adj_up
+                    if new_sun < 6:
+                        new_sun = sun + adj_up
+                    self.sun_teeth_spin.setValue(new_sun)
+            elif self.lock_sun_ring_radio.isChecked():
+                # Planet is calculated; adjust sun to nearest valid
+                ring = self.ring_teeth_spin.value()
+                remainder = (sun + ring) % P
+                if remainder != 0:
+                    adj_down = remainder
+                    adj_up = P - remainder
+                    new_sun = sun - adj_down if adj_down <= adj_up else sun + adj_up
+                    if new_sun < 6:
+                        new_sun = sun + adj_up
+                    self.sun_teeth_spin.setValue(new_sun)
+            else:  # lock_planet_ring
+                # Sun is calculated; adjust planet to nearest valid
+                ring = self.ring_teeth_spin.value()
+                sun_calc = ring - 2 * planet
+                remainder = (sun_calc + ring) % P
+                if remainder != 0:
+                    # Adjusting planet by d changes sun by -2d, changes (sun+ring) by -2d
+                    # Need (sun+ring-2d) % P == 0 → 2d ≡ (sun+ring) (mod P)
+                    target = (sun_calc + ring) % P
+                    half = P // math.gcd(2, P)
+                    # Try small adjustments
+                    for d in range(1, P + 1):
+                        if (2 * d) % P == target:
+                            self.planet_teeth_spin.setValue(planet + d)
+                            break
+                        if (2 * d) % P == (P - target) % P:
+                            if planet - d >= 6:
+                                self.planet_teeth_spin.setValue(planet - d)
+                            else:
+                                self.planet_teeth_spin.setValue(planet + d)
+                            break
+
+            self.sun_teeth_spin.blockSignals(False)
+            self.planet_teeth_spin.blockSignals(False)
+            self.recalculateAndValidate()
+
         def _hint_for(self, vary: str, current: int, step: int,
                       num_planets: int, module: float, helix: float,
                       count: int = 2) -> str:
@@ -662,7 +766,7 @@ if GUI_AVAILABLE:
             valid = []
             for offset in range(-count * step, (count + 1) * step, step):
                 v = current + offset
-                if v < 6 or v > 200:
+                if v < 6 or v > 1000:
                     continue
                 if self.lock_sun_planet_radio.isChecked():
                     if vary == "sun":
@@ -702,7 +806,10 @@ if GUI_AVAILABLE:
                 sun = self.sun_teeth_spin.value()
                 planet = self.planet_teeth_spin.value()
                 ring = calculateRingTeeth(sun, planet)
-                self.ring_teeth_label.setText(f"{ring} (calculated)")
+                self.ring_teeth_spin.blockSignals(True)
+                self.ring_teeth_spin.setValue(ring)
+                self.ring_teeth_spin.blockSignals(False)
+                self.ring_teeth_label.setText(f"(calculated)")
                 self.sun_teeth_value = sun
                 self.planet_teeth_value = planet
                 self.ring_teeth_value = ring
@@ -718,7 +825,10 @@ if GUI_AVAILABLE:
                     self.validation_label.setStyleSheet("color: red; font-weight: bold;")
                     self.create_btn.setEnabled(False)
                     return
-                self.planet_teeth_label.setText(f"{planet} (calculated)")
+                self.planet_teeth_spin.blockSignals(True)
+                self.planet_teeth_spin.setValue(planet)
+                self.planet_teeth_spin.blockSignals(False)
+                self.planet_teeth_label.setText(f"(calculated)")
                 self.sun_teeth_value = sun
                 self.planet_teeth_value = planet
                 self.ring_teeth_value = ring
@@ -728,7 +838,10 @@ if GUI_AVAILABLE:
                 planet = self.planet_teeth_spin.value()
                 ring = self.ring_teeth_spin.value()
                 sun = calculateSunTeeth(planet, ring)
-                self.sun_teeth_label.setText(f"{sun} (calculated)")
+                self.sun_teeth_spin.blockSignals(True)
+                self.sun_teeth_spin.setValue(sun)
+                self.sun_teeth_spin.blockSignals(False)
+                self.sun_teeth_label.setText(f"(calculated)")
                 self.sun_teeth_value = sun
                 self.planet_teeth_value = planet
                 self.ring_teeth_value = ring

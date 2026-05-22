@@ -211,7 +211,9 @@ class HypoidGearResult:
             doc = self.Object.Document
             self._stopWatcher()
             old = doc.getObject(body_name)
+            saved_placement = None
             if old:
+                saved_placement = App.Placement(old.Placement)
                 children = list(old.Group)
                 for c in children:
                     for p in c.PropertiesList:
@@ -232,11 +234,14 @@ class HypoidGearResult:
                 "keyway_width":float(v.KeywayWidth.Value),
                 "keyway_depth":float(v.KeywayDepth.Value), "body_name":body_name,
             }, gearMath.generateToothProfile)
-            # Flip so the small end faces the viewer
             body_out = doc.getObject(body_name)
             if body_out:
-                body_out.Placement = App.Placement(
-                    App.Vector(0,0,0), App.Rotation(App.Vector(1,0,0), 180))
+                if saved_placement:
+                    body_out.Placement = saved_placement
+                else:
+                    # Default: flip so the small end faces the viewer
+                    body_out.Placement = App.Placement(
+                        App.Vector(0,0,0), App.Rotation(App.Vector(1,0,0), 180))
             body_out = doc.getObject(body_name)
             if body_out:
                 sk = util.createSketch(body_out, "Bore")

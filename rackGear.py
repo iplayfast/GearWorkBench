@@ -397,8 +397,10 @@ class RackGearResult:
 
             self._stopWatcher()
 
+            saved_placement = None
             old = doc.getObject(body_name)
             if old:
+                saved_placement = App.Placement(old.Placement)
                 children = list(old.Group)
                 for child in children:
                     for prop in child.PropertiesList:
@@ -434,6 +436,10 @@ class RackGearResult:
                 parameters["addendum_factor"] = self._last_af
                 parameters["dedendum_factor"] = self._last_df
             genericRack.rackGear(doc, parameters, profile_func)
+            if saved_placement:
+                body_out = doc.getObject(body_name)
+                if body_out:
+                    body_out.Placement = saved_placement
             self.Object.Status = "Up to date"
         except Exception as e:
             import traceback

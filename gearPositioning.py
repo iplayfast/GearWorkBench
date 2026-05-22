@@ -47,6 +47,20 @@ def isInternalGear(varset):
     return "InternalGear" in varset.Name
 
 
+def isCrownGear(varset):
+    """Determine if a VarSet represents a crown gear."""
+    if varset is None:
+        return False
+    return "CrownGear" in varset.Name
+
+
+def isScrewGear(varset):
+    """Determine if a VarSet represents a screw gear."""
+    if varset is None:
+        return False
+    return "ScrewGear" in varset.Name
+
+
 def isRackGear(varset):
     """Determine if a VarSet represents a rack gear."""
     if varset is None:
@@ -79,6 +93,8 @@ def getGearInfo(doc, body):
                 "is_internal": False,
                 "is_bevel": False,
                 "is_rack": True,
+                "is_crown": False,
+                "is_screw": False,
                 "pitch_angle": 0.0,
                 "cone_dist": 0.0,
                 "height": float(vs.Height.Value) if hasattr(vs, "Height") else 10.0,
@@ -90,6 +106,8 @@ def getGearInfo(doc, body):
         "is_internal": isInternalGear(vs),
         "is_bevel": isBevelGear(vs),
         "is_rack": isRackGear(vs),
+        "is_crown": isCrownGear(vs),
+        "is_screw": isScrewGear(vs),
         "pitch_angle": 0.0,
         "cone_dist": 0.0,
         "height": 0.0,
@@ -102,6 +120,14 @@ def getGearInfo(doc, body):
             info["cone_dist"] = info["pd"] / (2.0 * sin_a)
         if hasattr(vs, "FaceWidth"):
             info["height"] = float(vs.FaceWidth.Value)
+    elif info["is_crown"]:
+        if hasattr(vs, "FaceWidth"):
+            info["height"] = float(vs.FaceWidth.Value)
+    elif info["is_screw"]:
+        if hasattr(vs, "FaceWidth"):
+            info["height"] = float(vs.FaceWidth.Value)
+        if hasattr(vs, "HelixAngle"):
+            info["helix_angle"] = float(vs.HelixAngle.Value)
     else:
         if hasattr(vs, "Height"):
             info["height"] = float(vs.Height.Value)
@@ -140,6 +166,8 @@ class GearPositionDialog(QtGui.QDialog):
         """Determine positioning mode based on gear types."""
         if self.info1.get("is_rack") or self.info2.get("is_rack"):
             return "rack"
+        if self.info1.get("is_crown") or self.info2.get("is_crown"):
+            return "crown"
         if self.info1["is_bevel"] and self.info2["is_bevel"]:
             return "bevel_bevel"
         elif self.info1["is_bevel"] or self.info2["is_bevel"]:
@@ -204,6 +232,11 @@ class GearPositionDialog(QtGui.QDialog):
         phase_layout.addRow("Phase:", self.phase_spin)
         layout.addLayout(phase_layout)
 
+        # Flip (rotate moving gear 180° around X axis)
+        self.flip_check = QtGui.QCheckBox("Flip moving gear 180\u00b0")
+        self.flip_check.stateChanged.connect(self._apply)
+        layout.addWidget(self.flip_check)
+
         # Close button
         btn_layout = QtGui.QHBoxLayout()
         close_btn = QtGui.QPushButton("Close")
@@ -247,16 +280,40 @@ class GearPositionDialog(QtGui.QDialog):
         if self._mode == "bevel_bevel":
             shaft_angle = self.info1["pitch_angle"] + self.info2["pitch_angle"]
             self.info_label.setText(f"{shaft_angle:.2f}\u00b0")
+        elif self._mode == "crown":
+            self.info_label.setText("90.00\u00b0")
         else:
             cd = self._compute_center_distance()
             self.info_label.setText(f"{cd:.4f} mm")
         self._apply()
+
+    def _apply_flip(self, base, rotation):
+        """Apply flip around the gear's center if flip is checked.
+
+        When flipped, the gear rotates 180° around its local X-axis through
+        its center (at height/2 along its Z-axis), not through its base.
+
+        Returns (adjusted_base, adjusted_rotation).
+        """
+        if not self.flip_check.isChecked():
+            return base, rotation
+        height = self.info2["height"]
+        # Offset base so the flip pivots around the gear's midpoint.
+        # Without flip, center = base + R*(0,0,h/2).
+        # With flip (R' = R * Rot(X,180)), center = base' + R'*(0,0,h/2)
+        #   = base' + R*(0,0,-h/2).
+        # Equating: base' = base + R*(0,0,h).
+        base = base + rotation.multVec(App.Vector(0, 0, height))
+        rotation = rotation.multiply(App.Rotation(App.Vector(1, 0, 0), 180))
+        return base, rotation
 
     def _apply(self):
         """Position the moving gear based on gear type combination."""
         mode = self._mode
         if mode == "rack":
             self._apply_rack()
+        elif mode == "crown":
+            self._apply_crown_spur()
         elif mode == "planar":
             self._apply_planar()
         elif mode == "bevel_bevel":
@@ -280,6 +337,7 @@ class GearPositionDialog(QtGui.QDialog):
 
         phase_deg = self.phase_spin.value()
         rotation = App.Rotation(App.Vector(0, 0, 1), phase_deg)
+        new_base, rotation = self._apply_flip(new_base, rotation)
         self.body2.Placement = App.Placement(new_base, rotation)
 
     def _apply_rack(self):
@@ -311,6 +369,7 @@ class GearPositionDialog(QtGui.QDialog):
             # Rolling: positive travel (move in +X) → CCW rotation (positive angle)
             roll_deg = slide_deg + phase_deg
             rotation = App.Rotation(App.Vector(0, 0, 1), roll_deg)
+            new_base, rotation = self._apply_flip(new_base, rotation)
             self.body2.Placement = App.Placement(new_base, rotation)
         else:
             # Pinion is fixed (body1), rack moves (body2)
@@ -377,13 +436,17 @@ class GearPositionDialog(QtGui.QDialog):
         r_inner1 = cdi1 * math.sin(pa1_rad)
         r_inner2 = cdi2 * math.sin(pa2_rad)
 
+        # Axial Z positions of inner circles (slant * cos(pitch_angle))
+        z_inner1 = cdi1 * math.cos(pa1_rad)
+        z_inner2 = cdi2 * math.cos(pa2_rad)
+
         # Cone axis directions (local +Z transformed to world by each body's rotation)
         N1 = R_fixed.multVec(App.Vector(0, 0, 1))
         N2 = rotation.multVec(App.Vector(0, 0, 1))
 
         # Inner circle centers (in world, relative to body base at apex)
         fixed_base = self.body1.Placement.Base
-        C1 = fixed_base + R_fixed.multVec(App.Vector(0, 0, cdi1))
+        C1 = fixed_base + R_fixed.multVec(App.Vector(0, 0, z_inner1))
 
         # Direction on circle 1's plane toward gear2: project gear2's axis onto circle1's plane
         d1 = N2 - N1 * (N2.dot(N1))
@@ -403,13 +466,126 @@ class GearPositionDialog(QtGui.QDialog):
         P1 = C1 + d1 * r_inner1
 
         # Offset from gear2's base to its touching edge point
-        # = circle2 center offset + radius in direction toward gear1
-        P2_from_base = rotation.multVec(App.Vector(0, 0, cdi2)) + d2 * r_inner2
+        # = circle2 center offset (axial Z) + radius in direction toward gear1
+        P2_from_base = rotation.multVec(App.Vector(0, 0, z_inner2)) + d2 * r_inner2
 
         # Solve: P1 = new_base + P2_from_base
         new_base = P1 - P2_from_base
 
+        new_base, rotation = self._apply_flip(new_base, rotation)
         self.body2.Placement = App.Placement(new_base, rotation)
+
+    def _apply_crown_spur(self):
+        """Position a spur gear meshing with a crown gear at 90 degrees.
+
+        Crown gear: flat disc, teeth pointing up (+Z), axis = Z.
+        Spur gear: axis perpendicular to crown's axis (horizontal), positioned
+        at the crown's pitch radius with teeth meshing from the side.
+
+        The orbit angle rotates the spur around the crown's axis.
+        Phase adjusts mesh engagement rotation.
+        """
+        orbit_deg = self.angle_spin.value()
+        phase_deg = self.phase_spin.value()
+
+        # Identify which is crown and which is spur
+        if self.info1.get("is_crown"):
+            crown_info = self.info1
+            spur_info = self.info2
+            crown_body = self.body1
+            spur_body = self.body2
+            crown_is_fixed = True
+        else:
+            crown_info = self.info2
+            spur_info = self.info1
+            crown_body = self.body2
+            spur_body = self.body1
+            crown_is_fixed = False
+
+        pd_crown = crown_info["pd"]
+        pd_spur = spur_info["pd"]
+        r_crown = pd_crown / 2.0
+        spur_height = spur_info["height"]
+        module = crown_info["module"]
+
+        # Crown gear's position and orientation
+        R_crown = crown_body.Placement.Rotation
+        crown_base = crown_body.Placement.Base
+
+        # Crown's Z axis (teeth point direction) in world
+        crown_axis = R_crown.multVec(App.Vector(0, 0, 1))
+
+        # Orbit: spur gear position around the crown's axis
+        orbit_rad = math.radians(orbit_deg)
+        # Radial direction in crown's local XY plane
+        radial_local = App.Vector(math.cos(orbit_rad), math.sin(orbit_rad), 0)
+        radial_world = R_crown.multVec(radial_local)
+
+        # Tangent direction (perpendicular to radial, in crown's XY plane)
+        tangent_local = App.Vector(-math.sin(orbit_rad), math.cos(orbit_rad), 0)
+        tangent_world = R_crown.multVec(tangent_local)
+
+        # Spur gear center at crown's pitch radius along radial direction
+        # The spur's axis is along the tangent direction (perpendicular to crown axis
+        # and perpendicular to radial — so it meshes from the side)
+        spur_center = crown_base + radial_world * r_crown
+
+        # Spur gear rotation: axis along tangent direction, with phase
+        # Build rotation that aligns spur's Z axis with tangent_world
+        spur_rot = App.Rotation(App.Vector(0, 0, 1), tangent_world)
+        phase_rot = App.Rotation(App.Vector(0, 0, 1), phase_deg)
+        final_rot = spur_rot.multiply(phase_rot)
+
+        # Offset spur so its mid-height aligns with crown teeth (Z ~ 0 in crown frame)
+        # Spur center needs to shift along its own axis (tangent) by half its height
+        # to center it on the crown's tooth face
+        spur_center = spur_center - tangent_world * (spur_height / 2.0)
+
+        if crown_is_fixed:
+            spur_center, final_rot = self._apply_flip(spur_center, final_rot)
+            spur_body.Placement = App.Placement(spur_center, final_rot)
+        else:
+            # Spur is fixed (body1), crown is moving (body2)
+            # Position crown so its pitch radius meets the spur's teeth
+            spur_base = self._orig_placement1.Base
+            R_spur = self._orig_placement1.Rotation
+
+            # Spur's axis is its local Z in world
+            spur_axis = R_spur.multVec(App.Vector(0, 0, 1))
+
+            # Crown axis should be perpendicular to spur axis
+            # Use orbit to determine the approach direction
+            # The "radial" direction from crown center to spur is perpendicular
+            # to both crown axis and spur axis. Crown axis = cross(spur_axis, up-ish)
+            # For simplicity: crown axis = radial cross spur_axis direction
+            # Actually: crown's Z perpendicular to spur's Z, offset by r_crown in radial dir
+
+            # Pick a radial direction perpendicular to spur_axis for the orbit
+            # Start with world X, orthogonalize against spur_axis
+            ref = App.Vector(1, 0, 0)
+            if abs(spur_axis.dot(ref)) > 0.9:
+                ref = App.Vector(0, 1, 0)
+            perp1 = spur_axis.cross(ref)
+            perp1.normalize()
+            perp2 = spur_axis.cross(perp1)
+            perp2.normalize()
+
+            # Orbit in the plane perpendicular to spur axis
+            radial_dir = perp1 * math.cos(orbit_rad) + perp2 * math.sin(orbit_rad)
+
+            # Crown center at r_crown away from spur along radial
+            crown_center = spur_base + radial_dir * r_crown
+
+            # Crown axis is perpendicular to spur axis and perpendicular to radial
+            crown_z = radial_dir.cross(spur_axis)
+            crown_z.normalize()
+
+            crown_rot = App.Rotation(App.Vector(0, 0, 1), crown_z)
+            crown_body.Placement = App.Placement(crown_center, crown_rot)
+
+            # Rotate spur in place for phase
+            phase_rotation = R_spur.multiply(phase_rot)
+            spur_body.Placement = App.Placement(spur_base, phase_rotation)
 
     def _apply_mixed(self):
         """Position a bevel gear meshing with a spur/helical gear.
@@ -471,6 +647,7 @@ class GearPositionDialog(QtGui.QDialog):
         tilt = App.Rotation(App.Vector(0, 1, 0), pitch_angle)
         phase = App.Rotation(App.Vector(0, 0, 1), phase_deg)
         rotation = flip.multiply(tilt).multiply(phase)
+        new_base, rotation = self._apply_flip(new_base, rotation)
 
         self.body2.Placement = App.Placement(new_base, rotation)
 
@@ -494,10 +671,11 @@ class GearPositionDialog(QtGui.QDialog):
         R_fixed = self.body1.Placement.Rotation
         fixed_base = self.body1.Placement.Base
 
-        # The bevel's outer tooth ring is at local (0, 0, cone_dist).
-        # In world, that's at fixed_base + R_fixed * (0, 0, cone_dist).
+        # The bevel's outer tooth ring is at local Z = cone_dist * cos(pitch_angle).
+        # In world, that's at fixed_base + R_fixed * (0, 0, z_outer).
         # The spur should be centered at that height.
-        tooth_point_world = R_fixed.multVec(App.Vector(0, 0, cone_dist))
+        z_outer = cone_dist * math.cos(math.radians(pitch_angle))
+        tooth_point_world = R_fixed.multVec(App.Vector(0, 0, z_outer))
 
         # Radial offset: orbit around the bevel's axis
         orbit_rad = math.radians(orbit_deg)
@@ -516,6 +694,7 @@ class GearPositionDialog(QtGui.QDialog):
 
         # Spur gear: just phase rotation
         phase = App.Rotation(App.Vector(0, 0, 1), phase_deg)
+        new_base, phase = self._apply_flip(new_base, phase)
         self.body2.Placement = App.Placement(new_base, phase)
 
 

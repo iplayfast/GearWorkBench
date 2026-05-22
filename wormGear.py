@@ -716,8 +716,11 @@ class WormGearResult:
 
             self._stopWatcher()
 
+            saved_placement = None
+            saved_wheel_placement = None
             old = doc.getObject(body_name)
             if old:
+                saved_placement = App.Placement(old.Placement)
                 children = list(old.Group)
                 for child in children:
                     for prop in child.PropertiesList:
@@ -731,6 +734,10 @@ class WormGearResult:
                     except Exception:
                         pass
                 doc.removeObject(body_name)
+            # Save mating wheel placement before it gets destroyed by readyPart
+            old_wheel = doc.getObject(f"{body_name}_WormWheel")
+            if old_wheel:
+                saved_wheel_placement = App.Placement(old_wheel.Placement)
 
             self.Object.Status = "Generating worm gear..."
             if App.GuiUp:
@@ -822,6 +829,11 @@ class WormGearResult:
                     f"<<{v.Name}>>.KeywayEnabled ? False : True")
                 body_out.Tip = kw_pocket
 
+            if saved_placement:
+                body_out = doc.getObject(body_name)
+                if body_out:
+                    body_out.Placement = saved_placement
+
             # Mating gear bore/keyway
             if self._last_cm:
                 mate_name = f"{body_name}_WormWheel"
@@ -876,6 +888,12 @@ class WormGearResult:
                     mkw_pocket.setExpression("Suppressed",
                         f"<<{v.Name}>>.MatingKeywayEnabled ? False : True")
                     mate_body.Tip = mkw_pocket
+
+            # Restore mating wheel placement
+            if saved_wheel_placement:
+                wheel_out = doc.getObject(f"{body_name}_WormWheel")
+                if wheel_out:
+                    wheel_out.Placement = saved_wheel_placement
 
             doc.recompute()
 
@@ -1044,9 +1062,30 @@ class WormGear():
     def recompute(self):
         if self.Dirty:
             try:
-                generateWormGearPart(App.ActiveDocument, self.GetParameters())
+                doc = App.ActiveDocument
+                params = self.GetParameters()
+                bn = params["body_name"]
+                # Save placements before regeneration
+                saved_worm = None
+                saved_wheel = None
+                old_worm = doc.getObject(bn)
+                if old_worm:
+                    saved_worm = App.Placement(old_worm.Placement)
+                old_wheel = doc.getObject(f"{bn}_WormWheel")
+                if old_wheel:
+                    saved_wheel = App.Placement(old_wheel.Placement)
+                generateWormGearPart(doc, params)
+                # Restore placements
+                if saved_worm:
+                    body = doc.getObject(bn)
+                    if body:
+                        body.Placement = saved_worm
+                if saved_wheel:
+                    wheel = doc.getObject(f"{bn}_WormWheel")
+                    if wheel:
+                        wheel.Placement = saved_wheel
                 self.Dirty = False
-                App.ActiveDocument.recompute()
+                doc.recompute()
             except Exception as e:
                 App.Console.PrintError(f"Worm Gear Error: {e}\n")
 

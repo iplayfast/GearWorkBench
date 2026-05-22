@@ -79,9 +79,12 @@ def hypoidGear(doc, parameters, profile_func):
     module_inner = module * scale_factor
 
     # Placement Z-coordinates (Apex at Origin 0,0,0)
-    # Add offset to shift the gear along Z axis
-    z_outer = cone_dist + offset
-    z_inner = cone_dist_inner + offset
+    # cone_dist is the slant distance along the cone surface;
+    # the axial (Z) projection is cone_dist * cos(pitch_angle).
+    # Add offset to shift the gear along Z axis.
+    cos_delta = math.cos(pitch_angle * util.DEG_TO_RAD)
+    z_outer = cone_dist * cos_delta + offset
+    z_inner = cone_dist_inner * cos_delta + offset
 
     # --- 2. Create Core Body (Root Cone) ---
     dedendum = module * gearMath.DEDENDUM_FACTOR

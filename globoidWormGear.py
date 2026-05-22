@@ -296,8 +296,10 @@ class GloboidWormGearV2Result:
             if self._last_m<=0: self.Object.Status="Invalid params"; return
 
             self._stopWatcher()
+            saved_placement=None
             old=d.getObject(bn)
             if old:
+                saved_placement=App.Placement(old.Placement)
                 ch=list(old.Group)
                 for c in ch:
                     for p in c.PropertiesList:
@@ -498,40 +500,36 @@ class GloboidWormGearV2Result:
             d.removeObject(tmp_name)
             d.recompute()
 
-            # Calculate local coordinate system (TNB frame) at the start of the spiral
-            # to orient the trapezoidal tooth profile sketch correctly.
+            # Place the profile ON the body surface (no offset) with an initial
+            # rotation that aligns sketch Y with the surface normal (radially
+            # into the body).  The pipe's Frenet frame (Mode=2) then evolves
+            # from this starting orientation along the sweep.
             R_=cd; r_=arc_r; u0=us; v0=vs
             cu=math.cos(u0); su=math.sin(u0)
             cv=math.cos(v0); sv=math.sin(v0)
             Rrc=R_+r_*cu
-            start_pt=App.Vector(Rrc*cv,Rrc*sv,r_*su) # Starting point on torus
-            
-            # Partial derivatives of torus surface position w.r.t parameters u and v
+            start_pt=App.Vector(Rrc*cv,Rrc*sv,r_*su)
+
+            # TNB frame at the start point — initial orientation for the pipe's
+            # Frenet evolution.  Y (=groove depth) → surface normal (into body).
             Su=App.Vector(-r_*su*cv,-r_*su*sv,r_*cu)
             Sv=App.Vector(-Rrc*sv,Rrc*cv,0.0)
-            
-            # T: Tangent to the spiral path, N_surf: Surface normal of the torus
             T=(Su*(ue-us)+Sv*(ve-vs)).normalize()
             N_surf=Su.cross(Sv).normalize()
-            B=T.cross(N_surf).normalize() # Binormal
-            N=B.cross(T) # Normal (in-plane)
+            B=T.cross(N_surf).normalize()
+            N=B.cross(T)
 
-            # Rotation matrix to align Sketch XY with the TNB frame
             rot_a=App.Rotation(App.Vector(0,0,1),T)
             Yi=rot_a.multVec(App.Vector(0,1,0))
             ang=math.atan2(T.dot(Yi.cross(N)),Yi.dot(N))
             rot=App.Rotation(T,ang)*rot_a
 
-            # Offset profile origin inward from spine (body surface) by 'add',
-            # placing the profile center at the pitch radius.
-            start_pt=start_pt - N*add
-
-            # Trapezoidal groove profile. Sketch Y aligns with N (outward).
-            #   Y = -ded (inward from pitch = root):   narrow gap (fTop)
-            #   Y = +add (outward from pitch = surface): wide gap (fBottom)
+            # Trapezoid: narrow at surface (fTop, Y=0), wide at root
+            # (fBottom, Y = -(add+ded)).  Y extends into the body.
             hw_n=fTop/2.0; hw_w=fBottom/2.0
-            gpts=[App.Vector(-hw_n,-ded,0),App.Vector(+hw_n,-ded,0),
-                  App.Vector(+hw_w,+add,0),App.Vector(-hw_w,+add,0)]
+            gdepth=add+ded
+            gpts=[App.Vector(-hw_n,0,0),App.Vector(+hw_n,0,0),
+                  App.Vector(+hw_w,-gdepth,0),App.Vector(-hw_w,-gdepth,0)]
             sk_groove=util.createSketch(body,"ThreadGrooveProfile")
             sk_groove.MapMode="Deactivated"
             sk_groove.Placement=App.Placement(start_pt,rot)
@@ -547,11 +545,7 @@ class GloboidWormGearV2Result:
             spipe=body.newObject("PartDesign::SubtractivePipe","ThreadGroove")
             spipe.Profile=sk_groove
             spipe.Spine=(binder,['Edge1'])
-            # SubtractivePipe properties (FeaturePipe.cpp):
-            #   Transformation: 0=Constant, 1=Multisection, 2=Linear, 3=S-shape, 4=Interpolation
-            #   Mode: 0=Standard, 1=Fixed, 2=Frenet, 3=Auxiliary, 4=Binormal
-            # Constant + Frenet: single profile that rotates to follow spine curvature.
-            if hasattr(spipe,'Transformation'): spipe.Transformation=0  # Constant
+            if hasattr(spipe,'Transformation'): spipe.Transformation=0
             if hasattr(spipe,'Mode'): spipe.Mode=2  # Frenet
             body.Tip=spipe
 
@@ -603,9 +597,21 @@ class GloboidWormGearV2Result:
                     kp.Reversed=True
                     body.Tip=kp
 
+            # Restore worm body placement
+            if saved_placement is not None:
+                body.Placement=saved_placement
+
             # STEP 4: Mating gear
+            saved_wheel_placement=None
             if self._last_cm:
+                gbn=f"{bn}_WormWheel"
+                old_wheel=d.getObject(gbn)
+                if old_wheel:
+                    saved_wheel_placement=App.Placement(old_wheel.Placement)
                 self._make_wheel(d,bn,wp_r)
+                if saved_wheel_placement is not None:
+                    wb=d.getObject(gbn)
+                    if wb: wb.Placement=saved_wheel_placement
 
             self.Object.Status="Up to date"
             if App.GuiUp: QtCore.QCoreApplication.processEvents()
