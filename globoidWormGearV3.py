@@ -1,17 +1,14 @@
-"""Globoid Worm Gear V3 — Boolean Conjugate Approach.
+"""Globoid Worm Gear V3 — Smooth Torus Approach.
 
-Builds a "virtual wheel" (full involute tooth ring swept along a toroidal
-helix) then boolean-subtracts it from a cylinder blank.  The resulting worm
-has geometrically correct conjugate grooves by construction.
+Builds a smooth torus (representing the mating gear envelope) and
+boolean-subtracts it from a cylinder blank to create the globoid worm throat.
 
 Algorithm:
-  1. Plain cylinder blank
-  2. Full involute tooth ring as Part.Wire (all N teeth at pitch radius)
-  3. Sweep ring along toroidal helix spine → toothed torus solid
-  4. Boolean subtract toothed torus from cylinder → globoid worm
-  5. Multi-start: rotate torus by 360°/nt per additional start, subtract each
-  6. Bore/keyway cuts
-  7. Mating wheel: helical loft teeth + throat groove (same as V2)
+  1. Smooth torus (virtual wheel envelope) via Part::Torus
+  2. Cylinder blank via PartDesign Body + Pad
+  3. Boolean subtract torus from cylinder → globoid worm throat
+  4. Shaft ends, bore, keyway cuts
+  5. Mating wheel: helical loft teeth + throat groove (same as V2)
 """
 
 import FreeCAD as App
@@ -24,8 +21,6 @@ import os
 import math
 from PySide import QtCore
 from genericGear import _VarSetWatcher, ViewProviderGearResult
-
-vec2 = App.Base.Vector2d
 
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, "icons")
@@ -54,7 +49,7 @@ def createGloboidWormGearV3VarSet(doc, name):
     vs.addProperty("App::PropertyLength", "WormPitchDiameter", "GloboidWorm", "Pitch diameter at throat").WormPitchDiameter = 30.0
     vs.addProperty("App::PropertyLength", "ShaftDiameter", "GloboidWorm", "End shaft diameter").ShaftDiameter = 12.0
     vs.addProperty("App::PropertyLength", "ShaftLength", "GloboidWorm", "End shaft length each side").ShaftLength = 8.0
-    vs.addProperty("App::PropertyLength", "WormLength", "GloboidWorm", "Threaded section length").WormLength = 30.0
+    vs.addProperty("App::PropertyLength", "WormLength", "GloboidWorm", "Threaded section length").WormLength = 60.0
     vs.addProperty("App::PropertyBool", "RightHanded", "GloboidWorm", "Right-handed").RightHanded = True
     vs.addProperty("App::PropertyFloat", "Backlash", "GloboidWorm",
         QT_TRANSLATE_NOOP("App::Property", "Backlash clearance")).Backlash = 0.25
@@ -344,8 +339,8 @@ class GloboidWormGearV3Result:
                     except: pass
                 d.removeObject(bn)
 
-            # Remove old toothed torus body and Part::Cut
-            for suffix in ["_BooleanCut", "_ToothTorus"]:
+            # Remove old torus and Part::Cut
+            for suffix in ["_BooleanCut", "_SmoothTorus", "_ToothTorus"]:
                 tn = f"{bn}{suffix}"
                 old_t = d.getObject(tn)
                 if old_t:
@@ -371,142 +366,25 @@ class GloboidWormGearV3Result:
             # === Parameters ===
             m = self._last_m; nt = self._last_nt; pa = self._last_pa
             gt = self._last_gt; rh = self._last_rh
-            wp_dia = self._last_wpd; s_dia = self._last_sd
-            s_len = self._last_sl
+            wp_dia = self._last_wpd
 
-            wp_r = wp_dia / 2.0       # worm pitch radius
-            gp_r = m * gt / 2.0       # gear pitch radius
-            cd = gp_r + wp_r          # center distance
+            wp_r = wp_dia / 2.0
+            gp_r = m * gt / 2.0
+            cd = gp_r + wp_r
             add = m; ded = m * 1.25
-
-            # Hourglass geometry
-            outer_throat_r = wp_r + add
-            arc_r = cd - outer_throat_r  # = gp_r - m
-
-            if arc_r <= 0:
-                self.Object.Status = "Geometry error: arc_r <= 0"
-                return
-
-            max_wl = arc_r * 2.0 * 0.98
-            wl = min(self._last_wl, max_wl) if self._last_wl > 0 else max_wl
-            half_angle_rad = math.asin(min(wl / 2.0 / arc_r, 1.0))
-            eff_wl = 2.0 * arc_r * math.sin(half_angle_rad)
-            half_total = eff_wl / 2.0 + s_len
+            cyl_r = cd
 
             # ===========================================================
-            # STEP 1: Toothed Torus — PartDesign::Body (parametric)
-            #
-            #   Built from: ToothProfileSketch → SubShapeBinder (spine)
-            #   → AdditivePipe.  The profile is the full involute gear
-            #   ring, centered at the torus TUBE CENTER.  The spine is a
-            #   toroidal helix on the torus surface.
+            # STEP 1: Toothed Torus (gear-ring slices tiled around torus)
+            #   Replaces the smooth torus with a toothed version so the
+            #   boolean cut carves actual thread grooves into the worm.
             # ===========================================================
 
-            torus_bn = f"{bn}_ToothTorus"
-            torus_body = util.readyPart(d, torus_bn)
-
-            # --- Toroidal helix spine ---
-            hu_spine = half_angle_rad
-            turns = gt * half_angle_rad / (math.pi * nt)
-            total_v = 2.0 * math.pi * turns
-
-            torus_surf = Part.Toroid()
-            torus_surf.MajorRadius = cd
-            torus_surf.MinorRadius = gp_r
-
-            us = math.pi - hu_spine; ue = math.pi + hu_spine
-            vs_p = math.pi - total_v / 2.0; ve_p = math.pi + total_v / 2.0
-            if not rh:
-                vs_p, ve_p = -ve_p + 2 * math.pi, -vs_p + 2 * math.pi
-
-            line2d = Part.Geom2d.Line2dSegment(vec2(vs_p, us), vec2(ve_p, ue))
-            spiral_edge = line2d.toShape(torus_surf)
-            if spiral_edge.isNull():
-                self.Object.Status = "Spiral edge null"
-                return
-            spine_wire = Part.Wire([spiral_edge])
-
-            # Bring spine into torus body via SubShapeBinder (same as V2)
-            tmp_name = f"{torus_bn}_TmpSpine"
-            old_tmp = d.getObject(tmp_name)
-            if old_tmp: d.removeObject(tmp_name)
-            tmp_obj = d.addObject("Part::Feature", tmp_name)
-            tmp_obj.Shape = spine_wire; tmp_obj.Visibility = False
+            torus_name = f"{bn}_ToothTorus"
+            torus_obj = d.addObject("Part::Feature", torus_name)
+            torus_obj.Shape = self._build_toothed_torus()
+            torus_obj.Visibility = False
             d.recompute()
-
-            binder = torus_body.newObject(
-                "PartDesign::SubShapeBinder", "TorusSpineBinder")
-            binder.Support = [(tmp_obj, ['Edge1'])]
-            binder.Relative = False
-            d.recompute()
-            d.removeObject(tmp_name)
-            d.recompute()
-
-            # --- Tooth profile sketch at the TUBE CENTER ---
-            u0 = us; v0 = vs_p
-            cu = math.cos(u0); su = math.sin(u0)
-            cv = math.cos(v0); sv = math.sin(v0)
-            Rrc = cd + gp_r * cu
-
-            # Tube center = center of torus cross-section at angle v0
-            tube_center = App.Vector(cd * cv, cd * sv, 0)
-
-            # Spine tangent at start
-            Su = App.Vector(-gp_r * su * cv, -gp_r * su * sv, gp_r * cu)
-            Sv = App.Vector(-Rrc * sv, Rrc * cv, 0.0)
-            du = ue - us; dv = ve_p - vs_p
-            T = (Su * du + Sv * dv).normalize()
-
-            # Build rotation: sketch XY plane perpendicular to T,
-            # with sketch Y pointing radially outward from torus axis
-            # so teeth point outward from the tube center.
-            radial_out = App.Vector(cv, sv, 0)  # from torus axis toward tube center
-            # Project radial_out onto plane perpendicular to T
-            radial_proj = radial_out - T * radial_out.dot(T)
-            if radial_proj.Length > 1e-6:
-                radial_proj.normalize()
-            else:
-                radial_proj = App.Vector(0, 0, 1).cross(T).normalize()
-            binorm = T.cross(radial_proj).normalize()
-
-            rot_a = App.Rotation(App.Vector(0, 0, 1), T)
-            Yi = rot_a.multVec(App.Vector(0, 1, 0))
-            ang = math.atan2(T.dot(Yi.cross(radial_proj)), Yi.dot(radial_proj))
-            rot = App.Rotation(T, ang) * rot_a
-
-            # Create tooth profile sketch (full gear ring via generateToothProfile)
-            _bl = self._last_bl
-            _ps = -_bl if _bl != 0.0 else 0.0
-            sk_tooth = util.createSketch(torus_body, "ToothProfile")
-            sk_tooth.MapMode = "Deactivated"
-            sk_tooth.Placement = App.Placement(tube_center, rot)
-            gearMath.generateToothProfile(sk_tooth, {
-                "module": m, "num_teeth": gt,
-                "pressure_angle": pa, "profile_shift": _ps})
-            d.recompute()
-
-            # --- AdditivePipe: sweep tooth profile along spine ---
-            apipe = torus_body.newObject(
-                "PartDesign::AdditivePipe", "ToothTorusPipe")
-            apipe.Profile = sk_tooth
-            apipe.Spine = (binder, ['Edge1'])
-            if hasattr(apipe, 'Transformation'): apipe.Transformation = 0
-            if hasattr(apipe, 'Mode'): apipe.Mode = 2  # Frenet
-            torus_body.Tip = apipe
-            d.recompute()
-
-            # Multi-start: polar pattern around worm axis (Z)
-            if nt > 1:
-                polar_ms = torus_body.newObject(
-                    "PartDesign::PolarPattern", "MultiStart")
-                polar_ms.Originals = [apipe]
-                polar_ms.Axis = (sk_tooth, ['N_Axis'])
-                polar_ms.Angle = 360
-                polar_ms.Occurrences = nt
-                torus_body.Tip = polar_ms
-
-            d.recompute()
-            torus_body.Visibility = False
 
             # ===========================================================
             # STEP 2: Cylinder Blank — PartDesign::Body with Sketch + Pad
@@ -515,23 +393,21 @@ class GloboidWormGearV3Result:
 
             body = util.readyPart(d, bn)
 
-            cyl_r = outer_throat_r + 0.5  # slightly oversize for clean boolean
-
-            # Circle sketch on XZ plane (revolution axis = body V axis = Z)
+            # Circle sketch on XY plane (axis = Z)
             sk_cyl = util.createSketch(body, "CylinderProfile")
-            xz = None
+            xy = None
             if hasattr(body, 'Origin') and body.Origin:
                 for f in body.Origin.OriginFeatures:
-                    if 'XZ' in f.Name or 'XZ' in f.Label: xz = f; break
-                if not xz and len(body.Origin.OriginFeatures) > 1:
-                    xz = body.Origin.OriginFeatures[1]
-            if xz:
-                sk_cyl.AttachmentSupport = [(xz, '')]
+                    if 'XY' in f.Name or 'XY' in f.Label: xy = f; break
+                if not xy and len(body.Origin.OriginFeatures) > 0:
+                    xy = body.Origin.OriginFeatures[0]
+            if xy:
+                sk_cyl.AttachmentSupport = [(xy, '')]
                 sk_cyl.MapMode = 'FlatFace'
             else:
                 sk_cyl.MapMode = 'Deactivated'
                 sk_cyl.Placement = App.Placement(
-                    App.Vector(0, 0, 0), App.Rotation(App.Vector(1, 0, 0), 90))
+                    App.Vector(0, 0, 0), App.Rotation(App.Vector(1, 0, 0), 0))
 
             ci = sk_cyl.addGeometry(
                 Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), cyl_r), False)
@@ -539,29 +415,29 @@ class GloboidWormGearV3Result:
             sk_cyl.addConstraint(Sketcher.Constraint("Radius", ci, cyl_r))
             d.recompute()
 
-            # Pad symmetrically: Type=5 (TwoLengths) with equal lengths
+            # Pad symmetrically
             pad = body.newObject("PartDesign::Pad", "CylinderPad")
             pad.Profile = sk_cyl
-            pad.Type = 5   # TwoLengths
-            pad.Length = half_total
-            pad.Length2 = half_total
+            pad.Type = 0
+            pad.Length = self._last_wl
+            pad.SideType = 2
             body.Tip = pad
             d.recompute()
 
             # ===========================================================
             # STEP 3: Boolean Cut — Part::Cut (visible in tree)
-            #   Subtracts the toothed torus body from the cylinder body.
+            #   Subtracts the smooth torus from the cylinder body.
             # ===========================================================
 
             cut_name = f"{bn}_BooleanCut"
             bool_cut = d.addObject("Part::Cut", cut_name)
             bool_cut.Base = body
-            bool_cut.Tool = torus_body
+            bool_cut.Tool = torus_obj
             d.recompute()
 
             # Hide inputs — only the boolean result is shown
             body.Visibility = False
-            torus_body.Visibility = False
+            torus_obj.Visibility = False
 
             # Restore placement
             if saved_placement is not None:
@@ -712,6 +588,113 @@ class GloboidWormGearV3Result:
         tip_clearance = ded - add  # 0.25 * module
         place_cd = cd + tip_clearance
         gb.Placement = App.Placement(App.Vector(place_cd, height / 2, 0), r_align)
+
+    def _build_toothed_torus(self):
+        """Build a toothed torus by tiling gear-ring slices around the torus path.
+
+        Each slice is an extruded gear cross-section placed and rotated so that
+        the teeth form a continuous helical thread when fused together.
+        Returns a Part.Shape (fused solid or compound).
+        """
+        import time
+        t0 = time.time()
+        log = App.Console.PrintMessage
+
+        m = self._last_m
+        gt = self._last_gt
+        pa = self._last_pa
+        nt = self._last_nt
+        rh = self._last_rh
+        bl = self._last_bl
+
+        wp_r = self._last_wpd / 2.0
+        gp_r = m * gt / 2.0
+        cd = gp_r + wp_r
+        add = m
+
+        num_slices = 36
+        slice_height = 2.0 * math.pi * cd / num_slices * 1.1
+        delta = 360.0 / num_slices
+
+        log(f"[GloboidV3] _build_toothed_torus: m={m} gt={gt} nt={nt} cd={cd:.2f} slices={num_slices}\n")
+
+        # Build gear cross-section shape
+        ps = -bl if bl != 0.0 else 0.0
+        log(f"[GloboidV3]   building tooth ring wire...\n")
+        wire, _pr, _ra, _rf = _build_tooth_ring_wire(m, gt, pa, ps)
+        log(f"[GloboidV3]   wire done ({time.time()-t0:.2f}s), making face...\n")
+        face = Part.Face(wire)
+        log(f"[GloboidV3]   face done ({time.time()-t0:.2f}s), extruding (h={slice_height:.2f})...\n")
+        solid = face.extrude(App.Vector(0, 0, slice_height))
+        # Centre at Z=0
+        solid.translate(App.Vector(0, 0, -slice_height / 2.0))
+        log(f"[GloboidV3]   base solid done ({time.time()-t0:.2f}s)\n")
+
+        gui_up = App.GuiUp
+
+        shapes = []
+        for i in range(num_slices):
+            theta = i * delta  # degrees, position on torus
+            phase = theta * nt / gt  # tooth rotation for spiral continuity
+            if rh:
+                phase = -phase
+
+            # Build combined transformation matrix:
+            # 1. Rotate by phase around Z (tooth alignment)
+            # 2. Rotate 90° around Y (orient from Z-pointing to radial)
+            # 3. Translate to (cd, 0, 0)
+            # 4. Rotate by theta around Z (angular position on torus)
+            rot_phase = App.Rotation(App.Vector(0, 0, 1), phase)
+            rot_orient = App.Rotation(App.Vector(1, 0, 0), 90)
+            rot_theta = App.Rotation(App.Vector(0, 0, 1), theta)
+
+            m_phase = App.Placement(App.Vector(0, 0, 0), rot_phase).toMatrix()
+            m_orient = App.Placement(App.Vector(0, 0, 0), rot_orient).toMatrix()
+            m_translate = App.Placement(App.Vector(cd, 0, 0), App.Rotation()).toMatrix()
+            m_theta = App.Placement(App.Vector(0, 0, 0), rot_theta).toMatrix()
+
+            mat = m_theta.multiply(m_translate).multiply(m_orient).multiply(m_phase)
+
+            s = solid.copy()
+            s = s.transformShape(mat)
+            shapes.append(s)
+
+            if i % 6 == 0:
+                log(f"[GloboidV3]   slice {i+1}/{num_slices} placed ({time.time()-t0:.2f}s)\n")
+                if gui_up:
+                    self.Object.Status = f"Building toothed torus… slice {i+1}/{num_slices}"
+                    QtCore.QCoreApplication.processEvents()
+
+        log(f"[GloboidV3]   all {num_slices} slices placed ({time.time()-t0:.2f}s), pairwise fusing...\n")
+
+        # Pairwise (binary-tree) fusion: fuse pairs at each level so each
+        # individual fuse operates on two shapes of similar complexity.
+        # 36 → 18 → 9 → 5 → 3 → 2 → 1  (6 rounds, max 18 fuses per round)
+        level = 0
+        pool = shapes
+        while len(pool) > 1:
+            level += 1
+            next_pool = []
+            for j in range(0, len(pool), 2):
+                if j + 1 < len(pool):
+                    try:
+                        fused = pool[j].fuse(pool[j + 1])
+                    except Exception:
+                        fused = Part.makeCompound([pool[j], pool[j + 1]])
+                    next_pool.append(fused)
+                else:
+                    next_pool.append(pool[j])  # odd one out
+            log(f"[GloboidV3]   fuse level {level}: {len(pool)}→{len(next_pool)} ({time.time()-t0:.2f}s)\n")
+            if gui_up:
+                self.Object.Status = f"Fusing toothed torus… level {level} ({len(next_pool)} shapes)"
+                QtCore.QCoreApplication.processEvents()
+            pool = next_pool
+
+        result = pool[0]
+        log(f"[GloboidV3]   pairwise fusion done ({time.time()-t0:.2f}s)\n")
+
+        log(f"[GloboidV3] _build_toothed_torus complete ({time.time()-t0:.2f}s)\n")
+        return result
 
     def force_Recompute(self): self._rebuild()
 
