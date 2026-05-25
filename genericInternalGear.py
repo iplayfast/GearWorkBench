@@ -1394,6 +1394,7 @@ class InternalGearResult:
                     except Exception:
                         pass
                 doc.removeObject(body_name)
+                doc.recompute()
 
             self.Object.Status = "Generating gear geometry..."
             if App.GuiUp:
@@ -1645,6 +1646,7 @@ class InternalSpurGearResult:
                     except Exception:
                         pass
                 doc.removeObject(body_name)
+                doc.recompute()
 
             parameters = {
                 "module": self._last_m,
@@ -1892,6 +1894,7 @@ class InternalHelixGearResult:
                     except Exception:
                         pass
                 doc.removeObject(body_name)
+                doc.recompute()
 
             parameters = {
                 "module": self._last_m,
@@ -2692,6 +2695,7 @@ class InternalHerringboneGearResult:
                     except Exception:
                         pass
                 doc.removeObject(body_name)
+                doc.recompute()
 
             parameters = {
                 "module": self._last_m,

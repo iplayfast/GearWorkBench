@@ -1272,13 +1272,16 @@ class GearResult:
         self.Object = obj
         obj.Status = "Not yet generated"
         self._apply_gear_type_defaults(varset)
+        if hasattr(self, '_pending_a1'):
+            varset.Angle1 = self._pending_a1
+            varset.Angle2 = self._pending_a2
         self._startWatcher(varset.Name)
 
     def _apply_gear_type_defaults(self, vs):
         gt = str(vs.GearType)
         a1, a2 = self._ANGLE_DEFAULTS.get(gt, (0.0, 0.0))
-        vs.Angle1 = a1
-        vs.Angle2 = a2
+        self._pending_a1 = a1
+        self._pending_a2 = a2
         hide_angle = gt == "Spur"
         try:
             vs.setEditorMode("Angle1", 1 if hide_angle else 0)
@@ -1462,6 +1465,7 @@ class GearResult:
 
     def _rebuild(self):
         self._rebuilding = True
+        _apply_pending_defaults = self._gt_changed
         self._gt_changed = False
         self._tp_changed = False
         varset_name = None
@@ -1509,64 +1513,200 @@ class GearResult:
 
             self._stopWatcher()
 
-            self.Object.Status = "Removing old body..."
-            if App.GuiUp:
-                QtCore.QCoreApplication.processEvents()
+            if _apply_pending_defaults and hasattr(self, '_pending_a1'):
+                v2 = self._getVarSet()
+                if v2:
+                    v2.Angle1 = self._pending_a1
+                    v2.Angle2 = self._pending_a2
+                    self._last_a1 = self._pending_a1
+                    self._last_a2 = self._pending_a2
 
             old = doc.getObject(body_name)
             saved_placement = None
             if old:
                 saved_placement = App.Placement(old.Placement)
-                children = list(old.Group)
-                for child in children:
-                    for prop in child.PropertiesList:
+                body = old
+
+                sk_bottom = doc.getObject("ToothProfile_BottomSketch")
+                sk_middle = doc.getObject("ToothProfile_MiddleSketch")
+                sk_top = doc.getObject("ToothProfile_TopSketch")
+                sk_dedendum = doc.getObject("DedendumCircleSketch")
+
+                if sk_bottom and sk_middle and sk_top:
+                    self.Object.Status = "Updating gear geometry..."
+                    if App.GuiUp:
+                        QtCore.QCoreApplication.processEvents()
+
+                    profile_func = gearMath.generateHelicalGearProfile
+                    is_cycloid = self._last_tp == "Cycloidal"
+                    if is_cycloid:
+                        import cycloidGear as _cg
+                        profile_func = _cg.generateCycloidToothProfile
+                    elif self._last_gt == "Spur":
+                        profile_func = gearMath.generateSpurGearProfile
+
+                    height = float(v.Height.Value)
+                    half_height = height / 2.0
+
+                    dedendum_factor = gearMath.DEDENDUM_FACTOR
+                    if is_cycloid and hasattr(self, '_last_df'):
+                        dedendum_factor = self._last_df
+                    helix_angle_magnitude = abs(self._last_a1) if self._last_a1 != 0 else abs(self._last_a2)
+                    beta_rad = helix_angle_magnitude * util.DEG_TO_RAD
+                    if helix_angle_magnitude != 0:
+                        mt = self._last_m / math.cos(beta_rad)
+                    else:
+                        mt = self._last_m
+                    dw = mt * num_teeth
+                    df = dw - 2 * mt * (dedendum_factor - effective_shift)
+
+                    pitch_radius = dw / 2.0
+                    if self._last_a1 != 0:
+                        rotation_middle_deg = half_height * math.tan(self._last_a1 * util.DEG_TO_RAD) / pitch_radius * util.RAD_TO_DEG
+                    else:
+                        rotation_middle_deg = 0.0
+                    if self._last_a2 != 0:
+                        rotation_top_deg = rotation_middle_deg + (
+                            half_height * math.tan(self._last_a2 * util.DEG_TO_RAD) / pitch_radius * util.RAD_TO_DEG
+                        )
+                    else:
+                        rotation_top_deg = rotation_middle_deg
+
+                    parameters = {
+                        "module": self._last_m,
+                        "num_teeth": num_teeth,
+                        "pressure_angle": self._last_pa,
+                        "profile_shift": self._last_ps,
+                        "backlash": self._last_bl,
+                        "height": height,
+                        "bore_diameter": float(v.BoreDiameter.Value),
+                        "keyway_width": float(v.KeywayWidth.Value),
+                        "keyway_depth": float(v.KeywayDepth.Value),
+                        "bore_enabled": bool(v.BoreEnabled),
+                        "keyway_enabled": bool(v.KeywayEnabled),
+                        "varset_name": v.Name,
+                        "origin_x": 0.0, "origin_y": 0.0, "origin_z": 0.0, "angle": 0.0,
+                    }
+                    if is_cycloid:
+                        parameters["addendum_factor"] = self._last_af
+                        parameters["dedendum_factor"] = self._last_df
+
+                    for sk, z_pos, rot_deg in [
+                        (sk_bottom, 0.0, 0.0),
+                        (sk_middle, half_height, rotation_middle_deg),
+                        (sk_top, height, rotation_top_deg),
+                    ]:
+                        for i in range(sk.ConstraintCount - 1, -1, -1):
+                            sk.delConstraint(i)
+                        sk.Placement = App.Placement(
+                            App.Vector(0, 0, z_pos),
+                            App.Rotation(App.Vector(0, 0, 1), rot_deg)
+                        )
+                        for i in range(sk.GeometryCount - 1, -1, -1):
+                            sk.delGeometry(i)
+                        profile_func(sk, parameters)
+
+                    if sk_dedendum:
+                        for i in range(sk_dedendum.ConstraintCount - 1, -1, -1):
+                            sk_dedendum.delConstraint(i)
+                        for i in range(sk_dedendum.GeometryCount - 1, -1, -1):
+                            sk_dedendum.delGeometry(i)
+                        circle = sk_dedendum.addGeometry(
+                            Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), df / 2.0 + 0.01), False
+                        )
+                        sk_dedendum.addConstraint(Sketcher.Constraint("Coincident", circle, 3, -1, 1))
+                        sk_dedendum.addConstraint(Sketcher.Constraint("Diameter", circle, df + 0.02))
+
+                    self.Object.Status = "Up to date"
+                else:
+                    # Missing expected sketches — full rebuild
+                    children = list(body.Group)
+                    for child in children:
+                        for prop in child.PropertiesList:
+                            try:
+                                child.setExpression(prop, None)
+                            except Exception:
+                                pass
+                    for child in reversed(children):
                         try:
-                            child.setExpression(prop, None)
-                        except Exception:
-                            pass
-                for child in reversed(children):
-                    try:
-                        doc.removeObject(child.Name)
-                    except Exception as ex:
-                        App.Console.PrintError(f"Gear Error: {str(ex)}\n")
-                doc.removeObject(body_name)
+                            doc.removeObject(child.Name)
+                        except Exception as ex:
+                            App.Console.PrintError(f"Gear Error: {str(ex)}\n")
+                    doc.removeObject(body_name)
+                    doc.recompute()
+                    self.Object.Status = "Generating gear geometry..."
+                    if App.GuiUp:
+                        QtCore.QCoreApplication.processEvents()
+                    profile_func = gearMath.generateHelicalGearProfile
+                    is_cycloid = self._last_tp == "Cycloidal"
+                    if is_cycloid:
+                        import cycloidGear as _cg
+                        profile_func = _cg.generateCycloidToothProfile
+                    elif self._last_gt == "Spur":
+                        profile_func = gearMath.generateSpurGearProfile
+                    parameters = {
+                        "module": self._last_m,
+                        "num_teeth": int(v.NumberOfTeeth),
+                        "pressure_angle": self._last_pa,
+                        "profile_shift": self._last_ps,
+                        "backlash": self._last_bl,
+                        "height": float(v.Height.Value),
+                        "body_name": body_name,
+                        "bore_diameter": float(v.BoreDiameter.Value),
+                        "keyway_width": float(v.KeywayWidth.Value),
+                        "keyway_depth": float(v.KeywayDepth.Value),
+                        "bore_enabled": bool(v.BoreEnabled),
+                        "keyway_enabled": bool(v.KeywayEnabled),
+                        "varset_name": v.Name,
+                        "origin_x": 0.0, "origin_y": 0.0, "origin_z": 0.0, "angle": 0.0,
+                    }
+                    if is_cycloid:
+                        parameters["addendum_factor"] = self._last_af
+                        parameters["dedendum_factor"] = self._last_df
+                    herringboneGear(doc, parameters, self._last_a1, self._last_a2, profile_func)
+                    if saved_placement:
+                        body_out = doc.getObject(body_name)
+                        if body_out:
+                            body_out.Placement = saved_placement
+            else:
+                # No existing body — full build from scratch
+                self.Object.Status = "Generating gear geometry..."
+                if App.GuiUp:
+                    QtCore.QCoreApplication.processEvents()
 
-            self.Object.Status = "Generating gear geometry..."
-            if App.GuiUp:
-                QtCore.QCoreApplication.processEvents()
+                profile_func = gearMath.generateHelicalGearProfile
+                is_cycloid = self._last_tp == "Cycloidal"
+                if is_cycloid:
+                    import cycloidGear as _cg
+                    profile_func = _cg.generateCycloidToothProfile
+                elif self._last_gt == "Spur":
+                    profile_func = gearMath.generateSpurGearProfile
 
-            profile_func = gearMath.generateHelicalGearProfile
-            is_cycloid = self._last_tp == "Cycloidal"
-            if is_cycloid:
-                import cycloidGear as _cg
-                profile_func = _cg.generateCycloidToothProfile
-            elif self._last_gt == "Spur":
-                profile_func = gearMath.generateSpurGearProfile
+                parameters = {
+                    "module": self._last_m,
+                    "num_teeth": int(v.NumberOfTeeth),
+                    "pressure_angle": self._last_pa,
+                    "profile_shift": self._last_ps,
+                    "backlash": self._last_bl,
+                    "height": float(v.Height.Value),
+                    "body_name": body_name,
+                    "bore_diameter": float(v.BoreDiameter.Value),
+                    "keyway_width": float(v.KeywayWidth.Value),
+                    "keyway_depth": float(v.KeywayDepth.Value),
+                    "bore_enabled": bool(v.BoreEnabled),
+                    "keyway_enabled": bool(v.KeywayEnabled),
+                    "varset_name": v.Name,
+                    "origin_x": 0.0, "origin_y": 0.0, "origin_z": 0.0, "angle": 0.0,
+                }
+                if is_cycloid:
+                    parameters["addendum_factor"] = self._last_af
+                    parameters["dedendum_factor"] = self._last_df
+                herringboneGear(doc, parameters, self._last_a1, self._last_a2, profile_func)
+                if saved_placement:
+                    body_out = doc.getObject(body_name)
+                    if body_out:
+                        body_out.Placement = saved_placement
 
-            parameters = {
-                "module": self._last_m,
-                "num_teeth": int(v.NumberOfTeeth),
-                "pressure_angle": self._last_pa,
-                "profile_shift": self._last_ps,
-                "backlash": self._last_bl,
-                "height": float(v.Height.Value),
-                "body_name": body_name,
-                "bore_diameter": float(v.BoreDiameter.Value),
-                "keyway_width": float(v.KeywayWidth.Value),
-                "keyway_depth": float(v.KeywayDepth.Value),
-                "bore_enabled": bool(v.BoreEnabled),
-                "keyway_enabled": bool(v.KeywayEnabled),
-                "varset_name": v.Name,
-                "origin_x": 0.0, "origin_y": 0.0, "origin_z": 0.0, "angle": 0.0,
-            }
-            if is_cycloid:
-                parameters["addendum_factor"] = self._last_af
-                parameters["dedendum_factor"] = self._last_df
-            herringboneGear(doc, parameters, self._last_a1, self._last_a2, profile_func)
-            if saved_placement:
-                body_out = doc.getObject(body_name)
-                if body_out:
-                    body_out.Placement = saved_placement
             self.Object.Status = "Up to date"
             if App.GuiUp:
                 QtCore.QCoreApplication.processEvents()
@@ -1875,6 +2015,7 @@ class SpurGearResult:
                         App.Console.PrintError(f"Spur Gear Error: {str(ex)}\n")
                 # 3. Remove the body itself
                 doc.removeObject(body_name)
+                doc.recompute()
             parameters = {
                 "module": self._last_m,
                 "num_teeth": int(v.NumberOfTeeth),
@@ -2168,6 +2309,7 @@ class HelixGearResult:
                     except Exception as ex:
                         App.Console.PrintError(f"Helix Gear Error: {str(ex)}\n")
                 doc.removeObject(body_name)
+                doc.recompute()
 
             parameters = {
                 "module": self._last_m,
@@ -2463,6 +2605,7 @@ class HerringboneGearResult:
                     except Exception as ex:
                         App.Console.PrintError(f"Herringbone Gear Error: {str(ex)}\n")
                 doc.removeObject(body_name)
+                doc.recompute()
 
             parameters = {
                 "module": self._last_m,
