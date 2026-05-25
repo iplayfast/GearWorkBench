@@ -81,6 +81,8 @@ def createHypoidGearVarSet(doc, name):
     var_set.addProperty("App::PropertyAngle", "SpiralAngle", "HypoidGear", "Spiral angle").SpiralAngle = 35.0
     var_set.addProperty("App::PropertyAngle", "PitchAngle", "HypoidGear", "Pitch cone angle").PitchAngle = 45.0
     var_set.addProperty("App::PropertyLength", "FaceWidth", "HypoidGear", "Face width").FaceWidth = 18.0
+    var_set.addProperty("App::PropertyFloat", "Backlash", "HypoidGear",
+        QT_TRANSLATE_NOOP("App::Property", "Backlash clearance")).Backlash = 0.25
     var_set.addProperty("App::PropertyLength", "BoreDiameter", "Bore", "Bore diameter").BoreDiameter = 5.0
     var_set.addProperty("App::PropertyLength", "KeywayWidth", "Bore", "Keyway width").KeywayWidth = 2.0
     var_set.addProperty("App::PropertyLength", "KeywayDepth", "Bore", "Keyway depth").KeywayDepth = 1.0
@@ -105,6 +107,7 @@ class HypoidGearResult:
         self._rebuilding = False
         self._last_m = self._last_nt = self._last_pa = self._last_ps = None
         self._last_of = self._last_sa = self._last_pt = self._last_fw = None
+        self._last_bl = None
         self._watcher = None
         self._needs_rebuild = False
         self.Type = "HypoidGearResult"
@@ -123,6 +126,7 @@ class HypoidGearResult:
         self._varset = None; self._rebuilding = False
         self._last_m = self._last_nt = self._last_pa = self._last_ps = None
         self._last_of = self._last_sa = self._last_pt = self._last_fw = None
+        self._last_bl = None
         self._watcher = None; self._needs_rebuild = False
 
     def onDocumentRestored(self, obj):
@@ -131,6 +135,7 @@ class HypoidGearResult:
             for a in ["Module", "PressureAngle", "Offset", "SpiralAngle", "PitchAngle", "FaceWidth"]:
                 setattr(self, f"_last_{a[0].lower() + ('m' if a[0]=='M' else a[1:])}", float(getattr(v, a).Value))
             self._last_nt = int(v.NumberOfTeeth)
+            self._last_bl = float(v.Backlash) if hasattr(v, "Backlash") else 0.0
             self._startWatcher(v.Name); obj.Status = "Up to date"
 
     def _abbrev(self, varname):
@@ -143,7 +148,7 @@ class HypoidGearResult:
         self._stopWatcher()
         self._watcher = _VarSetWatcher(self, vn, watched=frozenset((
             "Module","NumberOfTeeth","PressureAngle","ProfileShift","Offset",
-            "SpiralAngle","PitchAngle","FaceWidth","BoreEnabled","KeywayEnabled",
+            "SpiralAngle","PitchAngle","FaceWidth","Backlash","BoreEnabled","KeywayEnabled",
             "BoreDiameter","KeywayWidth","KeywayDepth")))
         App.addDocumentObserver(self._watcher)
 
@@ -171,7 +176,8 @@ class HypoidGearResult:
                 abs(float(v.Offset.Value)-self._last_of)>EPS or
                 abs(float(v.SpiralAngle.Value)-self._last_sa)>EPS or
                 abs(float(v.PitchAngle.Value)-self._last_pt)>EPS or
-                abs(float(v.FaceWidth.Value)-self._last_fw)>EPS)
+                abs(float(v.FaceWidth.Value)-self._last_fw)>EPS or
+                (hasattr(v, "Backlash") and abs(float(v.Backlash)-self._last_bl)>EPS))
 
     def _set_needs_rebuild(self):
         if self._rebuilding or not self._values_changed(): return
@@ -205,6 +211,7 @@ class HypoidGearResult:
             self._last_sa = float(v.SpiralAngle.Value)
             self._last_pt = float(v.PitchAngle.Value)
             self._last_fw = float(v.FaceWidth.Value)
+            self._last_bl = float(v.Backlash) if hasattr(v, "Backlash") else 0.0
             if self._last_m <= 0 or self._last_nt < 3 or self._last_fw <= 0:
                 self.Object.Status = "Invalid params"; return
             body_name = str(self.Object.BodyName)
@@ -233,6 +240,7 @@ class HypoidGearResult:
                 "bore_type":"none", "bore_diameter":float(v.BoreDiameter.Value),
                 "keyway_width":float(v.KeywayWidth.Value),
                 "keyway_depth":float(v.KeywayDepth.Value), "body_name":body_name,
+                "backlash":self._last_bl,
             }, gearMath.generateToothProfile)
             body_out = doc.getObject(body_name)
             if body_out:

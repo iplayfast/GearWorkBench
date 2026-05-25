@@ -158,6 +158,11 @@ def createRackGearVarSet(doc, name):
     ).Angle2 = 0.0
 
     var_set.addProperty(
+        "App::PropertyFloat", "Backlash", "RackGear",
+        QT_TRANSLATE_NOOP("App::Property", "Backlash clearance"),
+    ).Backlash = 0.25
+
+    var_set.addProperty(
         "App::PropertyFloat", "AddendumFactor", "CycloidalGear",
         QT_TRANSLATE_NOOP("App::Property", "Head height factor (~1.4 for cycloidal)"),
     ).AddendumFactor = 1.4
@@ -193,6 +198,7 @@ class RackGearResult:
         self._last_a2 = None
         self._last_af = None
         self._last_df = None
+        self._last_bl = None
         self._gt_changed = False
         self._tp_changed = False
         self._watcher = None
@@ -248,6 +254,7 @@ class RackGearResult:
         self._last_h = self._last_bt = None
         self._last_gt = self._last_tp = self._last_a1 = self._last_a2 = None
         self._last_af = self._last_df = None
+        self._last_bl = None
         self._gt_changed = self._tp_changed = False
         self._watcher = None
         self._needs_rebuild = False
@@ -268,6 +275,8 @@ class RackGearResult:
             if hasattr(v, "AddendumFactor"):
                 self._last_af = float(v.AddendumFactor)
                 self._last_df = float(v.DedendumFactor)
+            if hasattr(v, "Backlash"):
+                self._last_bl = float(v.Backlash)
             self._startWatcher(v.Name)
             obj.Status = "Up to date"
 
@@ -278,7 +287,8 @@ class RackGearResult:
             watched=frozenset(("Module", "NumberOfTeeth", "PressureAngle",
                                "Height", "BaseThickness", "GearType",
                                "ToothProfile", "Angle1", "Angle2",
-                               "AddendumFactor", "DedendumFactor")),
+                               "AddendumFactor", "DedendumFactor",
+                               "Backlash")),
         )
         App.addDocumentObserver(self._watcher)
 
@@ -320,7 +330,9 @@ class RackGearResult:
                 abs(float(v.Angle2.Value) - self._last_a2) > EPS or
                 (hasattr(v, "AddendumFactor") and
                  (abs(float(v.AddendumFactor) - self._last_af) > EPS or
-                  abs(float(v.DedendumFactor) - self._last_df) > EPS)))
+                  abs(float(v.DedendumFactor) - self._last_df) > EPS)) or
+                (hasattr(v, "Backlash") and
+                 abs(float(v.Backlash) - self._last_bl) > EPS))
 
     def _set_needs_rebuild(self):
         if self._rebuilding:
@@ -387,6 +399,8 @@ class RackGearResult:
             if hasattr(v, "AddendumFactor"):
                 self._last_af = float(v.AddendumFactor)
                 self._last_df = float(v.DedendumFactor)
+            if hasattr(v, "Backlash"):
+                self._last_bl = float(v.Backlash)
 
             if self._last_m <= 0 or self._last_nt < 1 or self._last_bt <= 0:
                 self.Object.Status = "Invalid params"
@@ -431,6 +445,7 @@ class RackGearResult:
                 "angle2": self._last_a2,
                 "body_name": body_name,
                 "varset_name": v.Name,
+                "backlash": self._last_bl,
             }
             if is_cycloid:
                 parameters["addendum_factor"] = self._last_af

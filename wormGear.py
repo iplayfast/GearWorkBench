@@ -108,11 +108,17 @@ def generateWormGearPart(doc, parameters):
     tan_a = math.tan(pressure_angle * util.DEG_TO_RAD)
     
     # Axial Widths (Half-widths)
+    # Apply backlash: reduce thread width at the pitch line
+    half_pitch_width = pitch / 4.0
+    backlash = parameters.get("backlash", 0.0)
+    if backlash != 0.0:
+        half_pitch_width -= backlash / 2.0
+
     # At Root (Radial=0): Root is WIDER than pitch line.
-    hw_root = (pitch / 4.0) + (dedendum * tan_a)
-    
+    hw_root = half_pitch_width + (dedendum * tan_a)
+
     # At Tip (Radial=whole_depth): Tip is NARROWER than pitch line.
-    hw_tip = (pitch / 4.0) - (addendum * tan_a)
+    hw_tip = half_pitch_width - (addendum * tan_a)
     if hw_tip < 0: hw_tip = 0.01
     
     # Offset geometry by Root Radius in X (Radial)
@@ -235,7 +241,7 @@ def generateMatingGear(doc, parameters, center_distance, worm_pitch_radius, worm
         "module": module,
         "num_teeth": num_teeth,
         "pressure_angle": pressure_angle,
-        "profile_shift": 0.0,
+        "profile_shift": -parameters.get("backlash", 0.0),
         "tip_radius": tip_radius_override
     }
     gearMath.generateToothProfile(sk_bottom, tooth_params)
@@ -388,6 +394,11 @@ def createWormGearVarSet(doc, name):
     ).CenterHelix = True
 
     var_set.addProperty(
+        "App::PropertyFloat", "Backlash", "WormGear",
+        QT_TRANSLATE_NOOP("App::Property", "Backlash clearance"),
+    ).Backlash = 0.25
+
+    var_set.addProperty(
         "App::PropertyBool", "RightHanded", "WormGear",
         QT_TRANSLATE_NOOP("App::Property", "True = right-handed, False = left-handed"),
     ).RightHanded = True
@@ -511,6 +522,7 @@ class WormGearResult:
         self._last_mk = None
         self._last_mkw = None
         self._last_mkd = None
+        self._last_bl = None
         self._watcher = None
         self._needs_rebuild = False
         self.Type = "WormGearResult"
@@ -556,6 +568,7 @@ class WormGearResult:
         self._last_gt = self._last_gh = self._last_cl = None
         self._last_mb = self._last_mbd = self._last_mk = None
         self._last_mkw = self._last_mkd = None
+        self._last_bl = None
         self._watcher = None
         self._needs_rebuild = False
 
@@ -593,7 +606,7 @@ class WormGearResult:
                                "GearTeeth", "GearHeight", "Clearance",
                                "MatingBoreEnabled", "MatingBoreDiameter",
                                "MatingKeywayEnabled", "MatingKeywayWidth",
-                               "MatingKeywayDepth")),
+                               "MatingKeywayDepth", "Backlash")),
         )
         App.addDocumentObserver(self._watcher)
 
@@ -653,7 +666,9 @@ class WormGearResult:
                 abs(float(v.MatingBoreDiameter.Value) - self._last_mbd) > EPS or
                 bool(v.MatingKeywayEnabled) != self._last_mk or
                 abs(float(v.MatingKeywayWidth.Value) - self._last_mkw) > EPS or
-                abs(float(v.MatingKeywayDepth.Value) - self._last_mkd) > EPS)
+                abs(float(v.MatingKeywayDepth.Value) - self._last_mkd) > EPS or
+                (hasattr(v, "Backlash") and
+                 abs(float(v.Backlash) - self._last_bl) > EPS))
 
     def _set_needs_rebuild(self):
         if self._rebuilding:
@@ -706,6 +721,7 @@ class WormGearResult:
             self._last_mk = bool(v.MatingKeywayEnabled)
             self._last_mkw = float(v.MatingKeywayWidth.Value)
             self._last_mkd = float(v.MatingKeywayDepth.Value)
+            self._last_bl = float(v.Backlash) if hasattr(v, "Backlash") else 0.0
 
             if self._last_m <= 0 or self._last_wd <= 0 or self._last_len <= 0:
                 self.Object.Status = "Invalid params"
@@ -761,6 +777,7 @@ class WormGearResult:
                 "gear_teeth": self._last_gt,
                 "gear_height": self._last_gh,
                 "clearance": self._last_cl,
+                "backlash": self._last_bl,
                 "wheel_phase": 0.0,
             }
             generateWormGearPart(doc, parameters)

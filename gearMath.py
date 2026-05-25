@@ -262,7 +262,12 @@ def generateRackToothProfile(sketch, parameters):
     dedendum = module * DEDENDUM_FACTOR
     tan_alpha = math.tan(pressure_angle * util.DEG_TO_RAD)
     half_pitch_width = (math.pi * module) / 4.0
-    
+
+    # Apply backlash: reduce tooth width at the pitch line
+    backlash = parameters.get("backlash", 0.0)
+    if backlash != 0.0:
+        half_pitch_width -= backlash / 2.0
+
     y_top = addendum
     x_top = half_pitch_width - (addendum * tan_alpha)
     y_bot = -dedendum

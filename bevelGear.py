@@ -106,6 +106,11 @@ def createBevelGearVarSet(doc, name):
     ).FaceWidth = 5.0
 
     var_set.addProperty(
+        "App::PropertyFloat", "Backlash", "BevelGear",
+        QT_TRANSLATE_NOOP("App::Property", "Backlash clearance"),
+    ).Backlash = 0.25
+
+    var_set.addProperty(
         "App::PropertyLength", "BoreDiameter", "Bore",
         QT_TRANSLATE_NOOP("App::Property", "Diameter of center bore"),
     ).BoreDiameter = 5.0
@@ -158,6 +163,7 @@ class BevelGearResult:
         self._last_pt = None
         self._last_sa = None
         self._last_fw = None
+        self._last_bl = None
         self._watcher = None
         self._needs_rebuild = False
         self.Type = "BevelGearResult"
@@ -197,6 +203,7 @@ class BevelGearResult:
         self._rebuilding = False
         self._last_m = self._last_nt = self._last_pa = None
         self._last_pt = self._last_sa = self._last_fw = None
+        self._last_bl = None
         self._watcher = None
         self._needs_rebuild = False
 
@@ -210,6 +217,8 @@ class BevelGearResult:
             self._last_pt = float(v.PitchAngle.Value)
             self._last_sa = float(v.SpiralAngle.Value)
             self._last_fw = float(v.FaceWidth.Value)
+            if hasattr(v, "Backlash"):
+                self._last_bl = float(v.Backlash)
             self._startWatcher(v.Name)
             obj.Status = "Up to date"
 
@@ -218,7 +227,8 @@ class BevelGearResult:
         self._watcher = _VarSetWatcher(
             self, varset_name,
             watched=frozenset(("Module", "NumberOfTeeth", "PressureAngle",
-                               "PitchAngle", "SpiralAngle", "FaceWidth")),
+                               "PitchAngle", "SpiralAngle", "FaceWidth",
+                               "Backlash")),
         )
         App.addDocumentObserver(self._watcher)
 
@@ -254,7 +264,9 @@ class BevelGearResult:
                 abs(float(v.PressureAngle.Value) - self._last_pa) > EPS or
                 abs(float(v.PitchAngle.Value) - self._last_pt) > EPS or
                 abs(float(v.SpiralAngle.Value) - self._last_sa) > EPS or
-                abs(float(v.FaceWidth.Value) - self._last_fw) > EPS)
+                abs(float(v.FaceWidth.Value) - self._last_fw) > EPS or
+                (hasattr(v, "Backlash") and
+                 abs(float(v.Backlash) - self._last_bl) > EPS))
 
     def _set_needs_rebuild(self):
         if self._rebuilding:
@@ -296,6 +308,8 @@ class BevelGearResult:
             self._last_pt = float(v.PitchAngle.Value)
             self._last_sa = float(v.SpiralAngle.Value)
             self._last_fw = float(v.FaceWidth.Value)
+            if hasattr(v, "Backlash"):
+                self._last_bl = float(v.Backlash)
 
             if self._last_m <= 0 or self._last_nt < 3 or self._last_fw <= 0:
                 self.Object.Status = "Invalid params"
@@ -343,6 +357,7 @@ class BevelGearResult:
                 "keyway_width": float(v.KeywayWidth.Value),
                 "keyway_depth": float(v.KeywayDepth.Value),
                 "body_name": body_name,
+                "backlash": self._last_bl,
             }
             genericBevel.bevelGear(doc, parameters,
                                    gearMath.generateToothProfile)

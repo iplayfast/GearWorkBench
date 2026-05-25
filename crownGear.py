@@ -98,6 +98,11 @@ def createCrownGearVarSet(doc, name):
     ).FaceWidth = 5.0
 
     var_set.addProperty(
+        "App::PropertyFloat", "Backlash", "CrownGear",
+        QT_TRANSLATE_NOOP("App::Property", "Backlash clearance"),
+    ).Backlash = 0.25
+
+    var_set.addProperty(
         "App::PropertyLength", "BoreDiameter", "Bore",
         QT_TRANSLATE_NOOP("App::Property", "Diameter of center bore"),
     ).BoreDiameter = 5.0
@@ -142,6 +147,7 @@ class CrownGearResult:
         self._last_pa = None
         self._last_sa = None
         self._last_fw = None
+        self._last_bl = None
         self._watcher = None
         self._needs_rebuild = False
         self.Type = "CrownGearResult"
@@ -181,6 +187,7 @@ class CrownGearResult:
         self._rebuilding = False
         self._last_m = self._last_nt = self._last_pa = None
         self._last_sa = self._last_fw = None
+        self._last_bl = None
         self._watcher = None
         self._needs_rebuild = False
 
@@ -193,6 +200,8 @@ class CrownGearResult:
             self._last_pa = float(v.PressureAngle.Value)
             self._last_sa = float(v.SpiralAngle.Value)
             self._last_fw = float(v.FaceWidth.Value)
+            if hasattr(v, "Backlash"):
+                self._last_bl = float(v.Backlash)
             self._startWatcher(v.Name)
             obj.Status = "Up to date"
 
@@ -201,7 +210,8 @@ class CrownGearResult:
         self._watcher = _VarSetWatcher(
             self, varset_name,
             watched=frozenset(("Module", "NumberOfTeeth", "PressureAngle",
-                               "SpiralAngle", "FaceWidth")),
+                               "SpiralAngle", "FaceWidth",
+                               "Backlash")),
         )
         App.addDocumentObserver(self._watcher)
 
@@ -236,7 +246,9 @@ class CrownGearResult:
                 int(v.NumberOfTeeth) != self._last_nt or
                 abs(float(v.PressureAngle.Value) - self._last_pa) > EPS or
                 abs(float(v.SpiralAngle.Value) - self._last_sa) > EPS or
-                abs(float(v.FaceWidth.Value) - self._last_fw) > EPS)
+                abs(float(v.FaceWidth.Value) - self._last_fw) > EPS or
+                (hasattr(v, "Backlash") and
+                 abs(float(v.Backlash) - self._last_bl) > EPS))
 
     def _set_needs_rebuild(self):
         if self._rebuilding:
@@ -277,6 +289,8 @@ class CrownGearResult:
             self._last_pa = float(v.PressureAngle.Value)
             self._last_sa = float(v.SpiralAngle.Value)
             self._last_fw = float(v.FaceWidth.Value)
+            if hasattr(v, "Backlash"):
+                self._last_bl = float(v.Backlash)
 
             if self._last_m <= 0 or self._last_nt < 3 or self._last_fw <= 0:
                 self.Object.Status = "Invalid params"
@@ -320,6 +334,7 @@ class CrownGearResult:
                 "keyway_width": float(v.KeywayWidth.Value),
                 "keyway_depth": float(v.KeywayDepth.Value),
                 "body_name": body_name,
+                "backlash": self._last_bl,
             }
             genericCrown.crownGear(doc, parameters,
                                    gearMath.generateRackToothProfile)

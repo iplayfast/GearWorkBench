@@ -594,7 +594,7 @@ if GUI_AVAILABLE:
             params_layout.addWidget(QtGui.QLabel("Backlash:"), 4, 0)
             self.backlash_spin = QtGui.QDoubleSpinBox()
             self.backlash_spin.setRange(0.0, 0.5)
-            self.backlash_spin.setValue(0.0)
+            self.backlash_spin.setValue(0.25)
             self.backlash_spin.setDecimals(3)
             self.backlash_spin.setSuffix(" mm")
             params_layout.addWidget(self.backlash_spin, 4, 1)

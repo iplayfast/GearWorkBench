@@ -42,6 +42,13 @@ def screwGear(doc, parameters, profile_func):
     Returns:
         The PartDesign Body containing the screw gear
     """
+    # Apply backlash: subtract from profile shift to make teeth thinner
+    backlash = parameters.get("backlash", 0.0)
+    if backlash != 0.0:
+        parameters = parameters.copy()
+        original_shift = parameters.get("profile_shift", 0.0)
+        parameters["profile_shift"] = original_shift - backlash
+
     body_name = parameters.get("body_name", "ScrewGear")
     body = util.readyPart(doc, body_name)
 

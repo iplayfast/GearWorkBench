@@ -143,7 +143,7 @@ def createSpurGearVarSet(doc, name):
         "Backlash",
         "SpurGear",
         QT_TRANSLATE_NOOP("App::Property", "Backlash clearance for 3D printing (0.0-0.3mm)"),
-    ).Backlash = 0.0
+    ).Backlash = 0.25
 
     var_set.addProperty(
         "App::PropertyBool",
@@ -287,7 +287,7 @@ def createHelixGearVarSet(doc, name):
         "Backlash",
         "HelixGear",
         QT_TRANSLATE_NOOP("App::Property", "Backlash clearance for 3D printing (0.0-0.3mm)"),
-    ).Backlash = 0.0
+    ).Backlash = 0.25
 
     var_set.addProperty(
         "App::PropertyBool",
@@ -439,7 +439,7 @@ def createHerringboneGearVarSet(doc, name):
         "Backlash",
         "HerringboneGear",
         QT_TRANSLATE_NOOP("App::Property", "Backlash clearance for 3D printing (0.0-0.3mm)"),
-    ).Backlash = 0.0
+    ).Backlash = 0.25
 
     var_set.addProperty(
         "App::PropertyBool",
@@ -963,7 +963,7 @@ class SpurGear:
         obj.addProperty("App::PropertyLength", "Height", "SpurGear", "").Height = H["height"]
         obj.addProperty("App::PropertyAngle", "PressureAngle", "SpurGear", "").PressureAngle = H["pressure_angle"]
         obj.addProperty("App::PropertyFloat", "ProfileShift", "SpurGear", "").ProfileShift = H["profile_shift"]
-        obj.addProperty("App::PropertyFloat", "Backlash", "SpurGear", "", 1).Backlash = 0.0
+        obj.addProperty("App::PropertyFloat", "Backlash", "SpurGear", "", 1).Backlash = 0.25
         obj.addProperty("App::PropertyString", "BodyName", "SpurGear", "").BodyName = H["body_name"]
         obj.addProperty("App::PropertyEnumeration", "BoreType", "Bore", "")
         obj.BoreType = ["none", "circular", "square", "hexagonal", "keyway"]
@@ -1147,7 +1147,7 @@ def createGearVarSet(doc, name):
     var_set.addProperty(
         "App::PropertyFloat", "Backlash", "Gear",
         QT_TRANSLATE_NOOP("App::Property", "Backlash clearance for 3D printing (0.0-0.3mm)"),
-    ).Backlash = 0.0
+    ).Backlash = 0.25
 
     var_set.addProperty(
         "App::PropertyFloat", "AddendumFactor", "CycloidalGear",
@@ -2609,7 +2609,7 @@ class HelixGear:
             "Backlash",
             "HelixGear",
             QT_TRANSLATE_NOOP("App::Property", "Backlash clearance for 3D printing (0.0-0.3mm)"),
-        ).Backlash = 0.0
+        ).Backlash = 0.25
 
         obj.addProperty(
             "App::PropertyString",
@@ -2911,7 +2911,7 @@ class HerringboneGear:
             "Backlash",
             "HerringboneGear",
             QT_TRANSLATE_NOOP("App::Property", "Backlash clearance for 3D printing (0.0-0.3mm)"),
-        ).Backlash = 0.0
+        ).Backlash = 0.25
 
         obj.addProperty(
             "App::PropertyString",

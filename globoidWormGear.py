@@ -151,6 +151,8 @@ def createGloboidWormGearV2VarSet(doc, name):
     vs.addProperty("App::PropertyLength","ShaftLength","GloboidWorm","End shaft length each side").ShaftLength = 8.0
     vs.addProperty("App::PropertyLength","WormLength","GloboidWorm","Threaded section length").WormLength = 30.0
     vs.addProperty("App::PropertyBool","RightHanded","GloboidWorm","Right-handed").RightHanded = True
+    vs.addProperty("App::PropertyFloat","Backlash","GloboidWorm",
+        QT_TRANSLATE_NOOP("App::Property","Backlash clearance")).Backlash = 0.25
 
     vs.addProperty("App::PropertyLength","BoreDiameter","Bore","Bore diameter").BoreDiameter = 5.0
     vs.addProperty("App::PropertyBool","BoreEnabled","Bore","Enable bore").BoreEnabled = True
@@ -186,6 +188,7 @@ class GloboidWormGearV2Result:
         self._last_wpd=self._last_sd=self._last_sl=self._last_wl=None
         self._last_rh=self._last_cm=self._last_gh=self._last_cl=None
         self._last_gbd=self._last_gbe=self._last_wp=None
+        self._last_bl=None
         self._watcher=None; self._needs_rebuild=False; self.Type="GloboidWormGearV2Result"
         obj.addProperty("App::PropertyString","VarSetName","Gear","",1).VarSetName=varset.Name
         obj.addProperty("App::PropertyString","BodyName","Gear","").BodyName=varset.Name.replace("_values","_Body",1)
@@ -202,6 +205,7 @@ class GloboidWormGearV2Result:
         self._last_wpd=self._last_sd=self._last_sl=self._last_wl=None
         self._last_rh=self._last_cm=self._last_gh=self._last_cl=None
         self._last_gbd=self._last_gbe=self._last_wp=None
+        self._last_bl=None
         self._watcher=None; self._needs_rebuild=False
 
     def onDocumentRestored(self,obj):
@@ -214,6 +218,7 @@ class GloboidWormGearV2Result:
             self._last_pa=float(v.PressureAngle.Value)
             self._last_rh=bool(v.RightHanded); self._last_cm=bool(v.CreateMatingGear)
             self._last_gbe=bool(v.GearBoreEnabled)
+            self._last_bl=float(v.Backlash) if hasattr(v,"Backlash") else 0.0
             self._startWatcher(v.Name); obj.Status="Up to date"
 
     def _startWatcher(self,vn):
@@ -221,7 +226,7 @@ class GloboidWormGearV2Result:
             "Module","NumberOfThreads","GearTeeth","PressureAngle","WormPitchDiameter",
             "ShaftDiameter","ShaftLength","WormLength","RightHanded","CreateMatingGear",
             "GearHeight","Clearance","GearBoreEnabled","GearBoreDiameter","WheelPhase",
-            "BoreEnabled","KeywayEnabled","BoreDiameter","KeywayWidth","KeywayDepth")))
+            "BoreEnabled","KeywayEnabled","BoreDiameter","KeywayWidth","KeywayDepth","Backlash")))
         App.addDocumentObserver(self._watcher)
 
     def _stopWatcher(self):
@@ -257,7 +262,8 @@ class GloboidWormGearV2Result:
                     abs(float(v.Clearance)-self._last_cl)>E or
                     bool(v.GearBoreEnabled)!=self._last_gbe or
                     abs(float(v.GearBoreDiameter.Value)-self._last_gbd)>E or
-                    abs(float(v.WheelPhase.Value)-self._last_wp)>E)
+                    abs(float(v.WheelPhase.Value)-self._last_wp)>E or
+                    (hasattr(v,"Backlash") and abs(float(v.Backlash)-self._last_bl)>E))
         except ReferenceError:
             self._varset=None; return False
 
@@ -292,6 +298,7 @@ class GloboidWormGearV2Result:
             self._last_cm=bool(v.CreateMatingGear); self._last_gh=float(v.GearHeight.Value)
             self._last_cl=float(v.Clearance); self._last_gbe=bool(v.GearBoreEnabled)
             self._last_gbd=float(v.GearBoreDiameter.Value); self._last_wp=float(v.WheelPhase.Value)
+            self._last_bl=float(v.Backlash) if hasattr(v,"Backlash") else 0.0
 
             if self._last_m<=0: self.Object.Status="Invalid params"; return
 
@@ -457,6 +464,9 @@ class GloboidWormGearV2Result:
             # add and ded are already in mm, so no extra m factor.
             tan_pa=math.tan(pa*math.pi/180)
             fTop=m*(math.pi/2.0 - 2.0*tan_pa)
+            # Apply backlash: widen groove to make thread narrower
+            if self._last_bl:
+                fTop += self._last_bl
             fBottom=fTop + 2.0*(add+ded)*tan_pa
 
             # Spine torus at the body surface (MinorRadius = arc_r = gp_r - m).
@@ -670,15 +680,17 @@ class GloboidWormGearV2Result:
         if xy:
             sk_b.AttachmentSupport=[(xy,'')]; sk_b.MapMode="FlatFace"
             sk_b.AttachmentOffset=App.Placement(App.Vector(0,0,0),App.Rotation(App.Vector(0,0,1),wheel_phase))
+        _bl=float(v.Backlash) if hasattr(v,"Backlash") else 0.0
+        _ps=-_bl if _bl!=0.0 else 0.0
         gearMath.generateToothProfile(sk_b,{"module":module,"num_teeth":num_teeth,
-            "pressure_angle":pa,"profile_shift":0.0})
+            "pressure_angle":pa,"profile_shift":_ps})
 
         sk_t=util.createSketch(gb,"ToothProfileTop")
         if xy:
             sk_t.AttachmentSupport=[(xy,'')]; sk_t.MapMode="FlatFace"
             sk_t.AttachmentOffset=App.Placement(App.Vector(0,0,height),App.Rotation(App.Vector(0,0,1),twist_deg+wheel_phase))
         gearMath.generateToothProfile(sk_t,{"module":module,"num_teeth":num_teeth,
-            "pressure_angle":pa,"profile_shift":0.0})
+            "pressure_angle":pa,"profile_shift":_ps})
 
         loft=gb.newObject("PartDesign::AdditiveLoft","HelicalTooth")
         loft.Profile=sk_b; loft.Sections=[sk_t]; loft.Ruled=True

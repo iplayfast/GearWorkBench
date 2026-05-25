@@ -65,6 +65,8 @@ def createScrewGearVarSet(doc, name):
     vs.addProperty("App::PropertyFloat","ProfileShift","ScrewGear","Profile shift").ProfileShift = 0.0
     vs.addProperty("App::PropertyAngle","HelixAngle","ScrewGear","Helix angle").HelixAngle = 30.0
     vs.addProperty("App::PropertyLength","FaceWidth","ScrewGear","Face width").FaceWidth = 10.0
+    vs.addProperty("App::PropertyFloat","Backlash","ScrewGear",
+        QT_TRANSLATE_NOOP("App::Property","Backlash clearance")).Backlash = 0.25
     vs.addProperty("App::PropertyEnumeration","Handedness","ScrewGear","Handedness")
     vs.Handedness = ["Right","Left"]; vs.Handedness = "Right"
     vs.addProperty("App::PropertyLength","BoreDiameter","Bore","Bore diameter").BoreDiameter = 5.0
@@ -89,6 +91,7 @@ class ScrewGearResult:
     def __init__(self, obj, varset):
         self._varset = varset; self._rebuilding = False
         self._last_m=self._last_nt=self._last_pa=self._last_ps=self._last_ha=self._last_fw=self._last_hd=None
+        self._last_bl=None
         self._watcher=None; self._needs_rebuild=False; self.Type = "ScrewGearResult"
         obj.addProperty("App::PropertyString","VarSetName","Gear","",1).VarSetName = varset.Name
         obj.addProperty("App::PropertyString","BodyName","Gear","").BodyName = varset.Name.replace("_values","_Body",1)
@@ -102,6 +105,7 @@ class ScrewGearResult:
         if s: self.Type = s
         self._varset=None; self._rebuilding=False
         self._last_m=self._last_nt=self._last_pa=self._last_ps=self._last_ha=self._last_fw=self._last_hd=None
+        self._last_bl=None
         self._watcher=None; self._needs_rebuild=False
 
     def onDocumentRestored(self,obj):
@@ -110,12 +114,13 @@ class ScrewGearResult:
             self._last_m=float(v.Module.Value); self._last_nt=int(v.NumberOfTeeth); self._last_pa=float(v.PressureAngle.Value)
             self._last_ps=float(v.ProfileShift); self._last_ha=float(v.HelixAngle.Value); self._last_fw=float(v.FaceWidth.Value)
             self._last_hd=str(v.Handedness)
+            self._last_bl=float(v.Backlash) if hasattr(v,"Backlash") else 0.0
             self._startWatcher(v.Name); obj.Status="Up to date"
 
     def _startWatcher(self,vn):
         self._stopWatcher(); self._watcher=_VarSetWatcher(self,vn,watched=frozenset((
             "Module","NumberOfTeeth","PressureAngle","ProfileShift","HelixAngle",
-            "FaceWidth","Handedness","BoreEnabled","KeywayEnabled","BoreDiameter",
+            "FaceWidth","Backlash","Handedness","BoreEnabled","KeywayEnabled","BoreDiameter",
             "KeywayWidth","KeywayDepth")))
         App.addDocumentObserver(self._watcher)
 
@@ -141,7 +146,8 @@ class ScrewGearResult:
             return (abs(float(v.Module.Value)-self._last_m)>E or int(v.NumberOfTeeth)!=self._last_nt or
                     abs(float(v.PressureAngle.Value)-self._last_pa)>E or abs(float(v.ProfileShift)-self._last_ps)>E or
                     abs(float(v.HelixAngle.Value)-self._last_ha)>E or abs(float(v.FaceWidth.Value)-self._last_fw)>E or
-                    str(v.Handedness)!=self._last_hd)
+                    str(v.Handedness)!=self._last_hd or
+                    (hasattr(v,"Backlash") and abs(float(v.Backlash)-self._last_bl)>E))
         except ReferenceError:
             self._varset=None
             return False
@@ -171,6 +177,7 @@ class ScrewGearResult:
             self._last_m=float(v.Module.Value); self._last_nt=int(v.NumberOfTeeth); self._last_pa=float(v.PressureAngle.Value)
             self._last_ps=float(v.ProfileShift); self._last_ha=float(v.HelixAngle.Value); self._last_fw=float(v.FaceWidth.Value)
             self._last_hd=str(v.Handedness)
+            self._last_bl=float(v.Backlash) if hasattr(v,"Backlash") else 0.0
             if self._last_m<=0 or self._last_nt<3 or self._last_fw<=0: self.Object.Status="Invalid params"; return
             self._stopWatcher()
             old=d.getObject(bn)
@@ -195,6 +202,7 @@ class ScrewGearResult:
                 "bore_diameter":float(v.BoreDiameter.Value),
                 "keyway_width":float(v.KeywayWidth.Value),
                 "keyway_depth":float(v.KeywayDepth.Value),"body_name":bn,
+                "backlash":self._last_bl,
             },gearMath.generateHelicalGearProfile)
             bo=d.getObject(bn)
             if bo:

@@ -60,6 +60,11 @@ def generateCycloidRackToothProfile(sketch, parameters):
     pitch = math.pi * module
     half_tooth_width = pitch / 4.0
 
+    # Apply backlash: reduce tooth width at the pitch line
+    backlash = parameters.get("backlash", 0.0)
+    if backlash != 0.0:
+        half_tooth_width -= backlash / 2.0
+
     # Addendum (Tip)
     val_add = max(-1.0, min(1.0, 1.0 - (addendum / r_roll)))
     t_max_add = math.acos(val_add)
