@@ -35,7 +35,6 @@ import bevelGear  # Import bevel gear module
 import crownGear  # Import crown gear module
 import wormGear  # Import worm gear module
 import globoidWormGear  # Import globoid worm gear module
-import globoidWormGearV3  # Import globoid worm gear V3 (boolean conjugate)
 import hypoidGear  # Import hypoid gear module
 import screwGear  # Import screw gear module
 import nonCircularGear  # Import non-circular gear module
@@ -77,8 +76,7 @@ class GearWorkbenchWB(Workbench):
                 "BevelGearCreateObject",
                 "CrownGearCreateObject",
                 "WormGearCreateObject",
-                "GloboidWormGearV2Command",
-                "GloboidWormGearV3Command",
+                "GloboidWormGearCommand",
                 "HypoidGearCreateObject",
                 "ScrewGearCreateObject",
                 "NonCircularGearCreateObject",

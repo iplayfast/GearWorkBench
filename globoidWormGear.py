@@ -1,116 +1,41 @@
-"""Globoid Worm Gear V2 — clean PartDesign-only builder.
+"""
+Globoid Worm Gear — Direct Toroidal-Spiral Construction
+=======================================================
 
-Reference: Otvinta.com Globoid Worm Shaft Calculator
-  https://www.otvinta.com/globoid.html
-  (local copy: GloboidCalculator/GloboidCalculator.html)
+Builds the worm thread DIRECTLY from its closed-form parametric equations —
+the toroidal-spiral model used by the OTVINTA globoid calculator
+(https://www.otvinta.com/globoid.html).
 
-FORMULAS (from Otvinta calculator JavaScript — Calculate()):
+A globoid worm thread is a helix wrapped on an hourglass surface whose axis is
+the worm axis (Z) and whose throat radius follows an arc around the mating
+wheel.  The thread groove for the whole worm is bounded by four such spirals —
+the two flanks at the tooth tip and the two at the root.  Because the OTVINTA
+tooth has straight flanks, each flank is EXACTLY a ruled surface between two of
+those four curves, so the whole thread is 4 ruled faces + 2 end caps, sewn into
+a solid.  This needs no profile-sweep along a 3D path (which FreeCAD/OCCT does
+not do reliably) and no boolean chain.
 
-  Inputs:
-    m  = module
-    β  = arc angle (degrees, 0<β<180)
-    zβ = gear teeth within the arc
-    r  = worm reference (pitch) radius at throat (narrowest point)
-    α  = pressure angle (fixed at 20°)
+Construction per rebuild:
+    1. four boundary B-spline curves               (tip/root x top/bottom flank)
+    2. four ruled side faces + two triangulated caps -> sewn solid thread
+    3. (multi-start) nt copies of the thread, rotated 360/nt about Z, fused
+    4. hourglass core: revolve the root meridian about Z
+    5. fuse core + thread, add shaft stubs, cut the bore
 
-  Derived:
-    z_total = 360/β * zβ              # total gear teeth in wheel
-    d       = r + m*z_total/2         # center distance (worm axis to gear axis)
-    R       = d                       # torus MajorRadius
-    r_torus = m*z_total/2 = gp_r     # torus MinorRadius = gear pitch radius
+The shape is rebuilt with the Part API inside the VarSet-driven proxy: it is
+"parametric" in the operative sense — any VarSet edit regenerates the worm —
+even though the result is a computed solid rather than a tree of GUI features.
+That tree-of-features route is exactly what the 3D-loft limitation forbids for
+this geometry.
 
-  Thread gap widths (trapezoidal):
-    fTop    = m * (π/2 - 2*tan(α))    # gap at tip (narrow, near worm surface)
-    fBottom = fTop + 2 * m * 2.25 * tan(α)   # gap at root (wide)
-             = m*(π/2 + 2.5*tan(α))
-    NOTE: 2.25 = addendum_factor + dedendum_factor = 1.0 + 1.25
-
-  Angular offsets (angular half-width of thread gap in torus V-coordinate):
-    δ_tip  = atan((fTop/2)    / (r_torus - m))         # tip gap half-angle
-    δ_root = atan((fBottom/2) / (r_torus + 1.25*m))    # root gap half-angle
-
-  Toroidal spiral parametric equations (4 corners of trapezoid):
-    Base torus:  x = (R + r_minor*cos(u)) * cos(v)
-                 y = (R + r_minor*cos(u)) * sin(v)
-                 z = r_minor * sin(u)
-
-    4 edges (minor radii, delta offsets):
-      Edge 1 (tip, top):    r_minor = r_torus - m,       offset = -δ_tip
-      Edge 2 (tip, bottom): r_minor = r_torus - m,       offset = +δ_tip
-      Edge 3 (root, top):   r_minor = r_torus + 1.25*m,  offset = -δ_root
-      Edge 4 (root, bottom):r_minor = r_torus + 1.25*m,  offset = +δ_root
-
-    Parameter ranges:
-      u ∈ [π - β/2,  π + β/2]    # minor circle arc (β in radians)
-      v ∈ [π - π*zβ, π + π*zβ]   # major circle rotation (zβ full turns)
-
-    Each edge: line in (u,v) space from (u_start, v_start+δ) to
-    (u_end, v_end+δ), projected onto torus via Geom2d.Line2dSegment.toShape()
-
-  Tooth height falloff (optional):
-    r_minor(u) = r_torus - m + (m+1.25*m)*6*(u'²/2 - u'³/3) where u'=u^n
-    (Not implemented in this file — all V2/V3 variants use constant-height threads)
-
-  Wheel geometry:
-    Gear pitch radius: gp_r = m * z_total / 2
-    Lead angle:        γ = atan(m*π*nt / (π * 2*wp_r)) = atan(m*nt / (2*wp_r))
-    Wheel twist:       θ = h * tan(γ) / gp_r  (over gear height h)
-    Wheel handedness:  opposite to worm (right-handed worm → left-handed wheel)
-
-Design:
-1. Hourglass body via PartDesign::Revolution of a circular-arc profile
-2. Thread grooves via PartDesign::SubtractivePipe with toroidal-spiral spine
-3. Bore & keyway via PartDesign::Pocket
-4. Mating wheel as helical gear via AdditiveLoft or AdditiveHelix
-
-Reference image: GloboidCalculator/GloboidCalculator_files/globscheme.png
-
-CHANGE LOG:
-  - Fixed u/v parameter swap in Line2dSegment: OpenCASCADE Toroid uses
-    (v,u) order in Geom2d, changed from vec2(us,vs) to vec2(vs,us).
-  - Fixed fBottom formula: removed extra 'm' factor. add/ded are already in mm,
-    so fBottom = fTop + 2*(add+ded)*tan(α), not fTop + 2*m*(add+ded)*tan(α).
-  - Fixed profile Y-coordinates: narrow end at -ded (inward/root), wide end at
-    +add (outward/surface). Was inverted, causing groove to miss body.
-  - Fixed dedendum pad: root diameter (gp_r-ded)*2, not pitch diameter gp_r*2.
-  - Fixed SubtractivePipe: Transformation=0 (Constant, single profile),
-    Mode=2 (Frenet, profile tracks spine curvature). Was Transformation=1
-    (Multisection) + Mode=0 (Standard), causing asymmetric groove flanks.
-  - Fixed Groove.Midplane=True (not .Symmetric which doesn't exist).
-  - REVERTED: Moving spine to gp_r (pitch surface) made grooves barely cut.
-    Spine stays at arc_r (body surface) with start_pt - N*add offset.
-  - Fixed wheel ThroatGroove: set angle to 360° (was ~93° due to engagement
-    angle limit). Groove must carve into teeth to shape them around the worm.
-  - Fixed ThroatGroove cut_r: removed addendum from radius (wr+m*cl, not
-    wr+add+m*cl). Old formula cut past the gear root, destroying teeth.
-  - Added tip_clearance (ded-add = 0.25*m) to wheel placement distance.
-    Compensates for straight-lofted teeth not matching curved worm groove.
-  - WheelPhase applied to tooth profile sketches instead of body Placement,
-    giving a clean 90°/(1,0,0) Placement rotation.
-  - Fixed turns formula: turns = gt*half_angle_rad/(π*nt) (Otvinta's zβ/nt).
-    Old formula (eff_wl/lead) treated worm as cylinder, giving ~5 turns
-    instead of the correct ~6.67 for the engagement arc.
-  - Implemented WormLength: half_angle_rad = asin(wl/2/arc_r) instead of
-    hardcoded 60°. Removed dead wl variable. WormLength now controls the
-    threaded section length and engagement arc.
-
-REMAINING ISSUES:
-  - Profile trapezoid may have narrow/wide ends swapped vs gear convention.
-    Current: narrow(fTop) at -ded (inward/root), wide(fBottom) at +add (surface).
-    Convention: narrow at surface, wide at root. But current orientation produces
-    visible grooves while the "correct" orientation didn't cut properly.
-    Root cause unclear — may be related to N direction at spine start point.
-  - Threads taper toward the ends due to single-spine sweep vs Otvinta's
-    4-edge method where each trapezoid corner traces its own torus.
-  - half_angle_rad now derived from WormLength (was hardcoded to 60°).
-  - ShaftDiameter VarSet parameter ignored (s_r = outer_throat_r always).
-  - Handedness may be inverted vs conventional right-hand rule.
+NOTE: This builds the WORM only.  The matching wheel is the next phase (the
+full-height worm surface is itself the correct generating tool for it).
 """
 
 import FreeCAD as App
 import FreeCADGui
-import gearMath
-import util
+import gearMath          # helical gear profile + workbench icon directory
+import util              # readyPart / createSketch / createPad / createPolar
 import Part
 import Sketcher
 import os
@@ -118,12 +43,10 @@ import math
 from PySide import QtCore
 from genericGear import _VarSetWatcher, ViewProviderGearResult
 
-vec2 = App.Base.Vector2d
-
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, "icons")
 mainIcon = os.path.join(smWB_icons_path, "globoidWormGear.svg")
-version = "0.2"
+version = "2.0.0"
 
 
 def QT_TRANSLATE_NOOP(scope, text):
@@ -134,676 +57,637 @@ def QT_TRANSLATE_NOOP(scope, text):
 # VARSET
 # ============================================================================
 
-
-def createGloboidWormGearV2VarSet(doc, name):
+def createGloboidWormGearVarSet(doc, name):
     vs = doc.addObject("App::VarSet", name)
-    H = gearMath.generateDefaultParameters()
 
-    vs.addProperty("App::PropertyString","Version","read only","",1).Version = version
+    vs.addProperty("App::PropertyString", "Version", "read only", "", 1).Version = version
 
-    vs.addProperty("App::PropertyInteger","NumberOfThreads","GloboidWorm","Thread starts").NumberOfThreads = 1
-    vs.addProperty("App::PropertyLength","Module","GloboidWorm","Module").Module = 2.0
-    vs.addProperty("App::PropertyInteger","GearTeeth","GloboidWorm","Mating gear teeth").GearTeeth = 20
-    vs.addProperty("App::PropertyAngle","PressureAngle","GloboidWorm","Pressure angle").PressureAngle = 20.0
+    # --- Worm ---------------------------------------------------------------
+    vs.addProperty("App::PropertyLength", "Module", "Worm", "Module").Module = 3.0
+    vs.addProperty("App::PropertyInteger", "NumberOfThreads", "Worm",
+        "Thread starts (1 = single-start)").NumberOfThreads = 1
+    vs.addProperty("App::PropertyInteger", "GearTeeth", "Worm",
+        "Total teeth of the mating wheel").GearTeeth = 20
+    vs.addProperty("App::PropertyInteger", "TeethInArc", "Worm",
+        "Teeth the worm wraps (sets wrap arc & length): arc = 360*TeethInArc/GearTeeth"
+        ).TeethInArc = 5
+    vs.addProperty("App::PropertyAngle", "PressureAngle", "Worm",
+        "Pressure angle").PressureAngle = 20.0
+    vs.addProperty("App::PropertyLength", "WormPitchDiameter", "Worm",
+        "Pitch diameter at the throat (>= 4*Module)").WormPitchDiameter = 30.0
+    vs.addProperty("App::PropertyBool", "RightHanded", "Worm",
+        "Right-handed thread").RightHanded = True
+    vs.addProperty("App::PropertyFloat", "Backlash", "Worm",
+        QT_TRANSLATE_NOOP("App::Property", "Flank thinning per side (mm)")).Backlash = 0.25
 
-    vs.addProperty("App::PropertyLength","WormPitchDiameter","GloboidWorm","Pitch diameter at throat").WormPitchDiameter = 30.0
-    vs.addProperty("App::PropertyLength","ShaftDiameter","GloboidWorm","End shaft diameter (thin)").ShaftDiameter = 12.0
-    vs.addProperty("App::PropertyLength","ShaftLength","GloboidWorm","End shaft length each side").ShaftLength = 8.0
-    vs.addProperty("App::PropertyLength","WormLength","GloboidWorm","Threaded section length").WormLength = 30.0
-    vs.addProperty("App::PropertyBool","RightHanded","GloboidWorm","Right-handed").RightHanded = True
-    vs.addProperty("App::PropertyFloat","Backlash","GloboidWorm",
-        QT_TRANSLATE_NOOP("App::Property","Backlash clearance")).Backlash = 0.25
+    # --- Shaft / Bore -------------------------------------------------------
+    vs.addProperty("App::PropertyLength", "ShaftDiameter", "ShaftBore",
+        "End shaft diameter").ShaftDiameter = 12.0
+    vs.addProperty("App::PropertyLength", "ShaftLength", "ShaftBore",
+        "End shaft length each side").ShaftLength = 8.0
+    vs.addProperty("App::PropertyBool", "BoreEnabled", "ShaftBore",
+        "Cut an axial bore").BoreEnabled = True
+    vs.addProperty("App::PropertyLength", "BoreDiameter", "ShaftBore",
+        "Bore diameter").BoreDiameter = 5.0
 
-    vs.addProperty("App::PropertyLength","BoreDiameter","Bore","Bore diameter").BoreDiameter = 5.0
-    vs.addProperty("App::PropertyBool","BoreEnabled","Bore","Enable bore").BoreEnabled = True
-    vs.addProperty("App::PropertyLength","KeywayWidth","Bore","Keyway width").KeywayWidth = 2.0
-    vs.addProperty("App::PropertyLength","KeywayDepth","Bore","Keyway depth").KeywayDepth = 1.0
-    vs.addProperty("App::PropertyBool","KeywayEnabled","Bore","Enable keyway").KeywayEnabled = False
+    # --- Quality ------------------------------------------------------------
+    vs.addProperty("App::PropertyInteger", "Samples", "Quality",
+        "Points sampled along each boundary curve (smoothness vs speed)").Samples = 200
 
-    vs.addProperty("App::PropertyBool","CreateMatingGear","MatingGear","Create wheel").CreateMatingGear = True
-    vs.addProperty("App::PropertyLength","GearHeight","MatingGear","Wheel thickness").GearHeight = 10.0
-    vs.addProperty("App::PropertyFloat","Clearance","MatingGear","Clearance factor").Clearance = 0.1
-    vs.addProperty("App::PropertyLength","GearBoreDiameter","MatingGear","Wheel bore diameter").GearBoreDiameter = 8.0
-    vs.addProperty("App::PropertyBool","GearBoreEnabled","MatingGear","Enable wheel bore").GearBoreEnabled = True
-    vs.addProperty("App::PropertyAngle","WheelPhase","MatingGear","Wheel phase offset").WheelPhase = 2.0
+    # --- Mating wheel -------------------------------------------------------
+    vs.addProperty("App::PropertyBool", "CreateMatingGear", "Wheel",
+        "Build the mating wheel").CreateMatingGear = True
+    vs.addProperty("App::PropertyLength", "GearHeight", "Wheel",
+        "Wheel face width").GearHeight = 10.0
+    vs.addProperty("App::PropertyAngle", "WheelPhase", "Wheel",
+        "Wheel angular phase offset for tooth alignment").WheelPhase = 2.0
+    vs.addProperty("App::PropertyFloat", "Clearance", "Wheel",
+        "Throat clearance factor (x module)").Clearance = 0.1
+    vs.addProperty("App::PropertyBool", "WheelBoreEnabled", "Wheel",
+        "Cut a wheel bore").WheelBoreEnabled = True
+    vs.addProperty("App::PropertyLength", "WheelBoreDiameter", "Wheel",
+        "Wheel bore diameter").WheelBoreDiameter = 8.0
 
-    vs.addProperty("App::PropertyLength","LeadAngle","read only","",1)
-    vs.setExpression("LeadAngle","atan(Module*pi*NumberOfThreads/(WormPitchDiameter*pi))")
-    vs.addProperty("App::PropertyLength","CenterDistance","read only","",1)
-    vs.setExpression("CenterDistance","WormPitchDiameter/2 + Module*GearTeeth/2")
-    vs.addProperty("App::PropertyLength","WheelPitchDiameter","read only","",1)
-    vs.setExpression("WheelPitchDiameter","Module*GearTeeth")
+    # --- Read-only derived --------------------------------------------------
+    vs.addProperty("App::PropertyLength", "CenterDistance", "read only", "", 1)
+    vs.setExpression("CenterDistance", "WormPitchDiameter/2 + Module*GearTeeth/2")
+    vs.addProperty("App::PropertyLength", "WheelPitchDiameter", "read only", "", 1)
+    vs.setExpression("WheelPitchDiameter", "Module*GearTeeth")
+    vs.addProperty("App::PropertyAngle", "ArcAngle", "read only", "", 1)
+    vs.setExpression("ArcAngle", "360 * TeethInArc / GearTeeth")
+    vs.addProperty("App::PropertyAngle", "LeadAngle", "read only", "", 1)
+    vs.setExpression("LeadAngle",
+        "atan(Module*NumberOfThreads/WormPitchDiameter)")
+
     return vs
 
 
 # ============================================================================
-# RESULT
+# RESULT OBJECT
 # ============================================================================
 
-
-class GloboidWormGearV2Result:
+class GloboidWormGearResult:
     def __init__(self, obj, varset):
-        self._varset=varset; self._rebuilding=False
-        self._last_m=self._last_nt=self._last_gt=self._last_pa=None
-        self._last_wpd=self._last_sd=self._last_sl=self._last_wl=None
-        self._last_rh=self._last_cm=self._last_gh=self._last_cl=None
-        self._last_gbd=self._last_gbe=self._last_wp=None
-        self._last_bl=None
-        self._watcher=None; self._needs_rebuild=False; self.Type="GloboidWormGearV2Result"
-        obj.addProperty("App::PropertyString","VarSetName","Gear","",1).VarSetName=varset.Name
-        obj.addProperty("App::PropertyString","BodyName","Gear","").BodyName=varset.Name.replace("_values","_Body",1)
-        obj.addProperty("App::PropertyString","Version","read only","",1).Version=version
-        obj.addProperty("App::PropertyString","Status","read only","",1)
-        obj.Proxy=self; self.Object=obj; obj.Status="Not yet generated"
+        self._varset = varset
+        self._rebuilding = False
+        self._last = None            # snapshot tuple of watched params
+        self._watcher = None
+        self._needs_rebuild = False
+        self._debounce_timer = None
+        self.Type = "GloboidWormGearResult"
+        obj.addProperty("App::PropertyString", "VarSetName", "Gear", "", 1).VarSetName = varset.Name
+        obj.addProperty("App::PropertyString", "Version", "read only", "", 1).Version = version
+        obj.addProperty("App::PropertyString", "Status", "read only", "")
+        obj.Proxy = self
+        self.Object = obj
+        obj.Status = "Not yet generated"
         self._startWatcher(varset.Name)
 
-    def __getstate__(self): return self.Type
-    def __setstate__(self,s):
-        if s:self.Type=s
-        self._varset=None; self._rebuilding=False
-        self._last_m=self._last_nt=self._last_gt=self._last_pa=None
-        self._last_wpd=self._last_sd=self._last_sl=self._last_wl=None
-        self._last_rh=self._last_cm=self._last_gh=self._last_cl=None
-        self._last_gbd=self._last_gbe=self._last_wp=None
-        self._last_bl=None
-        self._watcher=None; self._needs_rebuild=False
+    # --- persistence --------------------------------------------------------
+    def __getstate__(self):
+        return self.Type
 
-    def onDocumentRestored(self,obj):
-        self.Object=obj; v=self._getVarSet()
+    def __setstate__(self, s):
+        if s:
+            self.Type = s
+        self._varset = None
+        self._rebuilding = False
+        self._last = None
+        self._watcher = None
+        self._needs_rebuild = False
+        self._debounce_timer = None
+
+    def onDocumentRestored(self, obj):
+        self.Object = obj
+        v = self._getVarSet()
         if v:
-            for a in ["Module","WormPitchDiameter","ShaftDiameter","ShaftLength","WormLength",
-                      "GearHeight","Clearance","GearBoreDiameter","WheelPhase"]:
-                setattr(self,f"_last_{a[0].lower()+a[1:]}",float(getattr(v,a).Value))
-            self._last_nt=int(v.NumberOfThreads); self._last_gt=int(v.GearTeeth)
-            self._last_pa=float(v.PressureAngle.Value)
-            self._last_rh=bool(v.RightHanded); self._last_cm=bool(v.CreateMatingGear)
-            self._last_gbe=bool(v.GearBoreEnabled)
-            self._last_bl=float(v.Backlash) if hasattr(v,"Backlash") else 0.0
-            self._startWatcher(v.Name); obj.Status="Up to date"
+            self._last = self._snapshot(v)
+            self._startWatcher(v.Name)
+            obj.Status = "Up to date"
 
-    def _startWatcher(self,vn):
-        self._stopWatcher(); self._watcher=_VarSetWatcher(self,vn,watched=frozenset((
-            "Module","NumberOfThreads","GearTeeth","PressureAngle","WormPitchDiameter",
-            "ShaftDiameter","ShaftLength","WormLength","RightHanded","CreateMatingGear",
-            "GearHeight","Clearance","GearBoreEnabled","GearBoreDiameter","WheelPhase",
-            "BoreEnabled","KeywayEnabled","BoreDiameter","KeywayWidth","KeywayDepth","Backlash")))
+    # --- watcher / debounce (same machinery as V1) --------------------------
+    def _startWatcher(self, vn):
+        self._stopWatcher()
+        self._watcher = _VarSetWatcher(self, vn, watched=frozenset((
+            "Module", "NumberOfThreads", "GearTeeth", "TeethInArc",
+            "PressureAngle", "WormPitchDiameter", "RightHanded", "Backlash",
+            "ShaftDiameter", "ShaftLength", "BoreEnabled", "BoreDiameter",
+            "Samples", "CreateMatingGear", "GearHeight", "WheelPhase",
+            "Clearance", "WheelBoreEnabled", "WheelBoreDiameter")))
         App.addDocumentObserver(self._watcher)
 
     def _stopWatcher(self):
         if self._watcher:
-            try: App.removeDocumentObserver(self._watcher)
-            except: pass
-            self._watcher=None
+            try:
+                App.removeDocumentObserver(self._watcher)
+            except Exception:
+                pass
+            self._watcher = None
 
     def _getVarSet(self):
         if self._varset is None:
-            try: self._varset=self.Object.Document.getObject(self.Object.VarSetName)
-            except: pass
+            try:
+                self._varset = self.Object.Document.getObject(self.Object.VarSetName)
+            except Exception:
+                pass
         return self._varset
 
-    def execute(self,obj): pass
+    def execute(self, obj):
+        pass
+
+    def _snapshot(self, v):
+        return (float(v.Module.Value), int(v.NumberOfThreads), int(v.GearTeeth),
+                int(v.TeethInArc), float(v.PressureAngle.Value),
+                float(v.WormPitchDiameter.Value), bool(v.RightHanded),
+                float(v.Backlash), float(v.ShaftDiameter.Value),
+                float(v.ShaftLength.Value), bool(v.BoreEnabled),
+                float(v.BoreDiameter.Value), int(v.Samples),
+                bool(v.CreateMatingGear), float(v.GearHeight.Value),
+                float(v.WheelPhase.Value), float(v.Clearance),
+                bool(v.WheelBoreEnabled), float(v.WheelBoreDiameter.Value))
 
     def _values_changed(self):
         try:
-            v=self._getVarSet()
-            if not v or self._last_m is None: return v is not None
-            E=1e-9
-            return (abs(float(v.Module.Value)-self._last_m)>E or
-                    int(v.NumberOfThreads)!=self._last_nt or
-                    int(v.GearTeeth)!=self._last_gt or
-                    abs(float(v.PressureAngle.Value)-self._last_pa)>E or
-                    abs(float(v.WormPitchDiameter.Value)-self._last_wpd)>E or
-                    abs(float(v.ShaftDiameter.Value)-self._last_sd)>E or
-                    abs(float(v.ShaftLength.Value)-self._last_sl)>E or
-                    abs(float(v.WormLength.Value)-self._last_wl)>E or
-                    bool(v.RightHanded)!=self._last_rh or
-                    bool(v.CreateMatingGear)!=self._last_cm or
-                    abs(float(v.GearHeight.Value)-self._last_gh)>E or
-                    abs(float(v.Clearance)-self._last_cl)>E or
-                    bool(v.GearBoreEnabled)!=self._last_gbe or
-                    abs(float(v.GearBoreDiameter.Value)-self._last_gbd)>E or
-                    abs(float(v.WheelPhase.Value)-self._last_wp)>E or
-                    (hasattr(v,"Backlash") and abs(float(v.Backlash)-self._last_bl)>E))
+            v = self._getVarSet()
+            if not v:
+                return False
+            if self._last is None:
+                return True
+            return self._snapshot(v) != self._last
         except ReferenceError:
-            self._varset=None; return False
+            self._varset = None
+            return False
+
+    _DEBOUNCE_MS = 800
+
+    def _arm_timer(self):
+        if self._debounce_timer is None:
+            self._debounce_timer = QtCore.QTimer()
+            self._debounce_timer.setSingleShot(True)
+            self._debounce_timer.timeout.connect(self._deferred_rebuild)
+        self._debounce_timer.start(self._DEBOUNCE_MS)
 
     def _set_needs_rebuild(self):
-        if self._rebuilding or not self._values_changed(): return
-        self._needs_rebuild=True
-        try: self.Object.Status="Regenerating..."
-        except: pass
-        QtCore.QTimer.singleShot(0,self._deferred_rebuild)
+        if self._rebuilding or not self._values_changed():
+            return
+        self._needs_rebuild = True
+        try:
+            self.Object.Status = "Waiting for input..."
+        except Exception:
+            pass
+        self._arm_timer()
 
     def _on_recompute_finished(self):
-        if not self._needs_rebuild or self._rebuilding: return
-        if not self._values_changed(): self._needs_rebuild=False; return
-        self._needs_rebuild=False; QtCore.QTimer.singleShot(0,self._deferred_rebuild)
+        if not self._needs_rebuild or self._rebuilding:
+            return
+        if not self._values_changed():
+            self._needs_rebuild = False
+            return
+        self._needs_rebuild = False
+        self._arm_timer()
 
     def _deferred_rebuild(self):
-        if self._rebuilding or not self._values_changed(): return
+        if self._rebuilding or not self._values_changed():
+            return
         self._rebuild()
 
-    def _rebuild(self):
-        self._rebuilding=True; vn=None
+    def force_Recompute(self):
+        self._rebuild()
+
+    # -----------------------------------------------------------------------
+    # Geometry
+    # -----------------------------------------------------------------------
+    def _build_worm_shape(self, p):
+        """Build and return the worm Part.Solid from a params dict `p`."""
+        m   = p["m"];   gt = p["gt"]; nt = p["nt"]; tia = p["tia"]
+        wpd = p["wpd"]; pa = p["pa"]; rh = p["rh"];  bl  = p["bl"]
+        sd  = p["sd"];  sl = p["sl"]; be = p["be"];  bd  = p["bd"]
+        N   = max(40, p["ns"])
+
+        refR = wpd / 2.0
+        z = gt
+        beta = 360.0 * tia / float(z)
+        r = m * z / 2.0
+        R = refR + r
+        alpha = math.radians(pa)
+        fTop = m * (math.pi / 2.0 - 2.0 * math.tan(alpha))
+        fBottom = fTop + 2.0 * m * 2.25 * math.tan(alpha)
+        fTop = max(0.10, fTop - bl)
+        fBottom = max(0.20, fBottom - bl)
+        tipR = r - m
+        rootR = r + 1.25 * m
+        fDelta1 = math.atan(fTop / 2.0 / (r - m))
+        fDelta2 = math.atan(fBottom / 2.0 / (r + 1.25 * m))
+        angleCoef = 360.0 / beta
+        hand = 1.0 if rh else -1.0
+        z_end = rootR * math.sin(math.radians(beta / 2.0))
+
+        App.Console.PrintMessage(
+            "[GloboidWorm] arc=%.2f deg  R=%.2f  tip/root@waist=%.2f/%.2f  "
+            "length~%.2f  starts=%d  N=%d\n"
+            % (beta, R, R - tipR, R - rootR, 2 * z_end, nt, N))
+
+        def vec(radius, delta, u):
+            a = u * math.pi / angleCoef + delta
+            d = R - radius * math.cos(a)
+            th = hand * u * math.pi * tia
+            return App.Vector(-d * math.cos(th), -d * math.sin(th), -radius * math.sin(a))
+
+        us = [-1.0 + 2.0 * i / N for i in range(N + 1)]
+
+        # Thread solid.  makeLoft over CLOSED quad cross-sections (one per u)
+        # gives us both fixes at once: the sections are paired explicitly so
+        # there is no parametrization skew (no crest indent), AND ThruSections
+        # returns a properly closed, correctly-oriented solid so the core
+        # fuses (the manual face-sew was producing an inside-out shell, which
+        # is why the body vanished).  ruled=True => straight transitions,
+        # matching the OTVINTA straight-flank tooth.
+        def section(u):
+            q = [vec(tipR,  -fDelta1, u),
+                 vec(rootR, -fDelta2, u),
+                 vec(rootR, +fDelta2, u),
+                 vec(tipR,  +fDelta1, u)]
+            return Part.makePolygon(q + [q[0]])
+
+        wires = [section(u) for u in us]
+
         try:
-            v=self._getVarSet()
-            if not v: return
-            vn=v.Name; bn=str(self.Object.BodyName); d=self.Object.Document
+            thread = Part.makeLoft(wires, True, True)   # solid=True, ruled=True
+        except Exception as e:
+            App.Console.PrintWarning(
+                "[GloboidWorm] makeLoft failed (%s); using ruled-surface fallback\n" % e)
 
-            self._last_m=float(v.Module.Value); self._last_nt=int(v.NumberOfThreads)
-            self._last_gt=int(v.GearTeeth); self._last_pa=float(v.PressureAngle.Value)
-            self._last_wpd=float(v.WormPitchDiameter.Value)
-            self._last_sd=float(v.ShaftDiameter.Value); self._last_sl=float(v.ShaftLength.Value)
-            self._last_wl=float(v.WormLength.Value); self._last_rh=bool(v.RightHanded)
-            self._last_cm=bool(v.CreateMatingGear); self._last_gh=float(v.GearHeight.Value)
-            self._last_cl=float(v.Clearance); self._last_gbe=bool(v.GearBoreEnabled)
-            self._last_gbd=float(v.GearBoreDiameter.Value); self._last_wp=float(v.WheelPhase.Value)
-            self._last_bl=float(v.Backlash) if hasattr(v,"Backlash") else 0.0
+            def edge(radius, delta):
+                c = Part.BSplineCurve()
+                c.interpolate([vec(radius, delta, u) for u in us])
+                return c.toShape()
 
-            if self._last_m<=0: self.Object.Status="Invalid params"; return
+            e_tt = edge(tipR,  -fDelta1)
+            e_rt = edge(rootR, -fDelta2)
+            e_rb = edge(rootR, +fDelta2)
+            e_tb = edge(tipR,  +fDelta1)
+            faces = []
+            for a_e, b_e in ((e_tt, e_rt), (e_rt, e_rb), (e_rb, e_tb), (e_tb, e_tt)):
+                faces.extend(Part.makeRuledSurface(a_e, b_e).Faces)
+
+            def cap(u):
+                p0 = vec(tipR,  -fDelta1, u)
+                p1 = vec(rootR, -fDelta2, u)
+                p2 = vec(rootR, +fDelta2, u)
+                p3 = vec(tipR,  +fDelta1, u)
+                return [Part.Face(Part.makePolygon([p0, p1, p2, p0])),
+                        Part.Face(Part.makePolygon([p0, p2, p3, p0]))]
+
+            faces += cap(us[0]) + cap(us[-1])
+            shell = Part.makeShell(faces)
+            try:
+                shell.sewShape()
+            except Exception:
+                pass
+            thread = Part.makeSolid(shell)
+
+        try:
+            thread = thread.removeSplitter()
+        except Exception:
+            pass
+        App.Console.PrintMessage(
+            "[GloboidWorm] thread valid=%s vol=%.1f\n" % (thread.isValid(), thread.Volume))
+
+        # Multi-start: nt identical threads equally spaced around Z.
+        if nt > 1:
+            combined = thread
+            for k in range(1, nt):
+                c = thread.copy()
+                c.rotate(App.Vector(0, 0, 0), App.Vector(0, 0, 1), k * 360.0 / nt)
+                combined = combined.fuse(c)
+            thread = combined
+
+        # Hourglass core: revolve the root meridian (slightly oversized so the
+        # thread root embeds for a clean fuse) about the worm axis Z.
+        M = max(40, N // 4)
+        mer = []
+        for i in range(M + 1):
+            a = math.radians(-beta / 2.0 + beta * i / M)
+            rad = (R - rootR * math.cos(a)) + 0.05
+            mer.append(App.Vector(rad, 0.0, -rootR * math.sin(a)))
+        z_hi = mer[0].z
+        z_lo = mer[-1].z
+        mer = [App.Vector(0, 0, z_hi)] + mer + [App.Vector(0, 0, z_lo)]
+        core_face = Part.Face(Part.makePolygon(mer + [mer[0]]))
+        core = core_face.revolve(App.Vector(0, 0, 0), App.Vector(0, 0, 1), 360.0)
+
+        worm = core.fuse(thread)
+
+        # Shaft stubs along Z beyond each end.
+        if sl > 1e-6 and sd > 1e-6:
+            top = Part.makeCylinder(sd / 2.0, sl, App.Vector(0, 0, z_hi), App.Vector(0, 0, 1))
+            bot = Part.makeCylinder(sd / 2.0, sl, App.Vector(0, 0, z_lo), App.Vector(0, 0, -1))
+            worm = worm.fuse([top, bot])
+
+        # Axial bore through everything.
+        if be and bd > 1e-6:
+            ztot = z_hi + sl + 2.0
+            bore = Part.makeCylinder(bd / 2.0, 2.0 * ztot,
+                                     App.Vector(0, 0, -ztot), App.Vector(0, 0, 1))
+            worm = worm.cut(bore)
+
+        try:
+            worm = worm.removeSplitter()
+        except Exception:
+            pass
+        return worm
+
+    # -----------------------------------------------------------------------
+    # Rebuild
+    # -----------------------------------------------------------------------
+    def _rebuild(self):
+        self._rebuilding = True
+        try:
+            v = self._getVarSet()
+            if not v:
+                return
+            d = self.Object.Document
+
+            snap = self._snapshot(v)
+            self._last = snap
+            (m, nt, gt, tia, pa, wpd, rh, bl, sd, sl, be, bd, ns,
+             cm, gh, wph, cl, wbe, wbd) = snap
+
+            # Cache the values the wheel builders read off self.
+            self._last_m = m; self._last_nt = nt; self._last_gt = gt
+            self._last_pa = pa; self._last_wpd = wpd; self._last_rh = rh
+            self._last_bl = bl; self._last_gh = gh; self._last_wp = wph
+            self._last_cl = cl; self._last_wbe = wbe; self._last_wbd = wbd
+
+            # --- validation -------------------------------------------------
+            beta = 360.0 * tia / float(gt) if gt else 999.0
+            problems = []
+            if m <= 0:
+                problems.append("Module must be > 0")
+            if gt < 1:
+                problems.append("GearTeeth must be >= 1")
+            if tia < 1:
+                problems.append("TeethInArc must be >= 1")
+            if not (0 < beta < 180):
+                problems.append("arc 360*TeethInArc/GearTeeth must be < 180 deg")
+            if wpd / 2.0 < 2 * m:
+                problems.append("WormPitchDiameter/2 must be >= 2*Module")
+            if nt < 1:
+                problems.append("NumberOfThreads must be >= 1")
+            if cm and gh <= 0:
+                problems.append("GearHeight must be > 0")
+            if problems:
+                self.Object.Status = "Invalid: " + "; ".join(problems)
+                App.Console.PrintError("[GloboidWorm] " + "; ".join(problems) + "\n")
+                return
 
             self._stopWatcher()
-            saved_placement=None
-            old=d.getObject(bn)
+            self.Object.Status = "Building worm..."
+            if App.GuiUp:
+                QtCore.QCoreApplication.processEvents()
+
+            # --- cleanup previous result -----------------------------------
+            old = d.getObject("GloboidWorm")
             if old:
-                saved_placement=App.Placement(old.Placement)
-                ch=list(old.Group)
-                for c in ch:
-                    for p in c.PropertiesList:
-                        try: c.setExpression(p,None)
-                        except: pass
-                for c in reversed(ch):
-                    try: d.removeObject(c.Name)
-                    except: pass
-                d.removeObject(bn)
+                try:
+                    d.removeObject(old.Name)
+                except Exception:
+                    pass
+            old_w = d.getObject("WormWheel")
+            if old_w:
+                if hasattr(old_w, "removeObjectsFromDocument"):
+                    try:
+                        old_w.removeObjectsFromDocument()
+                    except Exception:
+                        pass
+                try:
+                    d.removeObject(old_w.Name)
+                except Exception:
+                    pass
 
-            self.Object.Status="Generating..."
-            if App.GuiUp: QtCore.QCoreApplication.processEvents()
+            # --- build worm -------------------------------------------------
+            params = dict(m=m, gt=gt, nt=nt, tia=tia, wpd=wpd, pa=pa, rh=rh,
+                          bl=bl, sd=sd, sl=sl, be=be, bd=bd, ns=ns)
+            shape = self._build_worm_shape(params)
 
-            # === BUILD WORM ===
-            # The globoid worm (double-throated) has an hourglass shape that matches 
-            # the curvature of the mating gear's pitch circle.
-            m=self._last_m; nt=self._last_nt; pa=self._last_pa
-            wp_dia=self._last_wpd; s_dia=self._last_sd; s_len=self._last_sl
-            rh=self._last_rh
-            gt=self._last_gt
+            feat = d.addObject("Part::Feature", "GloboidWorm")
+            feat.Shape = shape
+            feat.Label = "GloboidWorm"
+            feat.Visibility = True
 
-            wp_r=wp_dia/2.0   # Worm pitch radius at the narrowest point (the throat)
-            gp_r=m*gt/2.0     # Mating gear pitch radius
-            cd=gp_r+wp_r       # Center distance: sum of pitch radii
-            add=m; ded=m*1.25 # Standard addendum and dedendum
-            
-            # The hourglass body is defined by an arc centered at the mating gear's axis.
-            # outer_throat_r is the radius from the worm axis to its outer tips at the throat.
-            outer_throat_r=wp_r+add
-            
-            # arc_r is the radius of the circular arc that defines the hourglass "waist".
-            # It must be centered at the gear axis (distance 'cd' away).
-            arc_r=cd-outer_throat_r
-
-            if arc_r<=0: self.Object.Status="Geometry error"; return
-
-            # arc_r = gp_r - m = cd - outer_throat_r.
-            # This is the hourglass arc radius. The spine torus uses arc_r (body surface)
-            # rather than Otvinta's gp_r (pitch surface) — see CHANGE LOG for rationale.
-
-            # Derive half_angle_rad from the user's WormLength parameter.
-            # The worm length is the chord of the hourglass arc (radius arc_r).
-            # half_angle_rad = asin(worm_length/2 / arc_r), clamped to max arc.
-            # Matches back/globoidWormGear.py:235 approach.
-            max_wl=arc_r*2.0*0.98  # max chord ~98% of diameter
-            wl=min(self._last_wl,max_wl) if self._last_wl>0 else max_wl
-            half_angle_rad=math.asin(min(wl/2.0/arc_r,1.0))
-            eff_wl=2.0*arc_r*math.sin(half_angle_rad)
-
-            body=util.readyPart(d,bn)
-
-            # STEP 1: Create the Hourglass Body (Revolution of a curved profile)
-            # We sketch on the XZ plane so the revolution around the V-axis (Z in global) 
-            # creates a vertical worm.
-            half_cyl=eff_wl/2.0+s_len # Total length including end shafts
-            sk_base=util.createSketch(body,"GloboidCylinder")
-            xz=None
-            if hasattr(body,'Origin') and body.Origin:
-                for f in body.Origin.OriginFeatures:
-                    if 'XZ' in f.Name or 'XZ' in f.Label: xz=f; break
-                if not xz and len(body.Origin.OriginFeatures)>1: xz=body.Origin.OriginFeatures[1]
-            if xz: sk_base.AttachmentSupport=[(xz,'')]; sk_base.MapMode='FlatFace'
-            else: sk_base.MapMode='Deactivated'; sk_base.Placement=App.Placement(
-                App.Vector(0,0,0),App.Rotation(App.Vector(1,0,0),90))
-
-            # WARNING: ShaftDiameter VarSet parameter is IGNORED.
-            # s_r is set to outer_throat_r instead of s_dia/2.
-            # The ShaftDiameter (default 12mm) is exposed in the UI but has no effect —
-            # the end sections are always the same diameter as the throat.
-            # This creates a cylindrical body with no necked-down shaft.
-            # Compare with back/globoidWormGear.py:252 which uses s_dia/2 for the shaft
-            # and a step outward to the thread OD.
-            s_r=outer_throat_r
-
-            # Geometric parameters for the hourglass profile sketch
-            ha=half_angle_rad; sar=-ha; ear=ha
-            hc=half_cyl
-
-            # Calculate start/end points of the waist arc
-            arc_top_y=arc_r*math.sin(ear)
-            arc_top_x=-cd+arc_r*math.cos(ear)
-            arc_bot_y=arc_r*math.sin(sar)
-            arc_bot_x=-cd+arc_r*math.cos(sar)
-
-            # Build the profile: end shafts connected to the central waist arc.
-            idx_right=0; idx_top=1; idx_tl=2; idx_arc=3; idx_bl=4; idx_bot=5
-            geo=[]
-            geo.append(Part.LineSegment(App.Vector(0,-hc,0),App.Vector(0,hc,0))) # Axis of revolution
-            geo.append(Part.LineSegment(App.Vector(0,hc,0),
-                         App.Vector(-s_r,hc,0))) # Top end shaft flat
-            geo.append(Part.LineSegment(App.Vector(-s_r,hc,0),
-                         App.Vector(arc_top_x,arc_top_y,0))) # Transition to waist
-            # The waist arc: centered at (-cd, 0), radius arc_r.
-            circ=Part.Circle(App.Vector(-cd,0,0),App.Vector(0,0,1),arc_r)
-            geo.append(Part.ArcOfCircle(circ,sar,ear))
-            geo.append(Part.LineSegment(App.Vector(arc_bot_x,arc_bot_y,0),
-                         App.Vector(-s_r,-hc,0))) # Transition from waist
-            geo.append(Part.LineSegment(App.Vector(-s_r,-hc,0),
-                         App.Vector(0,-hc,0))) # Bottom end shaft flat
-            sk_base.addGeometry(geo,False)
-
-            # Constraints to ensure a watertight profile for the revolution
-            sk_base.addConstraint(Sketcher.Constraint("Coincident",idx_right,2,idx_top,1))
-            sk_base.addConstraint(Sketcher.Constraint("Coincident",idx_top,2,idx_tl,1))
-            sk_base.addConstraint(Sketcher.Constraint("Coincident",idx_tl,2,idx_arc,2))
-            sk_base.addConstraint(Sketcher.Constraint("Coincident",idx_arc,1,idx_bl,1))
-            sk_base.addConstraint(Sketcher.Constraint("Coincident",idx_bl,2,idx_bot,1))
-            sk_base.addConstraint(Sketcher.Constraint("Coincident",idx_bot,2,idx_right,1))
-            sk_base.addConstraint(Sketcher.Constraint("Vertical",idx_right))
-            sk_base.addConstraint(Sketcher.Constraint("Horizontal",idx_top))
-            # idx_tl and idx_bl are transitions and should NOT be vertical.
-            sk_base.addConstraint(Sketcher.Constraint("Horizontal",idx_bot))
-            sk_base.addConstraint(Sketcher.Constraint("PointOnObject",idx_arc,3,-1))
-            sk_base.addConstraint(Sketcher.Constraint("DistanceY",idx_right,1,idx_right,2,2.0*hc))
-            sk_base.addConstraint(Sketcher.Constraint("Symmetric",idx_right,1,idx_right,2,-1,1))
-            sk_base.addConstraint(Sketcher.Constraint("Radius",idx_arc,arc_r))
-            sk_base.addConstraint(Sketcher.Constraint("DistanceX",idx_arc,3,idx_right,1,cd))
-            sk_base.addConstraint(Sketcher.Constraint("DistanceY",idx_arc,1,idx_arc,2,2.0*arc_top_y))
-            sk_base.addConstraint(Sketcher.Constraint("Vertical",idx_arc,1,idx_arc,2))
+            # --- build mating wheel ----------------------------------------
+            if cm:
+                self.Object.Status = "Building wheel..."
+                if App.GuiUp:
+                    QtCore.QCoreApplication.processEvents()
+                # Conjugate helix = worm lead angle (the lesson from V1:
+                # the wheel helix is NOT free, it must equal the lead angle).
+                self._twist_deg = math.degrees(math.atan(m * nt / wpd))
+                self._make_wheel_base(d)
+                self._finish_wheel(d)
 
             d.recompute()
-            if sk_base.Shape.isNull(): self.Object.Status="Sketch failed"; return
+            self.Object.Status = ("Up to date" if shape.isValid()
+                                  else "Built, but shape is invalid — check console")
+            App.Console.PrintMessage("[GloboidWorm] done (valid=%s)\n" % shape.isValid())
 
-            # Revolution creates the hourglass blank
-            rev=body.newObject("PartDesign::Revolution","HourglassBody")
-            rev.Profile=sk_base
-            rev.ReferenceAxis=(sk_base,["V_Axis"])
-            rev.Angle=360
-            body.Tip=rev
-            d.recompute()
-
-            # STEP 2: Create the Thread Grooves
-            # We use a SubtractivePipe where the spine is a spiral wrapped onto a toroid.
-            # This ensures the thread maintains constant depth relative to the hourglass surface.
-
-            # WARNING: hu_spine uses the hardcoded half_angle_rad (60°), NOT the
-            # geometry-derived value needed to cover the full body.
-            # Otvinta formula: u_half = β/2 (where β is the arc angle input).
-            # The back/globoidWormGear.py computes: hu_spine = asin(half_len/gp_r).
-            # With this hardcoded value, the thread groove only covers the arc region
-            # of the hourglass and does NOT extend into the shoulder transition zones.
-            hu_spine=half_angle_rad
-
-            # Number of thread turns = teeth in engagement arc / thread starts.
-            # Otvinta: zβ = gt * β/(2π) = gt * half_angle_rad/π (teeth in arc).
-            # For multi-start, each start covers every nt-th tooth.
-            # Old formula (eff_wl/lead) treated worm as cylinder — gave ~5 turns
-            # instead of ~6.67, producing too few grooves for the engaging teeth.
-            turns=gt*half_angle_rad/(math.pi*nt)
-            total_v=2.0*math.pi*turns
-
-            # Gap widths from Otvinta formula:
-            #   fTop    = m*(π/2 - 2*tan(α))          — narrow end (at worm surface)
-            #   fBottom = fTop + 2*(add+ded)*tan(α)    — wide end (at root)
-            # add and ded are already in mm, so no extra m factor.
-            tan_pa=math.tan(pa*math.pi/180)
-            fTop=m*(math.pi/2.0 - 2.0*tan_pa)
-            # Apply backlash: widen groove to make thread narrower
-            if self._last_bl:
-                fTop += self._last_bl
-            fBottom=fTop + 2.0*(add+ded)*tan_pa
-
-            # Spine torus at the body surface (MinorRadius = arc_r = gp_r - m).
-            # The profile is offset inward by 'add' so it cuts from the surface down to root.
-            # NOTE: Otvinta uses gp_r (pitch surface) with its 4-edge method, but the
-            # single-spine sweep works better with arc_r because the Frenet frame then
-            # tracks the body surface curvature directly.
-            torus_spine=Part.Toroid()
-            torus_spine.MajorRadius=cd
-            torus_spine.MinorRadius=arc_r
-
-            # Parametric coordinates (u, v) on the torus.
-            # u: Minor rotation (around the hourglass curve), v: Major rotation (around the worm axis).
-            us=math.pi-hu_spine; ue=math.pi+hu_spine
-            vs=math.pi-total_v/2.0; ve=math.pi+total_v/2.0
-            # WARNING: handedness may be inverted vs conventional right-hand rule.
-            # For rh=True: v increases (CCW looking from +z) while u increases (z goes + to -).
-            # This gives a thread that goes downward with CCW rotation = LEFT-handed.
-            # The back/globoidWormGear.py:326 has the same formula.
-            # If correct, the fix would be to remove the 'not' so LeftHanded triggers the swap.
-            if not rh: vs,ve=-ve+2*math.pi,-vs+2*math.pi
-
-            # Map a 2D line in (u,v) space onto the 3D torus surface to get a toroidal spiral.
-            line2d=Part.Geom2d.Line2dSegment(vec2(vs,us),vec2(ve,ue))
-            spiral_edge=line2d.toShape(torus_spine)
-            if spiral_edge.isNull(): self.Object.Status="Spiral edge null"; return
-            spiral_wire=Part.Wire([spiral_edge])
-
-            # Use a SubShapeBinder to bring the spiral spine into the PartDesign Body.
-            tmp_name=f"{bn}_TmpSpine"
-            old=d.getObject(tmp_name)
-            if old: d.removeObject(tmp_name)
-            tmp_obj=d.addObject("Part::Feature",tmp_name)
-            tmp_obj.Shape=spiral_wire; tmp_obj.Visibility=False
-            d.recompute()
-
-            binder=body.newObject("PartDesign::SubShapeBinder","ThreadSpineBinder")
-            binder.Support=[(tmp_obj,['Edge1'])]
-            binder.Relative=False
-            d.recompute()
-            d.removeObject(tmp_name)
-            d.recompute()
-
-            # Place the profile ON the body surface (no offset) with an initial
-            # rotation that aligns sketch Y with the surface normal (radially
-            # into the body).  The pipe's Frenet frame (Mode=2) then evolves
-            # from this starting orientation along the sweep.
-            R_=cd; r_=arc_r; u0=us; v0=vs
-            cu=math.cos(u0); su=math.sin(u0)
-            cv=math.cos(v0); sv=math.sin(v0)
-            Rrc=R_+r_*cu
-            start_pt=App.Vector(Rrc*cv,Rrc*sv,r_*su)
-
-            # TNB frame at the start point — initial orientation for the pipe's
-            # Frenet evolution.  Y (=groove depth) → surface normal (into body).
-            Su=App.Vector(-r_*su*cv,-r_*su*sv,r_*cu)
-            Sv=App.Vector(-Rrc*sv,Rrc*cv,0.0)
-            T=(Su*(ue-us)+Sv*(ve-vs)).normalize()
-            N_surf=Su.cross(Sv).normalize()
-            B=T.cross(N_surf).normalize()
-            N=B.cross(T)
-
-            rot_a=App.Rotation(App.Vector(0,0,1),T)
-            Yi=rot_a.multVec(App.Vector(0,1,0))
-            ang=math.atan2(T.dot(Yi.cross(N)),Yi.dot(N))
-            rot=App.Rotation(T,ang)*rot_a
-
-            # Trapezoid: narrow at surface (fTop, Y=0), wide at root
-            # (fBottom, Y = -(add+ded)).  Y extends into the body.
-            hw_n=fTop/2.0; hw_w=fBottom/2.0
-            gdepth=add+ded
-            gpts=[App.Vector(-hw_n,0,0),App.Vector(+hw_n,0,0),
-                  App.Vector(+hw_w,-gdepth,0),App.Vector(-hw_w,-gdepth,0)]
-            sk_groove=util.createSketch(body,"ThreadGrooveProfile")
-            sk_groove.MapMode="Deactivated"
-            sk_groove.Placement=App.Placement(start_pt,rot)
-            for i in range(4):
-                sk_groove.addGeometry(Part.LineSegment(gpts[i],gpts[(i+1)%4]),False)
-            for i in range(4):
-                sk_groove.addConstraint(Sketcher.Constraint("Coincident",i,2,(i+1)%4,1))
-            sk_groove.addConstraint(Sketcher.Constraint("Symmetric",0,1,0,2,-2,1))
-
-            d.recompute()
-
-            # SubtractivePipe cuts the thread groove along the spiral spine
-            spipe=body.newObject("PartDesign::SubtractivePipe","ThreadGroove")
-            spipe.Profile=sk_groove
-            spipe.Spine=(binder,['Edge1'])
-            if hasattr(spipe,'Transformation'): spipe.Transformation=0
-            if hasattr(spipe,'Mode'): spipe.Mode=2  # Frenet
-            body.Tip=spipe
-
-            # Create multiple starts if NumberOfThreads > 1
-            if nt>1:
-                polar=util.createPolar(body,spipe,sk_groove,nt,"MultiStart")
-                polar.Originals=[spipe]
-                body.Tip=polar
-
-            d.recompute()
-
-            # STEP 3: Bore & keyway
-            body_len=eff_wl+2.0*s_len+4.0
-            bd=float(v.BoreDiameter.Value)
-            if bool(v.BoreEnabled):
-                bore_sk=util.createSketch(body,"Bore")
-                ci=bore_sk.addGeometry(Part.Circle(App.Vector(0,0,0),App.Vector(0,0,1),bd/2),False)
-                bore_sk.addConstraint(Sketcher.Constraint("Coincident",ci,3,-1,1))
-                bore_sk.addConstraint(Sketcher.Constraint("Diameter",ci,bd))
-                bore_sk.Placement=App.Placement(App.Vector(0,0,body_len/2),App.Rotation())
-                bore_sk.MapMode="Deactivated"
-                bp=util.createPocket(body,bore_sk,body_len)
-                bp.Reversed=True
-                body.Tip=bp
-
-                kw=float(v.KeywayWidth.Value); kd=float(v.KeywayDepth.Value)
-                if bool(v.KeywayEnabled):
-                    tiny=0.01
-                    kws=util.createSketch(body,"Keyway")
-                    pts=[App.Vector(-0.5,-0.5,0),App.Vector(0.5,-0.5,0),
-                         App.Vector(0.5,0.5,0),App.Vector(-0.5,0.5,0)]
-                    kls=[]
-                    for i in range(4):
-                        kls.append(kws.addGeometry(Part.LineSegment(pts[i],pts[(i+1)%4]),False))
-                    for i in range(4):
-                        kws.addConstraint(Sketcher.Constraint("Coincident",kls[i],2,kls[(i+1)%4],1))
-                    kws.addConstraint(Sketcher.Constraint("Horizontal",kls[0]))
-                    kws.addConstraint(Sketcher.Constraint("Vertical",kls[1]))
-                    kws.addConstraint(Sketcher.Constraint("Horizontal",kls[2]))
-                    kws.addConstraint(Sketcher.Constraint("Vertical",kls[3]))
-                    kws.addConstraint(Sketcher.Constraint("DistanceX",kls[0],1,-1,1,-kw/2))
-                    kws.addConstraint(Sketcher.Constraint("DistanceY",kls[0],1,-1,1,bd/2-kd))
-                    c=kws.addConstraint(Sketcher.Constraint("DistanceX",kls[0],2,-1,1,kw/2))
-                    c=kws.addConstraint(Sketcher.Constraint("DistanceY",kls[1],2,-1,1,tiny))
-                    kws.setExpression(f"Constraints[{c}]",f"{bd/2+kd}")
-                    kws.Placement=App.Placement(App.Vector(0,0,body_len/2),App.Rotation())
-                    kws.MapMode="Deactivated"
-                    kp=util.createPocket(body,kws,body_len)
-                    kp.Reversed=True
-                    body.Tip=kp
-
-            # Restore worm body placement
-            if saved_placement is not None:
-                body.Placement=saved_placement
-
-            # STEP 4: Mating gear
-            saved_wheel_placement=None
-            if self._last_cm:
-                gbn=f"{bn}_WormWheel"
-                old_wheel=d.getObject(gbn)
-                if old_wheel:
-                    saved_wheel_placement=App.Placement(old_wheel.Placement)
-                self._make_wheel(d,bn,wp_r)
-                if saved_wheel_placement is not None:
-                    wb=d.getObject(gbn)
-                    if wb: wb.Placement=saved_wheel_placement
-
-            self.Object.Status="Up to date"
-            if App.GuiUp: QtCore.QCoreApplication.processEvents()
-
-        except Exception as e:
-            import traceback; App.Console.PrintError(traceback.format_exc())
+        except Exception:
+            import traceback
+            App.Console.PrintError("[GloboidWorm] rebuild failed:\n" + traceback.format_exc())
             try:
-                p=d.getObject(bn)
-                if p:
-                    for c in list(p.Group):
-                        try: d.removeObject(c.Name)
-                        except: pass
-                    d.removeObject(bn)
-            except: pass
-            self.Object.Status="Error"
+                self.Object.Status = "Error — see report view"
+            except Exception:
+                pass
         finally:
-            if vn: self._startWatcher(vn)
-            self._rebuilding=False
+            self._rebuilding = False
+            v = self._getVarSet()
+            if v:
+                self._startWatcher(v.Name)
+    # -----------------------------------------------------------------------
+    # Mating wheel  (ported from globoidWormGear.py; helix = lead angle,
+    # throat sized to the worm tip radius, no hobbing extension pads)
+    # -----------------------------------------------------------------------
+    def _make_wheel_base(self, doc):
+        """Helical gear body (teeth + dedendum) at the origin."""
+        module = self._last_m
+        num_teeth = self._last_gt
+        height = self._last_gh
+        pa = self._last_pa
+        rh = self._last_rh
+        wheel_phase = self._last_wp
+        _ps = -self._last_bl if self._last_bl != 0.0 else 0.0
+        ded = module * 1.25
+        h2 = height / 2.0
+        twist_deg = getattr(self, "_twist_deg", 0.0)
 
-    def _make_wheel(self,doc,body_name,worm_pitch_r):
-        """Generate the mating worm wheel (throated helical gear)."""
-        v=self._getVarSet()
-        if not v: return
-        module=self._last_m; num_teeth=self._last_gt; height=self._last_gh
-        pa=self._last_pa; nt=self._last_nt; rh=self._last_rh; cl=self._last_cl
-        
-        # Center Distance must match the worm's pitch radii sum exactly.
-        cd=self._last_wpd/2 + module*num_teeth/2
-        wheel_phase=self._last_wp
-        gb_dia=self._last_gbd; gb_en=self._last_gbe
+        gb = util.readyPart(doc, "WormWheel")
 
-        gbn=f"{body_name}_WormWheel"
-        gb=util.readyPart(doc,gbn)
+        if abs(twist_deg) > 1e-9:
+            beta_rad = abs(twist_deg) * math.pi / 180.0
+            mt = module / math.cos(beta_rad)
+            pitch_r_t = mt * num_teeth / 2.0
+            total_rot_deg = math.degrees(height * math.tan(beta_rad) / pitch_r_t)
+            if rh:
+                total_rot_deg = -total_rot_deg
+        else:
+            total_rot_deg = 0.0
+            mt = module
 
-        ded=module*1.25; add=module*1.0
-        gp_r=module*num_teeth/2
-        
-        # wr is the radius of the worm's pitch circle.
-        wr=worm_pitch_r
+        profile_params = {
+            "module": module, "num_teeth": num_teeth,
+            "pressure_angle": pa, "profile_shift": _ps,
+            "helix_angle": abs(twist_deg),
+        }
 
-        # STEP 1: Calculate Helical Twist
-        # A worm wheel is essentially a helical gear where the helix angle matches the worm's lead angle.
-        pitch=math.pi*module; lead=pitch*nt
-        lead_rad=math.atan(lead/(math.pi*worm_pitch_r*2))
-        twist_rad=height*math.tan(lead_rad)/gp_r
-        twist_deg=twist_rad/math.pi*180
-        if rh: twist_deg=-twist_deg
-
-        # STEP 2: Create the Helical Tooth Profile (Loft between base and twisted top)
-        # WheelPhase is applied here (rotating tooth profiles) rather than in the
-        # body Placement, so the Placement stays a clean 90° around X.
-        sk_b=util.createSketch(gb,"ToothProfileBottom")
-        xy=None
+        xy = None
         for f in gb.Origin.OriginFeatures:
-            if 'XY' in f.Name or 'XY' in f.Label: xy=f; break
+            if "XY" in f.Name or "XY" in f.Label:
+                xy = f
+                break
+
+        sk_b = util.createSketch(gb, "ToothProfileBottom")
         if xy:
-            sk_b.AttachmentSupport=[(xy,'')]; sk_b.MapMode="FlatFace"
-            sk_b.AttachmentOffset=App.Placement(App.Vector(0,0,0),App.Rotation(App.Vector(0,0,1),wheel_phase))
-        _bl=float(v.Backlash) if hasattr(v,"Backlash") else 0.0
-        _ps=-_bl if _bl!=0.0 else 0.0
-        gearMath.generateToothProfile(sk_b,{"module":module,"num_teeth":num_teeth,
-            "pressure_angle":pa,"profile_shift":_ps})
+            sk_b.AttachmentSupport = [(xy, "")]
+            sk_b.MapMode = "FlatFace"
+            sk_b.AttachmentOffset = App.Placement(
+                App.Vector(0, 0, -h2),
+                App.Rotation(App.Vector(0, 0, 1), wheel_phase))
+        gearMath.generateHelicalGearProfile(sk_b, profile_params)
 
-        sk_t=util.createSketch(gb,"ToothProfileTop")
+        sk_t = util.createSketch(gb, "ToothProfileTop")
         if xy:
-            sk_t.AttachmentSupport=[(xy,'')]; sk_t.MapMode="FlatFace"
-            sk_t.AttachmentOffset=App.Placement(App.Vector(0,0,height),App.Rotation(App.Vector(0,0,1),twist_deg+wheel_phase))
-        gearMath.generateToothProfile(sk_t,{"module":module,"num_teeth":num_teeth,
-            "pressure_angle":pa,"profile_shift":_ps})
+            sk_t.AttachmentSupport = [(xy, "")]
+            sk_t.MapMode = "FlatFace"
+            sk_t.AttachmentOffset = App.Placement(
+                App.Vector(0, 0, h2),
+                App.Rotation(App.Vector(0, 0, 1), total_rot_deg + wheel_phase))
+        gearMath.generateHelicalGearProfile(sk_t, profile_params)
 
-        loft=gb.newObject("PartDesign::AdditiveLoft","HelicalTooth")
-        loft.Profile=sk_b; loft.Sections=[sk_t]; loft.Ruled=True
-        gb.Tip=loft
+        App.Console.PrintMessage(
+            "[GloboidWorm] wheel helix=%.2f deg (=lead), sketch rot=%.3f deg\n"
+            % (twist_deg, total_rot_deg))
 
-        # STEP 3: Pattern the Teeth
-        polar=util.createPolar(gb,loft,sk_b,num_teeth,"Teeth")
-        polar.Originals=[loft]
-        gb.Tip=polar
+        loft = gb.newObject("PartDesign::AdditiveLoft", "ToothLoft")
+        loft.Profile = sk_b
+        loft.Sections = [sk_t]
+        loft.Ruled = True
+        gb.Tip = loft
 
-        # STEP 4: Add the Gear Body (Dedendum Cylinder)
-        df=(gp_r-ded)*2
-        ds=util.createSketch(gb,"DedendumCircle")
-        ci=ds.addGeometry(Part.Circle(App.Vector(0,0,0),App.Vector(0,0,1),df/2),False)
-        ds.addConstraint(Sketcher.Constraint("Diameter",ci,df))
-        dp=util.createPad(gb,ds,height,"DedendumPad")
-        gb.Tip=dp
+        polar = util.createPolar(gb, loft, sk_b, num_teeth, "Teeth")
+        polar.Originals = [loft]
+        gb.Tip = polar
+
+        gp_r_t = mt * num_teeth / 2.0
+        df = (gp_r_t - ded) * 2
+        ds = util.createSketch(gb, "DedendumCircle")
+        ci = ds.addGeometry(
+            Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), df / 2), False)
+        ds.addConstraint(Sketcher.Constraint("Diameter", ci, df))
+        dp = util.createPad(gb, ds, height, "DedendumPad")
+        dp.SideType = 2  # symmetric about midplane
+        gb.Tip = dp
 
         doc.recompute()
 
-        # STEP 5: Carve the Throat (Concave waist matching the worm)
-        # The cutting circle is centered at the worm axis (distance cd from gear center)
-        # with radius = worm outer radius + clearance. Full 360° revolution creates
-        # a smooth concavity all around the wheel, shortening teeth in the meshing zone.
-        sk_th=gb.newObject("Sketcher::SketchObject","ThroatCutSketch")
-        xz=None
+    def _finish_wheel(self, doc):
+        """Throat groove (sized to clear the worm tips), bore, placement."""
+        module = self._last_m
+        num_teeth = self._last_gt
+        height = self._last_gh
+        cl = self._last_cl
+        add = module
+        ded = module * 1.25
+        cd = self._last_wpd / 2.0 + module * num_teeth / 2.0
+
+        gb = doc.getObject("WormWheel")
+        if not gb:
+            return
+
+        # Throat groove: relieve only the TOP of the wheel teeth (the
+        # addendum band) so the teeth stay full and the worm body nests
+        # against them.  The groove radius follows the worm PITCH cylinder
+        # (wpd/2); using the worm TIP radius cut ~3 mm deeper and shaved the
+        # teeth down to stubs.
+        worm_pitch_r = self._last_wpd / 2.0
+        cut_r = worm_pitch_r + module * cl
+        groove_pos = -cd
+
+        sk_th = gb.newObject("Sketcher::SketchObject", "ThroatCutSketch")
+        xz = None
         for f in gb.Origin.OriginFeatures:
-            if 'XZ' in f.Name or 'XZ' in f.Label: xz=f; break
+            if "XZ" in f.Name or "XZ" in f.Label:
+                xz = f
+                break
         if xz:
-            sk_th.AttachmentSupport=[(xz,'')]; sk_th.MapMode="ObjectXY"
-            sk_th.AttachmentOffset=App.Placement(App.Vector(0,height/2,0),App.Rotation())
+            sk_th.AttachmentSupport = [(xz, "")]
+            sk_th.MapMode = "ObjectXY"
+            sk_th.AttachmentOffset = App.Placement(App.Vector(0, 0, 0), App.Rotation())
+        ci = sk_th.addGeometry(
+            Part.Circle(App.Vector(groove_pos, 0, 0), App.Vector(0, 0, 1), cut_r), False)
+        sk_th.addConstraint(Sketcher.Constraint("PointOnObject", ci, 3, -1))
+        sk_th.addConstraint(Sketcher.Constraint("Radius", ci, cut_r))
+        sk_th.addConstraint(Sketcher.Constraint("DistanceX", ci, 3, -1, 1, groove_pos))
+        sk_th.Visibility = False
 
-        # cut_r = worm pitch radius + clearance (NOT outer radius).
-        # The wheel teeth extend beyond the pitch circle into the worm thread
-        # grooves, so the throat groove only clears the worm's pitch surface.
-        # Old formula (wr+add+module*cl) included the worm addendum, which made
-        # the closest approach (cd-cut_r) fall below the gear root circle,
-        # destroying entire teeth at the meshing center.
-        cut_r=wr+module*cl
-        groove_pos=-cd
+        groove = gb.newObject("PartDesign::Groove", "ThroatGroove")
+        groove.Profile = sk_th
+        groove.ReferenceAxis = (sk_th, ["V_Axis"])
+        groove.Angle = 360.0
+        gb.Tip = groove
 
-        ci=sk_th.addGeometry(Part.Circle(App.Vector(groove_pos,0,0),App.Vector(0,0,1),cut_r),False)
-        sk_th.addConstraint(Sketcher.Constraint("PointOnObject",ci,3,-1))
-        sk_th.addConstraint(Sketcher.Constraint("Radius",ci,cut_r))
-        sk_th.addConstraint(Sketcher.Constraint("DistanceX",ci,3,-1,1,groove_pos))
-        sk_th.Visibility=False
-
-        groove=gb.newObject("PartDesign::Groove","ThroatGroove")
-        groove.Profile=sk_th; groove.ReferenceAxis=(sk_th,["V_Axis"])
-        groove.Angle=360.0
-        gb.Tip=groove
-
-        doc.recompute()
-
-        # STEP 6: Bore
-        if gb_en:
-            gbs=util.createSketch(gb,"Bore")
-            gci=gbs.addGeometry(Part.Circle(App.Vector(0,0,0),App.Vector(0,0,1),gb_dia/2),False)
-            gbs.addConstraint(Sketcher.Constraint("Coincident",gci,3,-1,1))
-            gbs.addConstraint(Sketcher.Constraint("Diameter",gci,gb_dia))
-            gbp=util.createPocket(gb,gbs,height+10,"Bore")
-            gbp.Reversed=True
-            gb.Tip=gbp
+        if self._last_wbe:
+            wbd = self._last_wbd
+            gbs = util.createSketch(gb, "WheelBore")
+            gci = gbs.addGeometry(
+                Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), wbd / 2), False)
+            gbs.addConstraint(Sketcher.Constraint("Coincident", gci, 3, -1, 1))
+            gbs.addConstraint(Sketcher.Constraint("Diameter", gci, wbd))
+            gbp = util.createPocket(gb, gbs, height + 10, "WheelBore")
+            gbp.Type = 1  # Through All
+            gbp.Midplane = True
+            gb.Tip = gbp
 
         doc.recompute()
 
-        # STEP 7: Final Placement
-        # Tilt 90° around X so gear axis (local Z) becomes global Y.
-        # WheelPhase is applied to the tooth profile sketches (STEP 2), not here,
-        # so the Placement is a clean 90° / (1,0,0).
-        r_align=App.Rotation(App.Vector(1,0,0),90)
-
-        # Standard tip clearance = ded - add = 0.25*module.
-        # Without this, wheel tooth tips are only 0.5mm from worm root —
-        # not enough given the straight-loft teeth vs curved worm groove.
-        tip_clearance=ded-add  # 0.25 * module
-        place_cd=cd+tip_clearance
-
-        # Shift by +height/2 in Y because the 90° X-tilt maps local Z to global Y.
-        gb.Placement=App.Placement(App.Vector(place_cd,height/2,0),r_align)
-
-    def force_Recompute(self): self._rebuild()
+        # Place beside the worm (worm axis = Z at origin): tilt 90 deg about X
+        # so the wheel axis is horizontal, offset to the center distance.
+        r_align = App.Rotation(App.Vector(1, 0, 0), 90)
+        tip_clearance = ded - add  # 0.25 * module
+        place_cd = cd + tip_clearance
+        gb.Placement = App.Placement(App.Vector(place_cd, 0, 0), r_align)
+        gb.Visibility = True
 
 
 # ============================================================================
 # COMMAND
 # ============================================================================
 
-
-class GloboidWormGearV2Command:
+class GloboidWormGearCommand:
     def GetResources(self):
-        return {"Pixmap":mainIcon,"MenuText":"Create Globoid Worm Gear V2",
-                "ToolTip":"Create globoid worm gear (clean PartDesign-only builder)"}
+        return {"Pixmap": mainIcon,
+                "MenuText": "Create Globoid Worm Gear",
+                "ToolTip": "Create globoid worm (direct toroidal-spiral surface)"}
 
     def Activated(self):
-        if not App.ActiveDocument: App.newDocument()
-        doc=App.ActiveDocument
-        base="GloboidWormV2_values"; un=base; c=1
-        while doc.getObject(un): un=f"{base}{c:03d}"; c+=1
-        vs=createGloboidWormGearV2VarSet(doc,un)
-        gn="Regenerate"; c=1
-        while doc.getObject(gn): gn=f"Regenerate{c:03d}"; c+=1
-        go=doc.addObject("Part::FeaturePython",gn)
-        GloboidWormGearV2Result(go,vs)
-        ViewProviderGearResult(go.ViewObject,mainIcon)
+        if not App.ActiveDocument:
+            App.newDocument()
+        doc = App.ActiveDocument
+        base = "GloboidWorm_values"; un = base; c = 1
+        while doc.getObject(un):
+            un = f"{base}{c:03d}"; c += 1
+        vs = createGloboidWormGearVarSet(doc, un)
+        gn = "Regenerate"; c = 1
+        while doc.getObject(gn):
+            gn = f"Regenerate{c:03d}"; c += 1
+        go = doc.addObject("Part::FeaturePython", gn)
+        GloboidWormGearResult(go, vs)
+        ViewProviderGearResult(go.ViewObject, mainIcon)
         go.Proxy.force_Recompute()
         FreeCADGui.SendMsgToActiveView("ViewFit")
         FreeCADGui.ActiveDocument.ActiveView.viewFront()
 
-    def IsActive(self): return True
+    def IsActive(self):
+        return True
 
 
-try:
-    FreeCADGui.addCommand("GloboidWormGearV2Command",GloboidWormGearV2Command())
-except Exception:
-    pass
+FreeCADGui.addCommand("GloboidWormGearCommand", GloboidWormGearCommand())
