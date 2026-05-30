@@ -644,7 +644,7 @@ class GloboidWormGearResult:
             gbs.addConstraint(Sketcher.Constraint("Diameter", gci, wbd))
             gbp = util.createPocket(gb, gbs, height + 10, "WheelBore")
             gbp.Type = 1  # Through All
-            gbp.Midplane = True
+            gbp.SideType = 2  # Symmetric (replaces deprecated Midplane)
             gb.Tip = gbp
 
         doc.recompute()
