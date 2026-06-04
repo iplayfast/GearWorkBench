@@ -137,10 +137,24 @@ def _generateToothProfilePoints(module, num_teeth, pressure_angle_deg=20.0, prof
 
         right_flank.append(App.Vector(x_rot, y_rot - r_pitch, 0.0))
 
+    # The involute only exists from the base circle (rb) outward, so the loop
+    # above leaves each flank bottoming out at the base circle.  The root
+    # circle (rf) is below that.  Extend the flank radially inward from its
+    # base-circle point down to the root depth, so the flank meets the root
+    # section at the SAME radius.  Without this the bridging segments cross
+    # under every tooth and the padded outline self-intersects.
+    if right_flank and rf < start_radius - 1e-9:
+        base_pt = right_flank[0]
+        cx = base_pt.x
+        cy = base_pt.y + r_pitch            # vector from gear centre to point
+        r0 = math.hypot(cx, cy)
+        if r0 > 1e-9:
+            s = rf / r0
+            right_flank.insert(0, App.Vector(cx * s, cy * s - r_pitch, 0.0))
+
     left_flank = [App.Vector(-p.x, p.y, 0.0) for p in reversed(right_flank)]
 
     return right_flank, left_flank
-
 
 def _arc_to_theta(target_arc, theta_samples, arc_samples):
     """Interpolate theta from arc-length position using sampled data."""
@@ -214,6 +228,14 @@ def generateToothedProfile(parameters):
     total_arc = arc_samples[-1]
     tooth_spacing = total_arc / num_teeth
 
+    needed = num_teeth * math.pi * module
+    if needed > total_arc * 1.001:
+        raise gearMath.GearParameterError(
+            "Teeth do not fit: %d teeth at module %.2f need %.1f mm of pitch "
+            "perimeter, but the pitch curve is only %.1f mm. Reduce the tooth "
+            "count or module, or enlarge the curve."
+            % (num_teeth, module, needed, total_arc))
+
     outline = []
 
     for k in range(num_teeth):
@@ -232,25 +254,35 @@ def generateToothedProfile(parameters):
 
         N = App.Vector(math.cos(theta_k), math.sin(theta_k), 0.0)
 
-        for pt in right_flank:
+        # Walk the tooth in the same direction the roots advance (see
+        # generateControlPointProfile): up the trailing (-T) flank, over the
+        # tip, down the leading (+T) flank.
+        for pt in reversed(left_flank):
             outline.append(P + T * pt.x + N * pt.y)
 
-        tip_right = right_flank[-1]
         tip_left = left_flank[0]
+        tip_right = right_flank[-1]
         num_tip = 3
         for i in range(1, num_tip + 1):
             t = i / num_tip
-            mx = tip_right.x + t * (tip_left.x - tip_right.x)
-            my = tip_right.y + t * (tip_left.y - tip_right.y)
+            mx = tip_left.x + t * (tip_right.x - tip_left.x)
+            my = tip_left.y + t * (tip_right.y - tip_left.y)
             outline.append(P + T * mx + N * my)
 
-        for pt in left_flank:
+        for pt in reversed(right_flank):
             outline.append(P + T * pt.x + N * pt.y)
 
+        # Root fills only the gap between adjacent teeth (see
+        # generateControlPointProfile).  w = tooth tangential half-width.
+        w = max(abs(p.x) for p in right_flank)
+        gap = tooth_spacing - 2.0 * w
+        if gap < tooth_spacing * 0.05:
+            w = tooth_spacing * 0.475
+            gap = tooth_spacing - 2.0 * w
         n_root = 10
         for i in range(1, n_root + 1):
             t = i / (n_root + 1)
-            arc_pos = target_arc + t * tooth_spacing
+            arc_pos = target_arc + w + t * gap
             if abs(arc_pos - total_arc) < 1e-12:
                 arc_pos = 0.0
 
@@ -266,6 +298,55 @@ def generateToothedProfile(parameters):
             ))
 
     return outline
+
+
+class _PeriodicSpline:
+    """Closed (periodic) interpolating spline through control points.
+
+    Exposes only the slice of the Part.BSplineCurve interface that the
+    control-point profile sampler uses: FirstParameter, LastParameter and
+    value(u).  Parameter u runs 0..n (n = number of control points) and wraps
+    periodically, so the curve is closed by construction.
+
+    Implemented in pure Python (uniform periodic Catmull-Rom) because OCCT's
+    BSplineCurve.interpolate() raises Standard_ConstructionError for periodic
+    interpolation in some builds.  Since this curve is only sampled to trace
+    the pitch line (never turned into geometry), an OCCT curve is unnecessary.
+    """
+
+    def __init__(self, pts):
+        self.pts = list(pts)
+        self.n = len(self.pts)
+
+    @property
+    def FirstParameter(self):
+        return 0.0
+
+    @property
+    def LastParameter(self):
+        return float(self.n)
+
+    def value(self, u):
+        n = self.n
+        u = u % n
+        i = int(math.floor(u))
+        f = u - i
+        p0 = self.pts[(i - 1) % n]
+        p1 = self.pts[i % n]
+        p2 = self.pts[(i + 1) % n]
+        p3 = self.pts[(i + 2) % n]
+        f2 = f * f
+        f3 = f2 * f
+        # Catmull-Rom basis (tension 0.5)
+        x = 0.5 * (2 * p1.x
+                   + (-p0.x + p2.x) * f
+                   + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * f2
+                   + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * f3)
+        y = 0.5 * (2 * p1.y
+                   + (-p0.y + p2.y) * f
+                   + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * f2
+                   + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * f3)
+        return App.Vector(x, y, 0.0)
 
 
 def generateControlPointProfile(parameters):
@@ -304,12 +385,19 @@ def generateControlPointProfile(parameters):
             0.0
         ))
 
-    # Close the loop by adding first point at the end
-    closed_pts = pts + [pts[0]]
+    # A closed pitch curve is a PERIODIC B-spline through the distinct control
+    # points.  (Do NOT duplicate the first point onto the end and ask for a
+    # non-periodic curve — OCCT rejects an open curve whose ends coincide with
+    # Standard_ConstructionError.)  This curve is only sampled below, never
+    # padded, so periodic is safe here.
+    if len(pts) < 3:
+        raise gearMath.GearParameterError(
+            "Control-point profile needs at least 3 points (PointCount >= 3)")
 
-    # Create non-periodic B-spline through the closed point set
-    bspline = Part.BSplineCurve()
-    bspline.interpolate(closed_pts, False)
+    # Closed pitch curve through the control points.  Pure-Python periodic
+    # spline (see _PeriodicSpline) instead of Part.BSplineCurve.interpolate,
+    # which raises Standard_ConstructionError for periodic interpolation here.
+    bspline = _PeriodicSpline(pts)
 
     u_start = bspline.FirstParameter
     u_end = bspline.LastParameter
@@ -338,6 +426,14 @@ def generateControlPointProfile(parameters):
 
     total_arc = arc_samples[-1]
     tooth_spacing = total_arc / num_teeth
+
+    needed = num_teeth * math.pi * module
+    if needed > total_arc * 1.001:
+        raise gearMath.GearParameterError(
+            "Teeth do not fit: %d teeth at module %.2f need %.1f mm of pitch "
+            "perimeter, but the pitch curve is only %.1f mm. Reduce the tooth "
+            "count or module, or enlarge the curve."
+            % (num_teeth, module, needed, total_arc))
 
     # Centroid of control points for outward normal determination
     centroid = App.Vector(0, 0, 0)
@@ -376,29 +472,44 @@ def generateControlPointProfile(parameters):
         if N.dot(P - centroid) < 0:
             N = -N
 
-        # Right flank
-        for pt in right_flank:
+        # Walk the tooth in the SAME direction the root sections advance
+        # (increasing arc).  left_flank is the trailing (-T) side and is stored
+        # tip->root, so reverse it to climb root->tip; right_flank is the
+        # leading (+T) side stored root->tip, so reverse it to descend tip->root.
+        # Going up one side and down the other in arc order keeps the outline
+        # monotonic and non-self-intersecting.
+
+        # Up the trailing (-T) flank: root -> tip
+        for pt in reversed(left_flank):
             outline.append(P + T * pt.x + N * pt.y)
 
-        # Tooth tip (arc across top of tooth)
-        tip_right = right_flank[-1]
+        # Tooth tip (arc across top): trailing tip -> leading tip
         tip_left = left_flank[0]
+        tip_right = right_flank[-1]
         num_tip = 3
         for i in range(1, num_tip + 1):
             t = i / num_tip
-            mx = tip_right.x + t * (tip_left.x - tip_right.x)
-            my = tip_right.y + t * (tip_left.y - tip_right.y)
+            mx = tip_left.x + t * (tip_right.x - tip_left.x)
+            my = tip_left.y + t * (tip_right.y - tip_left.y)
             outline.append(P + T * mx + N * my)
 
-        # Left flank
-        for pt in left_flank:
+        # Down the leading (+T) flank: tip -> root
+        for pt in reversed(right_flank):
             outline.append(P + T * pt.x + N * pt.y)
 
-        # Root section between this tooth and the next
+        # Root section fills only the GAP between this tooth's leading flank
+        # and the next tooth's trailing flank.  Spanning the full tooth_spacing
+        # (as if teeth had zero width) makes the root lap into the next tooth
+        # and the outline self-intersects.  w = tooth tangential half-width.
+        w = max(abs(p.x) for p in right_flank)
+        gap = tooth_spacing - 2.0 * w
+        if gap < tooth_spacing * 0.05:        # teeth nearly touch
+            w = tooth_spacing * 0.475
+            gap = tooth_spacing - 2.0 * w
         n_root = 10
         for i in range(1, n_root + 1):
             t = i / (n_root + 1)
-            arc_pos = target_arc + t * tooth_spacing
+            arc_pos = target_arc + w + t * gap
             if abs(arc_pos - total_arc) < 1e-12:
                 arc_pos = 0.0
 
@@ -444,17 +555,17 @@ def generateNonCircularGearPart(doc, parameters):
 def createNonCircularGearVarSet(doc, name):
     vs = doc.addObject("App::VarSet", name)
     vs.addProperty("App::PropertyString","Version","read only","",1).Version = version
-    vs.addProperty("App::PropertyInteger","PointCount","Profile","Number of control points (1-5)").PointCount = 3
-    vs.addProperty("App::PropertyLength","P1_X","Profile","Point 1 X").P1_X = 15.0
-    vs.addProperty("App::PropertyLength","P1_Y","Profile","Point 1 Y").P1_Y = 0.0
-    vs.addProperty("App::PropertyLength","P2_X","Profile","Point 2 X").P2_X = 0.0
-    vs.addProperty("App::PropertyLength","P2_Y","Profile","Point 2 Y").P2_Y = 12.0
-    vs.addProperty("App::PropertyLength","P3_X","Profile","Point 3 X").P3_X = -15.0
-    vs.addProperty("App::PropertyLength","P3_Y","Profile","Point 3 Y").P3_Y = 0.0
-    vs.addProperty("App::PropertyLength","P4_X","Profile","Point 4 X").P4_X = 0.0
-    vs.addProperty("App::PropertyLength","P4_Y","Profile","Point 4 Y").P4_Y = -12.0
-    vs.addProperty("App::PropertyLength","P5_X","Profile","Point 5 X").P5_X = 0.0
-    vs.addProperty("App::PropertyLength","P5_Y","Profile","Point 5 Y").P5_Y = 0.0
+    vs.addProperty("App::PropertyInteger","PointCount","Profile","Number of control points (1-5)").PointCount = 4
+    vs.addProperty("App::PropertyDistance","P1_X","Profile","Point 1 X").P1_X = 15.0
+    vs.addProperty("App::PropertyDistance","P1_Y","Profile","Point 1 Y").P1_Y = 0.0
+    vs.addProperty("App::PropertyDistance","P2_X","Profile","Point 2 X").P2_X = 0.0
+    vs.addProperty("App::PropertyDistance","P2_Y","Profile","Point 2 Y").P2_Y = 12.0
+    vs.addProperty("App::PropertyDistance","P3_X","Profile","Point 3 X").P3_X = -15.0
+    vs.addProperty("App::PropertyDistance","P3_Y","Profile","Point 3 Y").P3_Y = 0.0
+    vs.addProperty("App::PropertyDistance","P4_X","Profile","Point 4 X").P4_X = 0.0
+    vs.addProperty("App::PropertyDistance","P4_Y","Profile","Point 4 Y").P4_Y = -12.0
+    vs.addProperty("App::PropertyDistance","P5_X","Profile","Point 5 X").P5_X = 0.0
+    vs.addProperty("App::PropertyDistance","P5_Y","Profile","Point 5 Y").P5_Y = 0.0
     vs.addProperty("App::PropertyInteger","NumberOfLobes","NonCircular","Number of lobes").NumberOfLobes = 2
     vs.addProperty("App::PropertyLength","MajorRadius","NonCircular","Major radius").MajorRadius = 15.0
     vs.addProperty("App::PropertyLength","MinorRadius","NonCircular","Minor radius").MinorRadius = 10.0
@@ -618,31 +729,23 @@ class NonCircularGearResult:
                 "minor_radius":self._last_mnr,"height":self._last_h,
                 "module":self._last_mod,"num_teeth":self._last_nt,
                 "pressure_angle":20.0,"profile_shift":0.0,
-                "bore_type":"none","bore_diameter":float(v.BoreDiameter.Value),
+                "bore_type":("circular" if (bool(v.BoreEnabled) and float(v.BoreDiameter.Value)>0) else "none"),
+                "bore_diameter":float(v.BoreDiameter.Value),
                 "keyway_width":float(v.KeywayWidth.Value),
                 "keyway_depth":float(v.KeywayDepth.Value),"body_name":bn,
+                "varset_name":vn,
             }
-            use_control = self._last_pc is not None and self._last_pc > 0
-            if use_control:
-                lobe_centers = []
-                for i in range(self._last_pc):
-                    lobe_centers.append((
-                        getattr(self, f"_last_p{i+1}x", 0.0) or 0.0,
-                        getattr(self, f"_last_p{i+1}y", 0.0) or 0.0,
-                    ))
-                genericNonCircular.compositeNonCircular(d, {
-                    "module": self._last_mod,
-                    "num_teeth": self._last_nt,
-                    "pressure_angle": 20.0,
-                    "height": self._last_h,
-                    "body_name": bn,
-                    "lobe_centers": lobe_centers,
-                    "bore_type": "circular" if float(v.BoreDiameter.Value) > 0 else "none",
-                    "bore_diameter": float(v.BoreDiameter.Value),
-                    "keyway_width": float(v.KeywayWidth.Value),
-                    "keyway_depth": float(v.KeywayDepth.Value),
-                })
-                d.recompute()
+            # Control-point pitch-curve mode: supply point_count + pN_x/pN_y so
+            # generateNonCircularGearPart dispatches to generateControlPointProfile.
+            # (These are the keys that function actually reads.)
+            if self._last_pc is not None and self._last_pc > 0:
+                params["point_count"] = self._last_pc
+                for i in range(1, 6):
+                    params[f"p{i}_x"] = getattr(self, f"_last_p{i}x", 0.0) or 0.0
+                    params[f"p{i}_y"] = getattr(self, f"_last_p{i}y", 0.0) or 0.0
+
+            generateNonCircularGearPart(d, params)
+            d.recompute()
             if saved_placement:
                 nb=d.getObject(bn)
                 if nb: nb.Placement=saved_placement
