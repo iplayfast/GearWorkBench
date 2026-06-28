@@ -52,11 +52,11 @@ Bores (circular, square, hex, DIN 6885 keyway) are handled in `util.py` and shar
 
 ```bash
 # Linux / macOS
-cd ~/.local/share/FreeCAD/Mod
+cd ~/.local/share/FreeCAD/<version>/Mod
 git clone https://github.com/iplayfast/GearWorkbench.git
 
 # Windows
-cd %APPDATA%\FreeCAD\Mod
+cd %APPDATA%\FreeCAD\<version>\Mod
 git clone https://github.com/iplayfast/GearWorkbench.git
 ```
 
