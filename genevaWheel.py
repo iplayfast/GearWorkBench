@@ -420,6 +420,9 @@ class GenevaWheelResult:
                 "num_slots": self._last_ns, "crank_radius": self._last_cr,
                 "pin_radius": self._last_pr, "tolerance": self._last_tol,
             })
+            v.WheelRadius = geo["b"]
+            v.CenterDistance = geo["c"]
+            v.SlotCenterWidth = geo["s"]
             if crank_body and crank_bn in saved_placements:
                 crank_body.Placement = saved_placements[crank_bn]
             if wheel_body:

@@ -25,9 +25,21 @@ smWB_icons_path = os.path.join(smWBpath, "icons")
 def findVarSetForBody(doc, body):
     """Find the VarSet linked to a Body via a Regenerate/Result FeaturePython object."""
     for obj in doc.Objects:
-        if (hasattr(obj, "BodyName") and hasattr(obj, "VarSetName")
-                and str(obj.BodyName) == body.Name):
-            vs = doc.getObject(str(obj.VarSetName))
+        if not hasattr(obj, "VarSetName"):
+            continue
+        vs_name = str(obj.VarSetName)
+        # Standard gear: single BodyName link
+        if hasattr(obj, "BodyName") and str(obj.BodyName) == body.Name:
+            vs = doc.getObject(vs_name)
+            if vs is not None:
+                return vs
+        # Geneva wheel: separate WheelBodyName / CrankBodyName links
+        if hasattr(obj, "WheelBodyName") and str(obj.WheelBodyName) == body.Name:
+            vs = doc.getObject(vs_name)
+            if vs is not None:
+                return vs
+        if hasattr(obj, "CrankBodyName") and str(obj.CrankBodyName) == body.Name:
+            vs = doc.getObject(vs_name)
             if vs is not None:
                 return vs
     return None
@@ -85,8 +97,23 @@ def getGearInfo(doc, body):
     vs = findVarSetForBody(doc, body)
     if vs is None:
         return None
-    # Rack gears have no PitchDiameter — use 0 so center_dist = PD_pinion/2
     if not hasattr(vs, "PitchDiameter"):
+        # Geneva wheel: use WheelRadius as effective pitch radius for positioning
+        if hasattr(vs, "WheelRadius") and hasattr(vs, "NumberOfSlots"):
+            return {
+                "pd": float(vs.WheelRadius.Value) * 2.0,
+                "is_internal": False,
+                "is_bevel": False,
+                "is_rack": False,
+                "is_crown": False,
+                "is_screw": False,
+                "is_geneva": True,
+                "pitch_angle": 0.0,
+                "cone_dist": 0.0,
+                "height": float(vs.Height.Value) if hasattr(vs, "Height") else 10.0,
+                "module": 0.0,
+            }
+        # Rack gears have no PitchDiameter — use 0 so center_dist = PD_pinion/2
         if hasattr(vs, "Module") and hasattr(vs, "NumberOfTeeth"):
             return {
                 "pd": 0.0,
@@ -251,6 +278,8 @@ class GearPositionDialog(QtGui.QDialog):
     def _gear_text(self, body, info):
         if info.get("is_rack"):
             return f"{body.Label}  (Rack)"
+        if info.get("is_geneva"):
+            return f"{body.Label}  (Geneva wheel, R: {info['pd'] / 2.0:.3f} mm)"
         txt = f"{body.Label}  (PD: {info['pd']:.3f} mm"
         if info["is_bevel"]:
             txt += f", \u03b4: {info['pitch_angle']:.1f}\u00b0"
@@ -259,6 +288,8 @@ class GearPositionDialog(QtGui.QDialog):
 
     def _compute_center_distance(self):
         """Compute center distance for display in the info label."""
+        if self.info1.get("is_geneva") or self.info2.get("is_geneva"):
+            return 0.0
         pd1 = self.info1["pd"]
         pd2 = self.info2["pd"]
         if self.info1["is_internal"] or self.info2["is_internal"]:
@@ -329,10 +360,15 @@ class GearPositionDialog(QtGui.QDialog):
         fixed_base = self.body1.Placement.Base
         dx = center_dist * math.cos(angle_rad)
         dy = center_dist * math.sin(angle_rad)
+        # Coaxial case (Geneva wheel): stack moving gear on top of fixed gear in Z
+        if self.info1.get("is_geneva") or self.info2.get("is_geneva"):
+            z_offset = self.info1["height"]
+        else:
+            z_offset = 0.0
         new_base = App.Vector(
             fixed_base.x + dx,
             fixed_base.y + dy,
-            fixed_base.z,
+            fixed_base.z + z_offset,
         )
 
         phase_deg = self.phase_spin.value()
