@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "freecad-gear-workbench"
+version = "0.1.0"
+description = "Parametric gear designer workbench for FreeCAD"
+license = {file = "LICENSE"}
+requires-python = ">=3.9"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["freecad*"]

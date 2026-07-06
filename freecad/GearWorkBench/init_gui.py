@@ -22,7 +22,12 @@
 # ***************************************************************************
 
 import os
+import FreeCAD
+import FreeCADGui
 import gearMath
+
+Log = FreeCAD.Console.PrintLog
+Err = FreeCAD.Console.PrintError
 import genericGear  # Generic gear framework (spur, helical, herringbone)
 import genericInternalGear  # Generic internal gear framework
 import gearPositioning  # Gear positioning tool
@@ -48,7 +53,7 @@ global main_Gear_Icon
 main_Gear_Icon = os.path.join(smWB_icons_path, "gearWorkbench.svg")
 
 
-class GearWorkbenchWB(Workbench):
+class GearWorkbenchWB(FreeCADGui.Workbench):
     """Gear Design Workbench - Parametric gears for 3D printing"""
 
     MenuText = "GearWorkbench"

@@ -7,15 +7,15 @@
   <maintainer email="cwbruner+github@gmail.com">Chris Bruner</maintainer>
   <license file="LICENSE">LGPL-2.1</license>
   <url type="repository" branch="main">https://github.com/iplayfast/GearWorkbench</url>
-  <icon>icons/gearWorkbench.svg</icon>
+  <icon>freecad/GearWorkBench/icons/gearWorkbench.svg</icon>
 
   <content>
     <workbench>
       <name>GearWorkbench</name>
       <description>Parametric Gear Designer - All Gear Types</description>
       <classname>GearWorkbenchWB</classname>
-      <subdirectory>./</subdirectory>
-      <icon>icons/gearWorkbench.svg</icon>
+      <subdirectory>freecad/GearWorkBench</subdirectory>
+      <icon>freecad/GearWorkBench/icons/gearWorkbench.svg</icon>
       <tag>mechanical</tag>
       <tag>gears</tag>
       <tag>parametric</tag>
