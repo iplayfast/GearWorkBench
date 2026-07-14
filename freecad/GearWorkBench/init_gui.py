@@ -53,10 +53,10 @@ global main_Gear_Icon
 main_Gear_Icon = os.path.join(smWB_icons_path, "gearWorkbench.svg")
 
 
-class GearWorkbenchWB(FreeCADGui.Workbench):
+class GearWorkBenchWB(FreeCADGui.Workbench):
     """Gear Design Workbench - Parametric gears for 3D printing"""
 
-    MenuText = "GearWorkbench"
+    MenuText = "GearWorkBench"
     ToolTip = (
         "Parametric gear designer for 3D printing (spur, helical, rack, bevel, etc.)"
     )
@@ -101,30 +101,30 @@ class GearWorkbenchWB(FreeCADGui.Workbench):
                     Err(f"  Available commands: {len(all_commands)} total\n")
 
             # Add toolbar and menu
-            self.appendToolbar("GearWorkbench", gear_items)
-            self.appendMenu("GearWorkbench", gear_items)
-            Log("Loading GearWorkbench ... done\n")
-            # Msg(f"GearWorkbench toolbar and menu created with commands: {gear_items}\n")
+            self.appendToolbar("GearWorkBench", gear_items)
+            self.appendMenu("GearWorkBench", gear_items)
+            Log("Loading GearWorkBench ... done\n")
+            # Msg(f"GearWorkBench toolbar and menu created with commands: {gear_items}\n")
         except Exception as e:
             import traceback
 
-            Err(f"Error initializing GearWorkbench: {e}\n")
+            Err(f"Error initializing GearWorkBench: {e}\n")
             Err(traceback.format_exc())
 
     def GetClassName(self):
         return "Gui::PythonWorkbench"
 
     def Activated(self):
-        pass  # Msg("GearWorkbench.Activated()\n")
+        pass  # Msg("GearWorkBench.Activated()\n")
 
     def Deactivated(self):
         """This function is executed when the workbench is deactivated"""
-        pass  # Msg("GearWorkbench.Deactivated()\n")
+        pass  # Msg("GearWorkBench.Deactivated()\n")
 
 
-if not hasattr(FreeCADGui, "_GearWorkbenchWB_loaded"):
-    FreeCADGui.addWorkbench(GearWorkbenchWB())
-    FreeCADGui._GearWorkbenchWB_loaded = True
+if not hasattr(FreeCADGui, "_GearWorkBenchWB_loaded"):
+    FreeCADGui.addWorkbench(GearWorkBenchWB())
+    FreeCADGui._GearWorkBenchWB_loaded = True
 
 # File format pref pages are independent and can be loaded at startup
 # FreeCAD.__unit_test__ += ["TestSpurGear"]

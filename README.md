@@ -1,4 +1,4 @@
-# GearWorkbench
+# GearWorkBench
 
 A FreeCAD workbench for designing parametric gears. Every gear is fully parametric — change any value and the 3D model rebuilds automatically.
 
@@ -53,18 +53,18 @@ Bores (circular, square, hex, DIN 6885 keyway) are handled in `util.py` and shar
 ```bash
 # Linux / macOS
 cd ~/.local/share/FreeCAD/<version>/Mod
-git clone https://github.com/iplayfast/GearWorkbench.git
+git clone https://github.com/iplayfast/GearWorkBench.git
 
 # Windows
 cd %APPDATA%\FreeCAD\<version>\Mod
-git clone https://github.com/iplayfast/GearWorkbench.git
+git clone https://github.com/iplayfast/GearWorkBench.git
 ```
 
 Requires FreeCAD 1.0+ and Python 3.9+. Restart FreeCAD after cloning.
 
 ## Quick start
 
-1. Open FreeCAD and select **GearWorkbench** from the workbench dropdown.
+1. Open FreeCAD and select **GearWorkBench** from the workbench dropdown.
 2. Click any gear icon to create it with default parameters.
 3. Expand the gear in the model tree and edit the VarSet properties — the model rebuilds live.
 4. To mesh two gears: create both with the **same module and pressure angle**, select both bodies, then click **Position Gears**.

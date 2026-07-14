@@ -1,4 +1,4 @@
-"""Gear Stack for GearWorkbench
+"""Gear Stack for GearWorkBench
 
 Creates a coaxial stack of gear Bodies, optionally fused into a single solid
 for 3D printing.

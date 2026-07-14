@@ -6,7 +6,7 @@ to a timestamped file for test case documentation.
 Usage: Import this module after the workbench is loaded. It patches the relevant
 command and result classes to emit log entries.
 
-Log file: ~/GearWorkbench_actions.log
+Log file: ~/GearWorkBench_actions.log
 
 Copyright 2025, Chris Bruner
 License LGPL V2.1
@@ -17,7 +17,7 @@ import time
 import functools
 import FreeCAD as App
 
-LOG_FILE = os.path.expanduser("~/GearWorkbench_actions.log")
+LOG_FILE = os.path.expanduser("~/GearWorkBench_actions.log")
 
 _session_started = False
 

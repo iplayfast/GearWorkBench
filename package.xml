@@ -6,15 +6,15 @@
   <date>2026-07-14</date>
   <maintainer email="cwbruner+github@gmail.com">Chris Bruner</maintainer>
   <license file="LICENSE">LGPL-2.1-or-later</license>
-  <url type="repository" branch="main">https://github.com/iplayfast/GearWorkbench</url>
-  <url type="readme">https://raw.githubusercontent.com/iplayfast/GearWorkbench/main/README.md</url>
+  <url type="repository" branch="main">https://github.com/iplayfast/GearWorkBench</url>
+  <url type="readme">https://raw.githubusercontent.com/iplayfast/GearWorkBench/main/README.md</url>
   <icon>freecad/GearWorkBench/icons/gearWorkbench.svg</icon>
 
   <content>
     <workbench>
-      <name>GearWorkbench</name>
+      <name>GearWorkBench</name>
       <description>Parametric Gear Designer - All Gear Types</description>
-      <classname>GearWorkbenchWB</classname>
+      <classname>GearWorkBenchWB</classname>
       <subdirectory>freecad/GearWorkBench</subdirectory>
       <icon>freecad/GearWorkBench/icons/gearWorkbench.svg</icon>
       <tag>mechanical</tag>

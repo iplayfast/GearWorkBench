@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Utility functions for GearWorkbench
+Utility functions for GearWorkBench
 
 General-purpose helper functions extracted from CycloidGearBox
 for use across different gear types.

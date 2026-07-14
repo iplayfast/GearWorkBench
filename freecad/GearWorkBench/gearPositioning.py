@@ -1,4 +1,4 @@
-"""Gear Positioning Tool for GearWorkbench
+"""Gear Positioning Tool for GearWorkBench
 
 Positions two gears at the correct center distance for meshing.
 User selects exactly 2 PartDesign::Body objects, then clicks Position Gears.
