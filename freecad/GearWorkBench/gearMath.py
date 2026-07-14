@@ -13,7 +13,7 @@ License LGPL V2.1
 
 import math
 import logging
-import util
+from . import util
 from typing import Tuple, List, Dict, Any, Optional
 import FreeCAD as App
 import Part

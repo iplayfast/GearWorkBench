@@ -12,15 +12,15 @@ from __future__ import division
 
 import FreeCAD as App
 import FreeCADGui
-import gearMath
-import util
+from . import gearMath
+from . import util
 import Part
 import Sketcher
 import os
 import math
 from PySide import QtCore
-import genericRack
-from genericGear import _VarSetWatcher, ViewProviderGearResult
+from . import genericRack
+from .genericGear import _VarSetWatcher, ViewProviderGearResult
 
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, "icons")
@@ -432,7 +432,7 @@ class RackGearResult:
             is_cycloid = self._last_tp == "Cycloidal"
             profile_func = generateRackToothProfile
             if is_cycloid:
-                import cycloidRack as _cr
+                from . import cycloidRack as _cr
                 profile_func = _cr.generateCycloidRackToothProfile
 
             parameters = {

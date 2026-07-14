@@ -1,7 +1,7 @@
 """Lantern Gear generator for FreeCAD (Stub)"""
 import FreeCAD as App
 import FreeCADGui
-import gearMath
+from . import gearMath
 import os
 
 smWBpath = os.path.dirname(gearMath.__file__)

@@ -322,7 +322,10 @@ def createPad(body, sketch, height, name='', midplane=False):
     body.addObject(pad)
     pad.Profile = sketch
     pad.Length = height # Always extrude by 'height' in one direction
-    
+    # Skip the post-operation refine pass; it merges coplanar faces and spams
+    # "Cannot find RFI modified Face" warnings from the topological naming engine
+    pad.Refine = False
+
     # The 'midplane' argument is now primarily informational for the caller,
     # as centering is expected to be handled by the sketch's Placement.
     # We explicitly remove the SideType setting here to avoid inconsistent behavior.
@@ -350,6 +353,7 @@ def createPolar(body, pad, sketch, count, name=''):
     polar.Axis = (sketch, ['N_Axis'])
     polar.Angle = 360
     polar.Occurrences = count
+    polar.Refine = False
     return polar
 
 
@@ -372,6 +376,7 @@ def createPocket(body, sketch, height, name='', suppressed=False):
     pocket.Length = height
     pocket.Profile = sketch
     pocket.Suppressed = suppressed
+    pocket.Refine = False
     # Hide the sketch directly (pocket.Profile returns a tuple, not the object)
     sketch.Visibility = False
     return pocket

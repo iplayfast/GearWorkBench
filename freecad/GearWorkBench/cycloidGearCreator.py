@@ -30,7 +30,7 @@ smWB_icons_path = os.path.join(os.path.dirname(__file__), "icons")
 _cycloid_mod_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "CycloidGearBox")
 if _cycloid_mod_path not in sys.path:
     sys.path.insert(0, _cycloid_mod_path)
-import cycloidFun
+from . import cycloidFun
 
 
 def QT_TRANSLATE_NOOP(scope, text):
@@ -320,7 +320,7 @@ class CycloidGearBoxResult:
 
     def _startWatcher(self, varset_name):
         self._stopWatcher()
-        from genericGear import _VarSetWatcher
+        from .genericGear import _VarSetWatcher
         self._watcher = _VarSetWatcher(
             self, varset_name,
             watched=frozenset((
@@ -772,7 +772,7 @@ class CycloidalGearBoxCreatorCommand:
                 if GUI_AVAILABLE:
                     FreeCADGui.SendMsgToActiveView("ViewFit")
                     FreeCADGui.ActiveDocument.ActiveView.viewIsometric()
-                App.Console.PrintMessage("Cycloidal gearbox created successfully!\n")
+                App.Console.PrintLog("Cycloidal gearbox created successfully!\n")
             except Exception as e:
                 App.Console.PrintError(f"Failed to create cycloidal gearbox: {str(e)}\n")
                 import traceback

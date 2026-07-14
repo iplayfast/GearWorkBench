@@ -34,14 +34,14 @@ full-height worm surface is itself the correct generating tool for it).
 
 import FreeCAD as App
 import FreeCADGui
-import gearMath          # helical gear profile + workbench icon directory
-import util              # readyPart / createSketch / createPad / createPolar
+from . import gearMath          # helical gear profile + workbench icon directory
+from . import util              # readyPart / createSketch / createPad / createPolar
 import Part
 import Sketcher
 import os
 import math
 from PySide import QtCore
-from genericGear import _VarSetWatcher, ViewProviderGearResult
+from .genericGear import _VarSetWatcher, ViewProviderGearResult
 
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, "icons")
@@ -282,7 +282,7 @@ class GloboidWormGearResult:
         hand = 1.0 if rh else -1.0
         z_end = rootR * math.sin(math.radians(beta / 2.0))
 
-        App.Console.PrintMessage(
+        App.Console.PrintLog(
             "[GloboidWorm] arc=%.2f deg  R=%.2f  tip/root@waist=%.2f/%.2f  "
             "length~%.2f  starts=%d  N=%d\n"
             % (beta, R, R - tipR, R - rootR, 2 * z_end, nt, N))
@@ -350,7 +350,11 @@ class GloboidWormGearResult:
             thread = thread.removeSplitter()
         except Exception:
             pass
-        App.Console.PrintMessage(
+        # Scratch-built shapes have Tag=0, which makes the topological naming
+        # engine warn "Not all input shapes are mappable" during fuse/cut.
+        # Non-zero tags let it map them.
+        thread.Tag = 1
+        App.Console.PrintLog(
             "[GloboidWorm] thread valid=%s vol=%.1f\n" % (thread.isValid(), thread.Volume))
 
         # Multi-start: nt identical threads equally spaced around Z.
@@ -375,6 +379,7 @@ class GloboidWormGearResult:
         mer = [App.Vector(0, 0, z_hi)] + mer + [App.Vector(0, 0, z_lo)]
         core_face = Part.Face(Part.makePolygon(mer + [mer[0]]))
         core = core_face.revolve(App.Vector(0, 0, 0), App.Vector(0, 0, 1), 360.0)
+        core.Tag = 2
 
         worm = core.fuse(thread)
 
@@ -382,6 +387,8 @@ class GloboidWormGearResult:
         if sl > 1e-6 and sd > 1e-6:
             top = Part.makeCylinder(sd / 2.0, sl, App.Vector(0, 0, z_hi), App.Vector(0, 0, 1))
             bot = Part.makeCylinder(sd / 2.0, sl, App.Vector(0, 0, z_lo), App.Vector(0, 0, -1))
+            top.Tag = 3
+            bot.Tag = 4
             worm = worm.fuse([top, bot])
 
         # Axial bore through everything.
@@ -389,6 +396,7 @@ class GloboidWormGearResult:
             ztot = z_hi + sl + 2.0
             bore = Part.makeCylinder(bd / 2.0, 2.0 * ztot,
                                      App.Vector(0, 0, -ztot), App.Vector(0, 0, 1))
+            bore.Tag = 5
             worm = worm.cut(bore)
 
         try:
@@ -489,7 +497,7 @@ class GloboidWormGearResult:
             d.recompute()
             self.Object.Status = ("Up to date" if shape.isValid()
                                   else "Built, but shape is invalid — check console")
-            App.Console.PrintMessage("[GloboidWorm] done (valid=%s)\n" % shape.isValid())
+            App.Console.PrintLog("[GloboidWorm] done (valid=%s)\n" % shape.isValid())
 
         except Exception:
             import traceback
@@ -563,7 +571,7 @@ class GloboidWormGearResult:
                 App.Rotation(App.Vector(0, 0, 1), total_rot_deg + wheel_phase))
         gearMath.generateHelicalGearProfile(sk_t, profile_params)
 
-        App.Console.PrintMessage(
+        App.Console.PrintLog(
             "[GloboidWorm] wheel helix=%.2f deg (=lead), sketch rot=%.3f deg\n"
             % (twist_deg, total_rot_deg))
 
@@ -571,6 +579,7 @@ class GloboidWormGearResult:
         loft.Profile = sk_b
         loft.Sections = [sk_t]
         loft.Ruled = True
+        loft.Refine = False
         gb.Tip = loft
 
         polar = util.createPolar(gb, loft, sk_b, num_teeth, "Teeth")
@@ -633,6 +642,7 @@ class GloboidWormGearResult:
         groove.Profile = sk_th
         groove.ReferenceAxis = (sk_th, ["V_Axis"])
         groove.Angle = 360.0
+        groove.Refine = False
         gb.Tip = groove
 
         if self._last_wbe:

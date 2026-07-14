@@ -9,13 +9,13 @@ License LGPL V2.1
 """
 import FreeCAD as App
 import FreeCADGui
-import gearMath
-import util
+from . import gearMath
+from . import util
 import Part
 import Sketcher
 import os
 import math
-from genericGear import _VarSetWatcher, ViewProviderGearResult
+from .genericGear import _VarSetWatcher, ViewProviderGearResult
 from PySide import QtCore
 
 smWBpath = os.path.dirname(gearMath.__file__)

@@ -12,15 +12,15 @@ from __future__ import division
 
 import FreeCAD as App
 import FreeCADGui
-import gearMath
-import util
+from . import gearMath
+from . import util
 import Part
 import Sketcher
 import os
 import math
 from PySide import QtCore
-import genericGear
-from genericGear import _VarSetWatcher, ViewProviderGearResult
+from . import genericGear
+from .genericGear import _VarSetWatcher, ViewProviderGearResult
 
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, "icons")

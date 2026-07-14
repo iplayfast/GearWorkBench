@@ -421,6 +421,9 @@ def newPad(body,sketch,height,name=''):
     body.addObject(pad)
     pad.Length = height
     pad.Profile = sketch
+    # Skip the post-operation refine pass; it merges coplanar faces and spams
+    # "Cannot find RFI modified Face" warnings from the topological naming engine
+    pad.Refine = False
     return pad
 
 def newPolar(body,pad,sketch,count,name=''):
@@ -429,6 +432,7 @@ def newPolar(body,pad,sketch,count,name=''):
     polar.Axis = (sketch,['N_Axis'])
     polar.Angle = 360
     polar.Occurrences = count
+    polar.Refine = False
     return polar
 
 def newPocket(body,sketch,height,name=''):
@@ -437,7 +441,8 @@ def newPocket(body,sketch,height,name=''):
     body.addObject(pocket)
     pocket.Length = height
     pocket.Profile = sketch
-    pocket.Reversed = True 
+    pocket.Reversed = True
+    pocket.Refine = False
     return pocket
 
     

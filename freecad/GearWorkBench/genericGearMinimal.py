@@ -11,8 +11,8 @@ import math
 from typing import Dict, Any, Callable
 
 import FreeCAD as App
-import gearMath
-import util
+from . import gearMath
+from . import util
 
 
 def createGenericGear(doc, parameters, tooth_profile_func, gear_type="spur"):
@@ -118,7 +118,7 @@ class GenericSpurGearCommand:
         gear_obj = doc.addObject("App::FeaturePython", "GenericSpurGearParameters")
 
         # Import and use the minimal implementation
-        from genericGearMinimal import createSpurGearWithProfile
+        from .genericGearMinimal import createSpurGearWithProfile
 
         result = createSpurGearWithProfile(doc, gearMath.generateDefaultParameters())
 

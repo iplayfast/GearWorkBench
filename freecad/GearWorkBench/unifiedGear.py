@@ -14,8 +14,8 @@ import math
 from typing import Dict, Any, Callable
 
 import FreeCAD as App
-import gearMath
-import util
+from . import gearMath
+from . import util
 
 
 def createUnifiedSpurGear(doc, parameters):
@@ -71,7 +71,7 @@ def createUnifiedSpurGear(doc, parameters):
         # 5. Recompute
         doc.recompute()
 
-        print("✅ SUCCESS: Unified spur gear created successfully!")
+        App.Console.PrintLog("Unified spur gear created successfully\n")
         return {"status": "success", "body": body}
 
     except Exception as e:

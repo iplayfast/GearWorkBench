@@ -142,7 +142,7 @@ def _patch_result_onchanged(result_class, gear_type_name):
 def _patch_positioning():
     """Patch GearPositioningCommand to log positioning actions."""
     try:
-        import gearPositioning
+        from . import gearPositioning
         original = gearPositioning.GearPositioningCommand.Activated
 
         @functools.wraps(original)
@@ -192,7 +192,7 @@ def _patch_positioning():
 def _patch_gearstack():
     """Patch GearStackCommand to log stacking actions."""
     try:
-        import gearStack
+        from . import gearStack
         if hasattr(gearStack, "GearStackCommand"):
             original = gearStack.GearStackCommand.Activated
 
@@ -220,7 +220,7 @@ def install():
     # Install logging patches silently; only log failures.
 
     try:
-        import genericGear
+        from . import genericGear
         _patch_command_activated(genericGear.GearCommand, "Gear")
         _patch_result_onchanged(genericGear.GearResult, "Gear")
         if hasattr(genericGear, "SpurGearCommand"):
@@ -234,7 +234,7 @@ def install():
         log(f"  FAILED genericGear: {e}")
 
     try:
-        import bevelGear
+        from . import bevelGear
         _patch_command_activated(bevelGear.BevelGearCreateObject, "BevelGear")
         _patch_result_onchanged(bevelGear.BevelGearResult, "BevelGear")
         pass
@@ -242,7 +242,7 @@ def install():
         log(f"  FAILED bevelGear: {e}")
 
     try:
-        import genericInternalGear
+        from . import genericInternalGear
         if hasattr(genericInternalGear, "InternalGearCommand"):
             _patch_command_activated(genericInternalGear.InternalGearCommand, "InternalGear")
         if hasattr(genericInternalGear, "InternalGearResult"):
@@ -252,7 +252,7 @@ def install():
         log(f"  FAILED genericInternalGear: {e}")
 
     try:
-        import cycloidGear
+        from . import cycloidGear
         _patch_command_activated(cycloidGear.CycloidGearCreateObject, "CycloidGear")
         _patch_result_onchanged(cycloidGear.CycloidGearResult, "CycloidGear")
         pass
@@ -260,7 +260,7 @@ def install():
         log(f"  FAILED cycloidGear: {e}")
 
     try:
-        import crownGear
+        from . import crownGear
         _patch_command_activated(crownGear.CrownGearCreateObject, "CrownGear")
         _patch_result_onchanged(crownGear.CrownGearResult, "CrownGear")
         pass
@@ -268,7 +268,7 @@ def install():
         log(f"  FAILED crownGear: {e}")
 
     try:
-        import screwGear
+        from . import screwGear
         _patch_command_activated(screwGear.ScrewGearCreateObject, "ScrewGear")
         _patch_result_onchanged(screwGear.ScrewGearResult, "ScrewGear")
         pass
@@ -276,7 +276,7 @@ def install():
         log(f"  FAILED screwGear: {e}")
 
     try:
-        import hypoidGear
+        from . import hypoidGear
         _patch_command_activated(hypoidGear.HypoidGearCreateObject, "HypoidGear")
         _patch_result_onchanged(hypoidGear.HypoidGearResult, "HypoidGear")
         pass
@@ -284,7 +284,7 @@ def install():
         log(f"  FAILED hypoidGear: {e}")
 
     try:
-        import nonCircularGear
+        from . import nonCircularGear
         _patch_command_activated(nonCircularGear.NonCircularGearCreateObject, "NonCircularGear")
         _patch_result_onchanged(nonCircularGear.NonCircularGearResult, "NonCircularGear")
         pass
@@ -293,7 +293,7 @@ def install():
 
     # Patch the central _VarSetWatcher to log all parameter changes
     try:
-        import genericGear
+        from . import genericGear
         watcher_cls = genericGear._VarSetWatcher
         original_slot = watcher_cls.slotChangedObject
 

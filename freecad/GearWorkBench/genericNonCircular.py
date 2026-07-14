@@ -23,8 +23,8 @@ Copyright 2025.  License LGPL V2.1
 import FreeCAD as App
 import FreeCADGui
 import Part
-import util
-from genericGear import createMasterBore, _applyOriginAndAngle
+from . import util
+from .genericGear import createMasterBore, _applyOriginAndAngle
 
 
 # ============================================================================

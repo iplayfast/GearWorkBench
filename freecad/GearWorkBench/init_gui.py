@@ -24,28 +24,28 @@
 import os
 import FreeCAD
 import FreeCADGui
-import gearMath
+from . import gearMath
 
 Log = FreeCAD.Console.PrintLog
 Err = FreeCAD.Console.PrintError
-import genericGear  # Generic gear framework (spur, helical, herringbone)
-import genericInternalGear  # Generic internal gear framework
-import gearPositioning  # Gear positioning tool
-import planetaryGearCreator  # Planetary gear system creator
-import cycloidGearCreator  # Cycloidal gearbox creator
-import rackGear  # Import rack gear module
-import cycloidGear  # Import cycloid gear module
-import cycloidRack  # Import cycloid rack module
-import bevelGear  # Import bevel gear module
-import crownGear  # Import crown gear module
-import wormGear  # Import worm gear module
-import globoidWormGear  # Import globoid worm gear module
-import hypoidGear  # Import hypoid gear module
-import screwGear  # Import screw gear module
-import nonCircularGear  # Import non-circular gear module
-import genevaWheel  # Import Geneva wheel (Maltese cross) module
-import gearStack  # Import gear stack module
-import gearLog  # Action logger for test documentation
+from . import genericGear  # Generic gear framework (spur, helical, herringbone)
+from . import genericInternalGear  # Generic internal gear framework
+from . import gearPositioning  # Gear positioning tool
+from . import planetaryGearCreator  # Planetary gear system creator
+from . import cycloidGearCreator  # Cycloidal gearbox creator
+from . import rackGear  # Import rack gear module
+from . import cycloidGear  # Import cycloid gear module
+from . import cycloidRack  # Import cycloid rack module
+from . import bevelGear  # Import bevel gear module
+from . import crownGear  # Import crown gear module
+from . import wormGear  # Import worm gear module
+from . import globoidWormGear  # Import globoid worm gear module
+from . import hypoidGear  # Import hypoid gear module
+from . import screwGear  # Import screw gear module
+from . import nonCircularGear  # Import non-circular gear module
+from . import genevaWheel  # Import Geneva wheel (Maltese cross) module
+from . import gearStack  # Import gear stack module
+from . import gearLog  # Action logger for test documentation
 
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, "icons")

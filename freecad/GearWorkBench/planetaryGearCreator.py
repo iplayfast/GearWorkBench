@@ -23,20 +23,20 @@ except ImportError:
     GUI_AVAILABLE = False
 
 # Import gear creation functions and feature classes
-from genericGear import (
+from .genericGear import (
     spurGear, helixGear, herringboneGear,
     SpurGear, HelixGear, HerringboneGear, ViewProviderGenericGear,
     GearResult,
     ViewProviderGearResult,
     createGearVarSet,
 )
-from genericInternalGear import (
+from .genericInternalGear import (
     internalSpurGear, internalHelixGear, internalHerringboneGear,
     InternalSpurGear, InternalHelixGear, InternalHerringboneGear,
     InternalGearResult,
     createInternalGearVarSet,
 )
-import util
+from . import util
 
 # Get icons path
 smWB_icons_path = os.path.join(os.path.dirname(__file__), "icons")
@@ -958,7 +958,7 @@ class PlanetaryGearCreatorCommand:
                 if GUI_AVAILABLE:
                     FreeCADGui.SendMsgToActiveView("ViewFit")
                     FreeCADGui.ActiveDocument.ActiveView.viewIsometric()
-                App.Console.PrintMessage("Planetary gear system created successfully!\n")
+                App.Console.PrintLog("Planetary gear system created successfully!\n")
             except Exception as e:
                 App.Console.PrintError(f"Failed to create planetary system: {str(e)}\n")
                 import traceback

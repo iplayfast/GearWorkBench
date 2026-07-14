@@ -35,14 +35,14 @@ full-height worm surface is itself the correct generating tool for it).
 
 import FreeCAD as App
 import FreeCADGui
-import gearMath          # helical gear profile + workbench icon directory
-import util              # readyPart / createSketch / createPad / createPolar
+from . import gearMath          # helical gear profile + workbench icon directory
+from . import util              # readyPart / createSketch / createPad / createPolar
 import Part
 import Sketcher
 import os
 import math
 from PySide import QtCore
-from genericGear import _VarSetWatcher, ViewProviderGearResult
+from .genericGear import _VarSetWatcher, ViewProviderGearResult
 
 smWBpath = os.path.dirname(gearMath.__file__)
 smWB_icons_path = os.path.join(smWBpath, "icons")
