@@ -674,9 +674,6 @@ def _createTwoSketchHerringbone(
     tooth_loft.Ruled = True
 
     gear_teeth = util.createPolar(body, tooth_loft, sketch_bottom, num_teeth, "Teeth")
-    vn = parameters.get("varset_name")
-    if vn:
-        gear_teeth.setExpression("Occurrences", f"<<{vn}>>.NumberOfTeeth")
     gear_teeth.Originals = [tooth_loft]
     tooth_loft.Visibility = False
     sketch_bottom.Visibility = False
@@ -810,10 +807,10 @@ def _createThreeSketchHerringbone(
     loft_top.Sections = [sketch_top]
     loft_top.Ruled = True
 
+    # No Occurrences expression: NumberOfTeeth is watcher-driven (a change
+    # rebuilds the gear anyway), and the expression forced a wasted recompute
+    # of the pattern at the old tooth size before the rebuild kicked in.
     gear_teeth = util.createPolar(body, loft_bottom, sketch_bottom, num_teeth, "Teeth")
-    vn = parameters.get("varset_name")
-    if vn:
-        gear_teeth.setExpression("Occurrences", f"<<{vn}>>.NumberOfTeeth")
     gear_teeth.Originals = [loft_bottom, loft_top]
     loft_bottom.Visibility = False
     loft_top.Visibility = False
@@ -1213,6 +1210,20 @@ def createGearVarSet(doc, name):
     return var_set
 
 
+def _findBodyChild(body, base):
+    """Find a child of body whose Name is base or base + numeric suffix.
+
+    Document-global getObject() must not be used here: FreeCAD uniquifies
+    object names per document, so a second gear's sketches are named e.g.
+    ToothProfile_BottomSketch001 and a global lookup returns the FIRST
+    gear's sketch instead.
+    """
+    for o in body.Group:
+        if o.Name == base or (o.Name.startswith(base) and o.Name[len(base):].isdigit()):
+            return o
+    return None
+
+
 class GearResult:
     """Unified FeaturePython for auto-regeneration of external gears.
 
@@ -1527,10 +1538,10 @@ class GearResult:
                 saved_placement = App.Placement(old.Placement)
                 body = old
 
-                sk_bottom = doc.getObject("ToothProfile_BottomSketch")
-                sk_middle = doc.getObject("ToothProfile_MiddleSketch")
-                sk_top = doc.getObject("ToothProfile_TopSketch")
-                sk_dedendum = doc.getObject("DedendumCircleSketch")
+                sk_bottom = _findBodyChild(body, "ToothProfile_BottomSketch")
+                sk_middle = _findBodyChild(body, "ToothProfile_MiddleSketch")
+                sk_top = _findBodyChild(body, "ToothProfile_TopSketch")
+                sk_dedendum = _findBodyChild(body, "DedendumCircleSketch")
 
                 if sk_bottom and sk_middle and sk_top:
                     self.Object.Status = "Updating gear geometry..."
@@ -1572,12 +1583,17 @@ class GearResult:
                     else:
                         rotation_top_deg = rotation_middle_deg
 
+                    # Match herringboneGear(): backlash is folded into the
+                    # profile shift before drawing the tooth, and the helical
+                    # profile needs helix_angle to compute transverse values.
+                    # Without this the tooth root lands above the dedendum pad.
                     parameters = {
                         "module": self._last_m,
                         "num_teeth": num_teeth,
                         "pressure_angle": self._last_pa,
-                        "profile_shift": self._last_ps,
+                        "profile_shift": effective_shift,
                         "backlash": self._last_bl,
+                        "helix_angle": helix_angle_magnitude,
                         "height": height,
                         "bore_diameter": float(v.BoreDiameter.Value),
                         "keyway_width": float(v.KeywayWidth.Value),
@@ -1605,6 +1621,10 @@ class GearResult:
                         for i in range(sk.GeometryCount - 1, -1, -1):
                             sk.delGeometry(i)
                         profile_func(sk, parameters)
+
+                    teeth_polar = _findBodyChild(body, "TeethPolar")
+                    if teeth_polar:
+                        teeth_polar.Occurrences = num_teeth
 
                     if sk_dedendum:
                         for i in range(sk_dedendum.ConstraintCount - 1, -1, -1):

@@ -275,8 +275,6 @@ def _createTwoSketchInternalGear(
     gear_teeth.Angle = 360
     gear_teeth.Occurrences = num_teeth
     gear_teeth.Originals = [tooth_cut]
-    if vn:
-        gear_teeth.setExpression("Occurrences", f"<<{vn}>>.NumberOfTeeth")
 
     # Cleanup
     ring_sketch.Visibility = False
@@ -436,8 +434,6 @@ def _createThreeSketchInternalGear(
     gear_teeth.Angle = 360
     gear_teeth.Occurrences = num_teeth
     gear_teeth.Originals = [cut_lower, cut_upper]
-    if parameters.get("varset_name"):
-        gear_teeth.setExpression("Occurrences", f"<<{parameters['varset_name']}>>.NumberOfTeeth")
 
     # Cleanup
     ring_sketch.Visibility = False

@@ -407,7 +407,11 @@ class GenevaWheelResult:
                     sk.addConstraint(Sketcher.Constraint("Coincident",ci,3,-1,1))
                     cs=sk.addConstraint(Sketcher.Constraint("Diameter",ci,bd))
                     sk.setExpression(f"Constraints[{cs}]",f"<<{v.Name}>>.{borkey}")
-                    pk=util.createPocket(bo,sk,100.0,"Bore"); pk.Reversed=True
+                    # Symmetric cut: crank has material both sides of Z=0 (base
+                    # disc below, locking disc/pin above) — must cut through both
+                    pk=util.createPocket(bo,sk,100.0,"Bore")
+                    try: pk.SideType="Symmetric"
+                    except Exception: pk.Midplane=True  # FreeCAD without FeatureExtrude.SideType
                     pk.setExpression("Suppressed",f"<<{v.Name}>>.{boren} ? False : True")
                     bo.Tip=pk
             # Restore crank placement; position wheel relative to crank

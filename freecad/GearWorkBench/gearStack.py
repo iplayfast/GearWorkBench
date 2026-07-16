@@ -172,6 +172,56 @@ class ViewProviderGearStack:
         return None
 
 
+class _StackLinkHealer:
+    """DocumentObserver that repairs GearStack.Gears links after gear rebuilds.
+
+    Every gear type rebuilds by deleting its Body and recreating it under
+    the same name, and the deletion silently clears the Body out of each
+    GearStack's Gears link list. slotDeletedObject fires while the links
+    are still intact, so we record which stacks referenced the dying Body
+    and re-insert the replacement when an object of the same name appears.
+    """
+    # ponytail: keyed by body name only — if the user deletes a gear outright
+    # and later creates an unrelated body with the same name, it rejoins the
+    # old stack. Acceptable; rebuilds recreate the name synchronously.
+
+    def __init__(self):
+        self._pending = {}  # (doc_name, body_name) -> [(stack_name, index), ...]
+
+    def slotDeletedObject(self, obj):
+        if obj.TypeId != "PartDesign::Body":
+            return
+        refs = []
+        for o in obj.Document.Objects:
+            if hasattr(o, "Gears") and hasattr(o, "StackOrigin"):
+                names = [g.Name if g is not None else None for g in o.Gears]
+                if obj.Name in names:
+                    refs.append((o.Name, names.index(obj.Name)))
+        if refs:
+            self._pending[(obj.Document.Name, obj.Name)] = refs
+
+    def slotCreatedObject(self, obj):
+        refs = self._pending.pop((obj.Document.Name, obj.Name), None)
+        if not refs:
+            return
+        doc = obj.Document
+        for stack_name, index in refs:
+            stack = doc.getObject(stack_name)
+            if stack is None:
+                continue
+            gears = list(stack.Gears)
+            if obj not in gears:
+                gears.insert(min(index, len(gears)), obj)
+                stack.Gears = gears
+
+    def slotDeletedDocument(self, doc):
+        self._pending = {k: v for k, v in self._pending.items() if k[0] != doc.Name}
+
+
+_stack_link_healer = _StackLinkHealer()
+App.addDocumentObserver(_stack_link_healer)
+
+
 def _find_geneva_info(doc, bodies):
     """Check if any selected bodies belong to a Geneva wheel mechanism.
 
