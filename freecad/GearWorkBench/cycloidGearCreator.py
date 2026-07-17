@@ -274,6 +274,39 @@ class CycloidGearBoxResult:
             self._startWatcher(v.Name)
             obj.Status = "Up to date"
 
+    def _clamp_varset(self, vs):
+        """Nudge out-of-range values to their nearest valid setting.
+
+        Clamp-on-edit policy: only the value that is out of range moves,
+        other parameters are left as the user set them. Returns a list of
+        human-readable descriptions of what was changed (empty if nothing).
+        """
+        MARGIN = 0.98  # stay strictly inside the '<' limits
+        tc = int(vs.ToothCount)
+        rcd = float(vs.RollerCircleDiameter.Value)
+        _, max_roller = cycloidFun.valid_bounds(tc, rcd)
+
+        changes = []
+        # 1. Roller overlap is roller_diameter's own hard limit.
+        roller = float(vs.RollerDiameter.Value)
+        if roller >= max_roller:
+            roller = max_roller * MARGIN
+            changes.append(f"Roller diameter clamped to {roller:.3f} mm "
+                           f"(rollers would overlap above {max_roller:.3f} mm)")
+            vs.RollerDiameter = roller
+        # 2. Eccentricity is the single give for both cusp and undercut, so
+        #    roller diameter and tooth count stay as the user set them.
+        max_ecc = cycloidFun.max_valid_eccentricity(tc, roller, rcd)
+        if float(vs.Eccentricity.Value) > max_ecc:
+            changes.append(f"Eccentricity clamped to {max_ecc:.3f} mm "
+                           f"(above it the profile cusps or undercuts)")
+            vs.Eccentricity = max_ecc
+
+        if changes:
+            msg = "Cycloidal Gearbox auto-adjusted parameters:\n  " + "\n  ".join(changes)
+            App.Console.PrintWarning(msg + "\n")
+        return changes
+
     def _snapshot_values(self, vs):
         """Take a snapshot of current VarSet values for change detection."""
         try:
@@ -404,6 +437,11 @@ class CycloidGearBoxResult:
                 return
             varset_name = v.Name
 
+            # Clamp-on-edit: nudge any out-of-range value to its nearest valid
+            # setting before building, so geometry always works. Done before the
+            # snapshot so the correction doesn't re-trigger a rebuild.
+            clamped = self._clamp_varset(v)
+
             # Update read-only computed properties
             tc = int(v.ToothCount)
             v.GearRatio = 1.0 / (tc - 1) if tc > 1 else 0.0
@@ -430,6 +468,11 @@ class CycloidGearBoxResult:
         except cycloidFun.ParameterValidationError as e:
             App.Console.PrintError(f"Cycloidal Gearbox Parameter Error: {str(e)}\n")
             self.Object.Status = f"Error: {str(e)}"
+            if GUI_AVAILABLE and App.GuiUp:
+                QtGui.QMessageBox.warning(
+                    FreeCADGui.getMainWindow(),
+                    "Cycloidal Gearbox - Invalid Parameters",
+                    str(e))
         except Exception as e:
             import traceback
             App.Console.PrintError(traceback.format_exc())

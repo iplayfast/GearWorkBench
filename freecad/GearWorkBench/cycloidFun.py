@@ -88,6 +88,70 @@ def QT_TRANSLATE_NOOP(scope: str, text: str) -> str:
     return text
 
 
+def valid_bounds(tooth_count, roller_circle_diameter):
+    """Closed-form upper limits for a non-degenerate cycloid profile.
+
+    Returns (max_eccentricity, max_roller_diameter) given the tooth count
+    and roller (pin) circle diameter. Values must be strictly below these:
+      - eccentricity limit: beyond it the epitrochoid develops cusps/loops
+      - roller limit: beyond it adjacent rollers overlap on the pin circle
+    Shared by validate_parameters (reject) and the clamp-on-edit logic (nudge).
+    """
+    pin_circle_radius = roller_circle_diameter / 2.0
+    max_eccentricity = pin_circle_radius / (tooth_count + 1)
+    max_roller_diameter = 2.0 * pin_circle_radius * math.sin(math.pi / (tooth_count + 1))
+    return max_eccentricity, max_roller_diameter
+
+
+def profile_self_intersects(tooth_count, roller_diameter, eccentricity, roller_circle_diameter):
+    """True if the cycloid tooth profile undercuts (its tangent reverses).
+
+    Walks one tooth of the real calc_x/calc_y profile and reports whether
+    the offset curve doubles back on itself — the condition OCC rejects as
+    'BRep_API: command not done' at pad time.
+    """
+    pin_circle_radius = roller_circle_diameter / 2.0
+    p = pin_circle_radius / tooth_count
+    samples = max(60, 12 * tooth_count)
+    try:
+        pts = [(calc_x(p, roller_diameter, eccentricity, tooth_count,
+                       2.0 * math.pi * i / samples / tooth_count),
+                calc_y(p, roller_diameter, eccentricity, tooth_count,
+                       2.0 * math.pi * i / samples / tooth_count))
+               for i in range(samples + 1)]
+    except (ValueError, ZeroDivisionError):
+        return True
+    prev = None
+    for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+        seg = (x1 - x0, y1 - y0)
+        if math.hypot(*seg) < 1e-9 or math.isnan(seg[0]) or math.isnan(seg[1]):
+            continue
+        if prev is not None and (prev[0] * seg[0] + prev[1] * seg[1]) < 0.0:
+            return True
+        prev = seg
+    return False
+
+
+def max_valid_eccentricity(tooth_count, roller_diameter, roller_circle_diameter):
+    """Largest eccentricity giving a clean (non-cusp, non-undercut) profile.
+
+    Starts just below the closed-form cusp limit; if that still undercuts,
+    bisects down to the boundary. Used by clamp-on-edit so eccentricity is
+    the single value that gives way to keep the geometry buildable.
+    """
+    hi = valid_bounds(tooth_count, roller_circle_diameter)[0] * 0.98
+    if not profile_self_intersects(tooth_count, roller_diameter, hi, roller_circle_diameter):
+        return hi
+    lo = 0.0
+    for _ in range(40):
+        mid = (lo + hi) / 2.0
+        if profile_self_intersects(tooth_count, roller_diameter, mid, roller_circle_diameter):
+            hi = mid
+        else:
+            lo = mid
+    return lo
+
+
 def validate_parameters(parameters: Dict[str, Any]) -> None:
     """Validate gearbox parameters for physical and mathematical constraints.
 
@@ -175,6 +239,35 @@ def validate_parameters(parameters: Dict[str, Any]) -> None:
     if driver_disk_hole_count < 3:
         raise ParameterValidationError(
             f"driver_disk_hole_count must be >= 3, got {driver_disk_hole_count}")
+
+    # --- Geometric feasibility of the cycloid tooth profile ---
+    # These are the constraints whose violation makes the disk profile
+    # self-intersect, which OCC reports as "BRep_API: command not done" /
+    # "Geom_TrimmedCurve::parameters out of range" at pad time.
+    pin_circle_radius = roller_circle_diameter / 2.0
+    ecc_limit, roller_pitch = valid_bounds(tooth_count, roller_circle_diameter)
+
+    # 1. The epitrochoid develops cusps/loops when eccentricity reaches
+    #    pin_circle_radius / (tooth_count + 1) — no valid profile beyond that.
+    if eccentricity >= ecc_limit:
+        raise ParameterValidationError(
+            f"eccentricity ({eccentricity:.3f}) too large for this geometry: must be < "
+            f"roller_circle_diameter / (2*(tooth_count+1)) = {ecc_limit:.3f}. "
+            f"Reduce eccentricity or tooth_count, or enlarge roller_circle_diameter.")
+
+    # 2. Adjacent rollers must not overlap on the pin circle.
+    if roller_diameter >= roller_pitch:
+        raise ParameterValidationError(
+            f"roller_diameter ({roller_diameter:.3f}) too large: adjacent rollers overlap. "
+            f"Must be < {roller_pitch:.3f} for {tooth_count + 1} rollers on this circle.")
+
+    # 3. Undercut: a roller larger than the profile's radius of curvature
+    #    makes the offset curve double back on itself.
+    if profile_self_intersects(tooth_count, roller_diameter, eccentricity, roller_circle_diameter):
+        raise ParameterValidationError(
+            f"Tooth profile undercuts (self-intersects) with roller_diameter "
+            f"{roller_diameter:.3f} at eccentricity {eccentricity:.3f} and "
+            f"tooth_count {tooth_count}. Reduce roller_diameter or eccentricity.")
 
     logger.info("Parameter validation passed")
 
@@ -377,8 +470,21 @@ def fcvec(x: List[float]) -> App.Vector:
 def make_bspline(pts):
     curve = []
     for i in pts:
+        vecs = list(map(fcvec, i))
+        # OCC's interpolate raises Standard_ConstructionError on points closer
+        # than its tolerance. A tightly-clamped profile (high tooth count, narrow
+        # pressure-angle band) stacks points via check_limit; drop near-coincident
+        # ones — 1e-4 mm is far below any printable resolution. Keep first and last
+        # so the tooth-to-tooth join is preserved.
+        TOL = 1e-4
+        cleaned = [vecs[0]]
+        for v in vecs[1:-1]:
+            if (v - cleaned[-1]).Length > TOL:
+                cleaned.append(v)
+        if len(vecs) > 1 and (vecs[-1] - cleaned[-1]).Length > TOL:
+            cleaned.append(vecs[-1])
         out = BSplineCurve()
-        out.interpolate(list(map(fcvec, i)))
+        out.interpolate(cleaned)
         curve.append(out)
     return curve
 
@@ -966,6 +1072,17 @@ def generate_parts(doc,parameters):
         part.ViewObject.ShapeColor = (random.random(),random.random(),random.random(),0.0)
 
         doc.recompute()
+
+        # Extreme tooth-count vs housing size can produce a self-intersecting
+        # disk profile that recomputes to a null/invalid solid without raising.
+        # Catch it here and report clearly instead of leaving a broken model.
+        for nm in ("cycloidalDisk1", "cycloidalDisk2"):
+            d = doc.getObject(nm)
+            if d is None or not hasattr(d, "Shape") or d.Shape.isNull():
+                raise ParameterValidationError(
+                    "Could not build a valid cycloidal disk for this combination: "
+                    "the tooth count is too high for the roller-circle diameter. "
+                    "Increase Roller Circle Diameter or reduce Tooth Count.")
 
         # Fit all parts in view so the model is visible
         if GUI_AVAILABLE:
