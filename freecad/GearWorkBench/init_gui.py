@@ -45,6 +45,7 @@ from . import screwGear  # Import screw gear module
 from . import nonCircularGear  # Import non-circular gear module
 from . import genevaWheel  # Import Geneva wheel (Maltese cross) module
 from . import gearStack  # Import gear stack module
+from . import gearAxles  # Import gear axles module
 from . import gearLog  # Action logger for test documentation
 
 smWBpath = os.path.dirname(gearMath.__file__)
@@ -89,6 +90,7 @@ class GearWorkBenchWB(FreeCADGui.Workbench):
                 # Tools
                 "GearPositioningCommand",
                 "GearStackCommand",
+                "GearAxlesCommand",
             ]
 
             # Verify command is available
