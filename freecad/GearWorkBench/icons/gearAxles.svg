@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   xmlns="http://www.w3.org/2000/svg"
+   width="64"
+   height="64"
+   viewBox="0 0 64 64"
+   version="1.1">
+  <defs>
+    <style type="text/css">
+      .base { fill:#4a90e2; stroke:#2c5aa0; stroke-width:2; }
+      .spike { fill:#95a5a6; stroke:#5d6d6e; stroke-width:1.5; }
+      .spike-hi { fill:#e74c3c; stroke:#a93226; stroke-width:1.5; }
+    </style>
+  </defs>
+
+  <!-- Base plate -->
+  <rect class="base" x="4" y="50" width="56" height="10" rx="2" />
+
+  <!-- Axle spikes rising from the base, varying heights -->
+  <polygon class="spike"    points="10,50 16,50 14.5,14 11.5,14" />
+  <polygon class="spike-hi" points="24,50 30,50 28.5,8  25.5,8" />
+  <polygon class="spike"    points="38,50 44,50 42.5,22 39.5,22" />
+  <polygon class="spike"    points="50,50 56,50 54.5,12 51.5,12" />
+
+  <!-- Pointed spike tips -->
+  <polygon class="spike"    points="11.5,14 14.5,14 13,8" />
+  <polygon class="spike-hi" points="25.5,8  28.5,8  27,2" />
+  <polygon class="spike"    points="39.5,22 42.5,22 41,16" />
+  <polygon class="spike"    points="51.5,12 54.5,12 53,6" />
+</svg>

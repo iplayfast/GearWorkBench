@@ -161,7 +161,7 @@ class GearAxlesCommand:
 
     def GetResources(self):
         return {
-            "Pixmap": os.path.join(smWB_icons_path, "gearWorkbench.svg"),
+            "Pixmap": os.path.join(smWB_icons_path, "gearAxles.svg"),
             "MenuText": "Create Gear Axles",
             "ToolTip": "Create an axle for each selected gear, joined by a base plate.\n"
                        "Vertical gears get posts; worms and other horizontal gears\n"
