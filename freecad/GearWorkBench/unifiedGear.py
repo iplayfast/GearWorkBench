@@ -162,6 +162,10 @@ class UnifiedSpurGearViewProvider:
     """View provider for unified spur gear."""
 
     def __init__(self, vobj):
+        # Headless (freecadcmd) has no Gui module, so obj.ViewObject is None.
+        # Nothing to attach a view provider to; skip instead of raising.
+        if vobj is None:
+            return
         vobj.Proxy = self
 
     def getIcon(self):

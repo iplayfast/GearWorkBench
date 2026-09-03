@@ -490,6 +490,10 @@ class ViewProviderCycloidGearBoxResult:
     """View provider for CycloidGearBoxResult objects."""
 
     def __init__(self, obj, iconfile=None):
+        # Headless (freecadcmd) has no Gui module, so obj.ViewObject is None.
+        # Nothing to attach a view provider to; skip instead of raising.
+        if obj is None:
+            return
         obj.Proxy = self
         self.part = obj
         self.iconfile = (
