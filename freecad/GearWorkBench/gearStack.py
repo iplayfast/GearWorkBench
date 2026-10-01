@@ -140,6 +140,10 @@ class ViewProviderGearStack:
     """View provider for GearStack objects."""
 
     def __init__(self, obj):
+        # Headless (freecadcmd) has no Gui module, so obj.ViewObject is None.
+        # Nothing to attach a view provider to; skip instead of raising.
+        if obj is None:
+            return
         obj.Proxy = self
         self.iconfile = os.path.join(smWB_icons_path, "gearWorkbench.svg")
 
